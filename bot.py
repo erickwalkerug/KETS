@@ -1,6 +1,6 @@
 import os, time, datetime, math
 from threading import Thread, Lock
-from flask import Flask, jsonify
+from flask import Flask, jsonify, send_from_directory
 import requests
 
 app = Flask(__name__)
@@ -49,10 +49,40 @@ def keep_web_server_alive():
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
 
 
+def self_awake():
+    """
+    Keep the free Render web service receiving occasional inbound HTTP
+    traffic so it is less likely to spin down during normal operation.
+
+    The URL can be overridden with KETS_PUBLIC_URL. If it is not set,
+    the known KETS Render URL is used.
+    """
+    url = (
+        os.environ.get("KETS_PUBLIC_URL")
+        or os.environ.get("RENDER_EXTERNAL_URL")
+        or "https://kets.onrender.com"
+    ).rstrip("/")
+
+    while True:
+        try:
+            r = requests.get(f"{url}/api/health", timeout=20)
+            print(f"💓 Self-awake heartbeat: {r.status_code}")
+        except Exception as e:
+            print(f"💓 Self-awake heartbeat failed: {e}")
+        time.sleep(10 * 60)
+
+
 # ------------------------- WEB API ---------------------------
 @app.route("/")
 def home():
-    return "KETS Strategy Engine Online"
+    # Serve the existing KETS frontend from the repository root.
+    return send_from_directory(os.path.dirname(os.path.abspath(__file__)), "index.html")
+
+@app.route("/<path:filename>")
+def frontend_files(filename):
+    # Serve index.html, app.js, style.css, manifest.json, icons, etc.
+    base_dir = os.path.dirname(os.path.abspath(__file__))
+    return send_from_directory(base_dir, filename)
 
 
 @app.route("/api/health")
@@ -481,5 +511,6 @@ def run_strategy():
 
 
 if __name__ == "__main__":
-    Thread(target=keep_web_server_alive,daemon=True).start()
+    Thread(target=keep_web_server_alive, daemon=True).start()
+    Thread(target=self_awake, daemon=True).start()
     run_strategy()
