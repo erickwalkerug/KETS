@@ -1,43 +1,74 @@
-import os, time, datetime, math
+import os
+import time
+import math
+import datetime as dt
 from threading import Thread, Lock
-from flask import Flask, jsonify, send_from_directory
-import requests
 
-app = Flask(__name__)
+import requests
+from flask import Flask, jsonify, render_template_string
+
 try:
     from flask_cors import CORS
-    CORS(app)
 except Exception:
-    pass
+    CORS = None
+
 
 # ============================================================
-# KETS STRATEGY ENGINE — PRODUCTION BACKEND
-# 1M analysis / 2M scan / Telegram bot + channel / Web API
+# KETS — SELF-AWAKE 1M DATA / 2M SCAN BACKEND
+#
+# Important:
+# - Render starts Flask with gunicorn or python bot.py.
+# - The dashboard is built into this file, so it does not depend
+#   on a missing/broken index.html.
+# - Scans 24/7 by default. Set KETS_TRADING_HOURS_ONLY=true if
+#   you want the old 06:00-18:00 EAT restriction.
+# - TWELVE_DATA_API_KEY is required for Twelve Data market data.
 # ============================================================
+
+app = Flask(__name__)
+if CORS:
+    try:
+        CORS(app)
+    except Exception:
+        pass
 
 API_LOCK = Lock()
 SIGNAL_HISTORY = []
 MARKET_STATE = {}
-SIGNAL_HISTORY_DAYS = 7
-last_signal = {}
+LAST_SIGNAL_KEY = {}
+last_scan = None
+next_scan = None
+engine_started = False
+engine_error = None
 
+HISTORY_DAYS = 7
+SCAN_SECONDS = 120
+TRADING_HOURS_ONLY = os.environ.get("KETS_TRADING_HOURS_ONLY", "false").lower() == "true"
+
+
+# ============================================================
+# TIME / CONFIG
+# ============================================================
 
 def get_eat_time():
-    return datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=3)
+    return dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=3)
 
 
 def trading_hours_open():
+    if not TRADING_HOURS_ONLY:
+        return True
     t = get_eat_time().time()
-    return datetime.time(6, 0) <= t < datetime.time(18, 0)
+    return dt.time(6, 0) <= t < dt.time(18, 0)
 
 
 def get_markets():
+    # BTC every day; GOLD Monday-Friday.
     if get_eat_time().weekday() >= 5:
         return {"BTC": "BTC/USD"}
     return {"BTC": "BTC/USD", "GOLD": "XAU/USD"}
 
 
-def _num(x):
+def num(x):
     try:
         x = float(x)
         return x if math.isfinite(x) else None
@@ -45,137 +76,232 @@ def _num(x):
         return None
 
 
-def keep_web_server_alive():
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
-
-
-def self_awake():
-    """
-    Keep the free Render web service receiving occasional inbound HTTP
-    traffic so it is less likely to spin down during normal operation.
-
-    The URL can be overridden with KETS_PUBLIC_URL. If it is not set,
-    the known KETS Render URL is used.
-    """
-    url = (
+def public_url():
+    return (
         os.environ.get("KETS_PUBLIC_URL")
         or os.environ.get("RENDER_EXTERNAL_URL")
         or "https://kets.onrender.com"
     ).rstrip("/")
 
+
+# ============================================================
+# SELF-AWAKE
+# ============================================================
+
+def self_awake():
+    """
+    Periodic health request.
+
+    NOTE: A process cannot guarantee that a Render free web service
+    stays awake after Render suspends it. This heartbeat helps while
+    the process is running. For a true 24/7 service, use a paid
+    always-on Render service or an external monitor/cron.
+    """
+    url = public_url()
+
     while True:
         try:
-            r = requests.get(f"{url}/api/health", timeout=20)
-            print(f"💓 Self-awake heartbeat: {r.status_code}")
-        except Exception as e:
-            print(f"💓 Self-awake heartbeat failed: {e}")
-        time.sleep(10 * 60)
+            r = requests.get(f"{url}/api/health", timeout=15)
+            print(f"💓 Self-awake heartbeat: HTTP {r.status_code}")
+        except Exception as exc:
+            print(f"💓 Self-awake heartbeat failed: {exc}")
+        time.sleep(300)
 
 
-# ------------------------- WEB API ---------------------------
+# ============================================================
+# BUILT-IN WEB APP
+# ============================================================
+
+HTML = r"""
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>KETS Early Entry Signals</title>
+<style>
+body{font-family:Arial,sans-serif;margin:0;background:#0b1020;color:#eef2ff}
+header{padding:18px;background:#111936;position:sticky;top:0}
+h1{margin:0 0 6px;font-size:21px}
+.small{color:#aab4d0;font-size:13px}
+.wrap{padding:14px;max-width:900px;margin:auto}
+.card{background:#121a36;border:1px solid #26335f;border-radius:14px;padding:14px;margin:12px 0}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px}
+.value{font-size:20px;font-weight:bold;margin-top:5px}
+.signal{border-left:5px solid #5b8cff}
+.buy{border-left-color:#20c878}
+.sell{border-left-color:#ff5964}
+.muted{color:#9ca8c7}
+.badge{display:inline-block;padding:5px 9px;border-radius:999px;background:#26335f;font-size:12px}
+table{width:100%;border-collapse:collapse}
+td{padding:7px;border-bottom:1px solid #26335f}
+</style>
+</head>
+<body>
+<header>
+  <h1>🤖 KETS Early Entry Signals</h1>
+  <div class="small" id="top">Connecting...</div>
+</header>
+<div class="wrap">
+  <div class="grid">
+    <div class="card"><div class="small">SYSTEM</div><div class="value" id="system">Connecting</div></div>
+    <div class="card"><div class="small">LAST SCAN</div><div class="value" id="lastscan">—</div></div>
+    <div class="card"><div class="small">NEXT SCAN</div><div class="value" id="nextscan">—</div></div>
+    <div class="card"><div class="small">SIGNALS</div><div class="value" id="count">0</div></div>
+  </div>
+
+  <div class="card">
+    <b>Markets</b>
+    <div id="markets" class="muted">Waiting for market data...</div>
+  </div>
+
+  <div class="card">
+    <b>Latest Signals</b>
+    <div id="signals" class="muted">No signals yet.</div>
+  </div>
+</div>
+
+<script>
+async function getJSON(url){
+  const r=await fetch(url,{cache:"no-store"});
+  if(!r.ok) throw new Error("HTTP "+r.status);
+  return await r.json();
+}
+
+function esc(x){
+  return String(x ?? "").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[m]));
+}
+
+async function refresh(){
+  try{
+    const s=await getJSON("/api/status");
+    document.getElementById("system").textContent=s.status || "online";
+    document.getElementById("lastscan").textContent=s.last_scan || "—";
+    document.getElementById("nextscan").textContent=s.next_scan || "—";
+    document.getElementById("count").textContent=s.signal_count ?? 0;
+    document.getElementById("top").textContent=
+      "Online • 1-minute data • 2-minute scan • Updated "+(s.time_eat||"");
+
+    const m=await getJSON("/api/market");
+    const entries=Object.values(m.markets||{});
+    document.getElementById("markets").innerHTML=entries.length
+      ? entries.map(x=>`
+        <div class="card">
+          <b>${esc(x.asset)} — ${esc(x.symbol)}</b>
+          <div class="value">${x.price==null?"NO DATA":"$"+Number(x.price).toLocaleString()}</div>
+          <div class="small">
+            ${esc(x.status||"LIVE")} •
+            Signal: ${esc(x.signal||"NONE")} •
+            Score: ${esc(x.score??"—")} •
+            Updated: ${esc(x.updated_at||"—")}
+          </div>
+        </div>`).join("")
+      : "Waiting for market data...";
+
+    const h=await getJSON("/api/signals");
+    const sig=h.signals||[];
+    document.getElementById("signals").innerHTML=sig.length
+      ? sig.slice(0,20).map(x=>`
+        <div class="card signal ${x.direction==="BUY"?"buy":"sell"}">
+          <b>${x.direction==="BUY"?"🟢 BUY":"🔴 SELL"} — ${esc(x.asset)}</b>
+          <div>Score: <b>${esc(x.score)}%</b></div>
+          <div>Entry: $${Number(x.entry).toLocaleString()}</div>
+          <div>TP: $${Number(x.take_profit).toLocaleString()}</div>
+          <div>SL: $${Number(x.stop_loss).toLocaleString()}</div>
+          <div class="small">${esc(x.timestamp)}</div>
+        </div>`).join("")
+      : "No signals yet.";
+  }catch(e){
+    document.getElementById("system").textContent="Backend error";
+    document.getElementById("top").textContent="API error: "+e.message;
+  }
+}
+
+refresh();
+setInterval(refresh,15000);
+</script>
+</body>
+</html>
+"""
+
+
 @app.route("/")
 def home():
-    # Serve the existing KETS frontend from the repository root.
-    return send_from_directory(os.path.dirname(os.path.abspath(__file__)), "index.html")
-
-@app.route("/<path:filename>")
-def frontend_files(filename):
-    # Serve index.html, app.js, style.css, manifest.json, icons, etc.
-    base_dir = os.path.dirname(os.path.abspath(__file__))
-    return send_from_directory(base_dir, filename)
+    return render_template_string(HTML)
 
 
 @app.route("/api/health")
 def api_health():
-    return jsonify({"ok": True, "status": "online", "time_eat": get_eat_time().isoformat()})
+    return jsonify({
+        "ok": True,
+        "status": "online",
+        "engine_started": engine_started,
+        "time_eat": get_eat_time().isoformat(),
+    })
 
 
 @app.route("/api/status")
 def api_status():
     with API_LOCK:
         return jsonify({
-            "status": "online",
-            "refresh_interval_seconds": 120,
-            "history_days": SIGNAL_HISTORY_DAYS,
-            "trading_hours_eat": "06:00-18:00",
-            "website_url": os.environ.get("KETS_WEBSITE_URL", ""),
-            "last_scan": globals().get("last_scan", None),
-            "next_scan": globals().get("next_scan", None),
+            "status": "online" if engine_started else "starting",
+            "engine_started": engine_started,
+            "refresh_interval_seconds": SCAN_SECONDS,
+            "history_days": HISTORY_DAYS,
+            "trading_hours_only": TRADING_HOURS_ONLY,
+            "trading_hours_eat": "06:00-18:00" if TRADING_HOURS_ONLY else "24/7",
+            "last_scan": last_scan,
+            "next_scan": next_scan,
             "markets": list(MARKET_STATE.keys()),
             "signal_count": len(SIGNAL_HISTORY),
+            "time_eat": get_eat_time().isoformat(),
+            "engine_error": engine_error,
         })
 
 
 @app.route("/api/market")
 def api_market():
     with API_LOCK:
-        return jsonify({"markets": MARKET_STATE, "time_eat": get_eat_time().isoformat()})
+        return jsonify({
+            "markets": MARKET_STATE,
+            "time_eat": get_eat_time().isoformat()
+        })
 
 
 @app.route("/api/signals")
 def api_signals():
-    now = get_eat_time()
-    cutoff = now - datetime.timedelta(days=SIGNAL_HISTORY_DAYS)
+    cutoff = get_eat_time() - dt.timedelta(days=HISTORY_DAYS)
     with API_LOCK:
-        SIGNAL_HISTORY[:] = [x for x in SIGNAL_HISTORY if datetime.datetime.fromisoformat(x["timestamp"]) >= cutoff]
+        SIGNAL_HISTORY[:] = [
+            x for x in SIGNAL_HISTORY
+            if dt.datetime.fromisoformat(x["timestamp"]) >= cutoff
+        ]
         return jsonify({"signals": list(reversed(SIGNAL_HISTORY))})
 
 
-def update_market_state(asset, symbol, candles, signal=None):
-    if not candles:
-        return
-    c = candles[-1]
-    with API_LOCK:
-        MARKET_STATE[asset] = {
-            "asset": asset,
-            "symbol": symbol,
-            "price": _num(c.get("close")),
-            "open": _num(c.get("open")),
-            "high": _num(c.get("high")),
-            "low": _num(c.get("low")),
-            "candle_time": c.get("datetime"),
-            "candles": len(candles),
-            "signal": signal.get("direction") if signal else None,
-            "score": signal.get("score") if signal else None,
-            "updated_at": get_eat_time().isoformat(),
-        }
+# ============================================================
+# TELEGRAM
+# ============================================================
 
-
-def store_app_signal(asset, signal):
-    now = get_eat_time()
-    item = {
-        "id": f"{asset}-{signal.get('direction')}-{now.timestamp()}",
-        "asset": asset,
-        "market": asset,
-        "direction": signal.get("direction"),
-        "score": signal.get("score"),
-        "entry": signal.get("entry"),
-        "take_profit": signal.get("take_profit"),
-        "stop_loss": signal.get("stop_loss"),
-        "timestamp": now.isoformat(),
-    }
-    with API_LOCK:
-        SIGNAL_HISTORY.append(item)
-        cutoff = now - datetime.timedelta(days=SIGNAL_HISTORY_DAYS)
-        SIGNAL_HISTORY[:] = [x for x in SIGNAL_HISTORY if datetime.datetime.fromisoformat(x["timestamp"]) >= cutoff]
-    return item
-
-
-# ----------------------- TELEGRAM ----------------------------
 def send_message(token, destination_id, message, destination_name):
     if not token or not destination_id:
-        print(f"Telegram {destination_name}: missing configuration")
+        print(f"Telegram {destination_name}: not configured")
         return False
+
     try:
         r = requests.post(
             f"https://api.telegram.org/bot{token}/sendMessage",
-            json={"chat_id": destination_id, "text": message, "parse_mode": "Markdown"},
+            json={
+                "chat_id": destination_id,
+                "text": message,
+                "parse_mode": "Markdown"
+            },
             timeout=15,
         )
-        print(f"Telegram {destination_name}: {r.status_code} {r.text[:200]}")
+        print(f"Telegram {destination_name}: {r.status_code}")
         return r.status_code == 200
-    except Exception as e:
-        print(f"Telegram error ({destination_name}): {e}")
+    except Exception as exc:
+        print(f"Telegram {destination_name} error: {exc}")
         return False
 
 
@@ -185,332 +311,697 @@ def send_to_bot_and_channel(token, bot_chat_id, channel_id, bot_message, channel
     return a or b
 
 
-# ----------------------- INDICATORS --------------------------
-def calculate_ema(prices, period):
-    if not prices: return 0.0
-    if len(prices) < period: return sum(prices) / len(prices)
-    m = 2 / (period + 1)
-    ema = sum(prices[:period]) / period
-    for p in prices[period:]: ema = (p - ema) * m + ema
-    return ema
+# ============================================================
+# INDICATORS
+# ============================================================
+
+def ema(prices, period):
+    if not prices:
+        return 0.0
+    if len(prices) < period:
+        return sum(prices) / len(prices)
+
+    multiplier = 2 / (period + 1)
+    value = sum(prices[:period]) / period
+
+    for price in prices[period:]:
+        value = (price - value) * multiplier + value
+
+    return value
 
 
-def calculate_rsi(prices, period=14):
-    if len(prices) < period + 1: return 50.0
-    gains, losses = [], []
+def rsi(prices, period=14):
+    if len(prices) < period + 1:
+        return 50.0
+
+    gains = []
+    losses = []
+
     for i in range(1, len(prices)):
-        d = prices[i] - prices[i-1]
-        gains.append(max(d, 0.0)); losses.append(max(-d, 0.0))
-    ag = sum(gains[:period]) / period
-    al = sum(losses[:period]) / period
+        change = prices[i] - prices[i - 1]
+        gains.append(max(change, 0.0))
+        losses.append(max(-change, 0.0))
+
+    avg_gain = sum(gains[:period]) / period
+    avg_loss = sum(losses[:period]) / period
+
     for i in range(period, len(gains)):
-        ag = (ag * (period - 1) + gains[i]) / period
-        al = (al * (period - 1) + losses[i]) / period
-    if al == 0: return 100.0
-    rs = ag / al
-    return 100 - 100 / (1 + rs)
+        avg_gain = (avg_gain * (period - 1) + gains[i]) / period
+        avg_loss = (avg_loss * (period - 1) + losses[i]) / period
+
+    if avg_loss == 0:
+        return 100.0
+
+    rs = avg_gain / avg_loss
+    return 100 - (100 / (1 + rs))
 
 
-def calculate_macd_series(prices):
-    if len(prices) < 40: return None
-    macd = []
+def macd(prices):
+    if len(prices) < 40:
+        return None
+
+    values = []
     for i in range(26, len(prices) + 1):
-        w = prices[:i]
-        macd.append(calculate_ema(w, 12) - calculate_ema(w, 26))
-    if len(macd) < 12: return None
-    signal = [calculate_ema(macd[:i], 9) for i in range(9, len(macd) + 1)]
-    if len(signal) < 2: return None
-    return {"macd": macd[-1], "previous_macd": macd[-2], "signal": signal[-1], "previous_signal": signal[-2], "macd_values": macd, "signal_values": signal}
+        window = prices[:i]
+        values.append(ema(window, 12) - ema(window, 26))
+
+    if len(values) < 12:
+        return None
+
+    signal_values = []
+    for i in range(9, len(values) + 1):
+        signal_values.append(ema(values[:i], 9))
+
+    if len(signal_values) < 2:
+        return None
+
+    return {
+        "macd": values[-1],
+        "previous_macd": values[-2],
+        "signal": signal_values[-1],
+        "previous_signal": signal_values[-2],
+        "values": values,
+        "signal_values": signal_values,
+    }
 
 
-def recent_macd_cross(mv, sv, bullish=True, lookback=3):
-    offset = len(mv) - len(sv)
-    usable = min(lookback, len(mv)-1, len(sv)-1)
-    for i in range(1, max(0, usable)+1):
-        ci, pi = len(mv)-i, len(mv)-i-1
-        csi, psi = ci-offset, pi-offset
-        if min(csi, psi) < 0 or csi >= len(sv) or psi >= len(sv): continue
-        cm, pm, cs, ps = mv[ci], mv[pi], sv[csi], sv[psi]
-        if bullish and pm <= ps and cm > cs: return True
-        if not bullish and pm >= ps and cm < cs: return True
-    return False
+def atr(candles, period=14):
+    if len(candles) < period + 1:
+        return 0.0
 
-
-def calculate_atr(candles, period=14):
-    if len(candles) < period + 1: return 0.0
     tr = []
     for i in range(1, len(candles)):
-        c, p = candles[i], candles[i-1]
-        tr.append(max(c["high"]-c["low"], abs(c["high"]-p["close"]), abs(c["low"]-p["close"])))
-    atr = sum(tr[:period]) / period
-    for x in tr[period:]: atr = (atr*(period-1)+x)/period
-    return atr
+        c, p = candles[i], candles[i - 1]
+        tr.append(max(
+            c["high"] - c["low"],
+            abs(c["high"] - p["close"]),
+            abs(c["low"] - p["close"])
+        ))
+
+    value = sum(tr[:period]) / period
+
+    for x in tr[period:]:
+        value = (value * (period - 1) + x) / period
+
+    return value
 
 
-def calculate_adx(candles, period=14):
-    if len(candles) < period*2+1: return {"adx":0.0,"plus_di":0.0,"minus_di":0.0}
-    trs=[]; pdm=[]; mdm=[]
-    for i in range(1,len(candles)):
-        c,p=candles[i],candles[i-1]
-        up=c["high"]-p["high"]; down=p["low"]-c["low"]
-        pdm.append(up if up>down and up>0 else 0.0); mdm.append(down if down>up and down>0 else 0.0)
-        trs.append(max(c["high"]-c["low"],abs(c["high"]-p["close"]),abs(c["low"]-p["close"])))
-    atr=sum(trs[:period])/period; plus=sum(pdm[:period])/period; minus=sum(mdm[:period])/period; dx=[]
-    for i in range(period,len(trs)):
-        atr=(atr*(period-1)+trs[i])/period; plus=(plus*(period-1)+pdm[i])/period; minus=(minus*(period-1)+mdm[i])/period
-        pdi=100*plus/atr if atr else 0; mdi=100*minus/atr if atr else 0; den=pdi+mdi
-        dx.append(100*abs(pdi-mdi)/den if den else 0)
-    adx=sum(dx[:period])/min(period,len(dx)) if dx else 0
-    for x in dx[period:]: adx=(adx*(period-1)+x)/period
-    return {"adx":adx,"plus_di":100*plus/atr if atr else 0,"minus_di":100*minus/atr if atr else 0}
+def adx(candles, period=14):
+    if len(candles) < period * 2 + 1:
+        return {"adx": 0.0, "plus_di": 0.0, "minus_di": 0.0}
+
+    trs, plus_dm, minus_dm = [], [], []
+
+    for i in range(1, len(candles)):
+        c, p = candles[i], candles[i - 1]
+        up = c["high"] - p["high"]
+        down = p["low"] - c["low"]
+
+        plus_dm.append(up if up > down and up > 0 else 0.0)
+        minus_dm.append(down if down > up and down > 0 else 0.0)
+
+        trs.append(max(
+            c["high"] - c["low"],
+            abs(c["high"] - p["close"]),
+            abs(c["low"] - p["close"])
+        ))
+
+    a = sum(trs[:period]) / period
+    p = sum(plus_dm[:period]) / period
+    m = sum(minus_dm[:period]) / period
+    dx = []
+
+    for i in range(period, len(trs)):
+        a = (a * (period - 1) + trs[i]) / period
+        p = (p * (period - 1) + plus_dm[i]) / period
+        m = (m * (period - 1) + minus_dm[i]) / period
+
+        pdi = 100 * p / a if a else 0
+        mdi = 100 * m / a if a else 0
+        total = pdi + mdi
+
+        dx.append(100 * abs(pdi - mdi) / total if total else 0)
+
+    if not dx:
+        return {"adx": 0.0, "plus_di": 0.0, "minus_di": 0.0}
+
+    value = sum(dx[:period]) / min(period, len(dx))
+    for x in dx[period:]:
+        value = (value * (period - 1) + x) / period
+
+    return {
+        "adx": value,
+        "plus_di": 100 * p / a if a else 0,
+        "minus_di": 100 * m / a if a else 0,
+    }
 
 
-def aggregate_candles(candles, minutes):
-    grouped={}
+def aggregate(candles, minutes):
+    grouped = {}
+
     for c in candles:
-        try: dt=datetime.datetime.strptime(c["datetime"], "%Y-%m-%d %H:%M:%S")
+        try:
+            stamp = dt.datetime.fromisoformat(c["datetime"])
         except Exception:
-            try: dt=datetime.datetime.fromisoformat(c["datetime"])
-            except Exception: continue
-        bucket=dt.replace(minute=(dt.minute//minutes)*minutes, second=0)
-        k=bucket.strftime("%Y-%m-%d %H:%M:%S")
-        if k not in grouped: grouped[k]={"datetime":k,"open":c["open"],"high":c["high"],"low":c["low"],"close":c["close"]}
+            continue
+
+        bucket = stamp.replace(
+            minute=(stamp.minute // minutes) * minutes,
+            second=0,
+            microsecond=0
+        )
+        key = bucket.strftime("%Y-%m-%d %H:%M:%S")
+
+        if key not in grouped:
+            grouped[key] = {
+                "datetime": key,
+                "open": c["open"],
+                "high": c["high"],
+                "low": c["low"],
+                "close": c["close"],
+            }
         else:
-            grouped[k]["high"]=max(grouped[k]["high"],c["high"]); grouped[k]["low"]=min(grouped[k]["low"],c["low"]); grouped[k]["close"]=c["close"]
+            grouped[key]["high"] = max(grouped[key]["high"], c["high"])
+            grouped[key]["low"] = min(grouped[key]["low"], c["low"])
+            grouped[key]["close"] = c["close"]
+
     return list(grouped.values())
 
 
-def timeframe_direction(candles):
-    if len(candles)<3: return "NEUTRAL"
-    x=[c["close"] for c in candles]
-    if x[-1]>x[-2]>x[-3]: return "BULLISH"
-    if x[-1]<x[-2]<x[-3]: return "BEARISH"
-    f=calculate_ema(x,min(5,len(x))); s=sum(x)/len(x)
-    return "BULLISH" if f>s else "BEARISH" if f<s else "NEUTRAL"
+def direction(candles):
+    if len(candles) < 3:
+        return "NEUTRAL"
+
+    closes = [c["close"] for c in candles]
+
+    if closes[-1] > closes[-2] > closes[-3]:
+        return "BULLISH"
+    if closes[-1] < closes[-2] < closes[-3]:
+        return "BEARISH"
+
+    fast = ema(closes, min(5, len(closes)))
+    slow = sum(closes) / len(closes)
+
+    if fast > slow:
+        return "BULLISH"
+    if fast < slow:
+        return "BEARISH"
+    return "NEUTRAL"
 
 
 def candle_quality(c):
-    r=c["high"]-c["low"]
-    if r<=0:return {"quality":"INVALID","direction":"NEUTRAL","strength":0}
-    body=abs(c["close"]-c["open"]); ratio=body/r
-    d="BULLISH" if c["close"]>c["open"] else "BEARISH" if c["close"]<c["open"] else "NEUTRAL"
-    q="STRONG " + d if ratio>=.70 and d!="NEUTRAL" else "GOOD " + d if ratio>=.45 and d!="NEUTRAL" else "WEAK " + d if d!="NEUTRAL" else "INDECISION"
-    if ratio<.25:q="INDECISION / WEAK"
-    return {"quality":q,"direction":d,"strength":round(ratio*100,1)}
+    spread = c["high"] - c["low"]
+    if spread <= 0:
+        return {"quality": "INVALID", "direction": "NEUTRAL", "strength": 0}
+
+    body = abs(c["close"] - c["open"])
+    ratio = body / spread
+
+    if c["close"] > c["open"]:
+        d = "BULLISH"
+    elif c["close"] < c["open"]:
+        d = "BEARISH"
+    else:
+        d = "NEUTRAL"
+
+    if ratio >= 0.70 and d != "NEUTRAL":
+        q = "STRONG " + d
+    elif ratio >= 0.45 and d != "NEUTRAL":
+        q = "GOOD " + d
+    elif d != "NEUTRAL":
+        q = "WEAK " + d
+    else:
+        q = "INDECISION"
+
+    if ratio < 0.25:
+        q = "INDECISION / WEAK"
+
+    return {
+        "quality": q,
+        "direction": d,
+        "strength": round(ratio * 100, 1)
+    }
 
 
-def momentum_analysis(candles):
-    if len(candles)<6:return {"direction":"NEUTRAL","state":"UNKNOWN","change":0}
-    x=[c["close"] for c in candles]; a=x[-1]-x[-3]; b=x[-3]-x[-5]
-    d="BULLISH" if a>0 else "BEARISH" if a<0 else "NEUTRAL"; s="ACCELERATING" if abs(a)>abs(b) else "WEAKENING" if abs(a)<abs(b) else "STABLE"
-    return {"direction":d,"state":s,"change":a}
+def momentum(candles):
+    if len(candles) < 6:
+        return {"direction": "NEUTRAL", "state": "UNKNOWN"}
+
+    x = [c["close"] for c in candles]
+    a = x[-1] - x[-3]
+    b = x[-3] - x[-5]
+
+    d = "BULLISH" if a > 0 else "BEARISH" if a < 0 else "NEUTRAL"
+    state = (
+        "ACCELERATING" if abs(a) > abs(b)
+        else "WEAKENING" if abs(a) < abs(b)
+        else "STABLE"
+    )
+
+    return {"direction": d, "state": state}
 
 
-def find_levels(candles, lookback=20):
-    s=candles[-lookback:]; return {"support":min(c["low"] for c in s),"resistance":max(c["high"] for c in s)}
+def levels(candles, lookback=20):
+    subset = candles[-lookback:]
+    return {
+        "support": min(c["low"] for c in subset),
+        "resistance": max(c["high"] for c in subset)
+    }
 
 
-def calculate_vwap(candles):
-    if not all(c.get("volume") is not None for c in candles): return None
-    tv=vv=0.0
+def vwap(candles):
+    if not all(c.get("volume") is not None for c in candles):
+        return None
+
+    total_value = 0.0
+    total_volume = 0.0
+
     for c in candles:
-        v=c.get("volume",0) or 0
-        if v<=0:continue
-        tv+=((c["high"]+c["low"]+c["close"])/3)*v; vv+=v
-    return tv/vv if vv else None
+        volume = c.get("volume", 0) or 0
+        if volume <= 0:
+            continue
+
+        typical = (c["high"] + c["low"] + c["close"]) / 3
+        total_value += typical * volume
+        total_volume += volume
+
+    return total_value / total_volume if total_volume else None
 
 
-def detect_market_regime(adx, atr, candles):
-    if len(candles)<20:return "UNKNOWN"
-    avg=sum(c["high"]-c["low"] for c in candles[-20:])/20
-    if avg<=0:return "UNKNOWN"
-    if adx>=25:return "TRENDING / HIGH VOLATILITY" if atr>avg*1.2 else "TRENDING"
-    if atr<avg*.75:return "LOW VOLATILITY / RANGE"
-    return "RANGE / TRANSITION"
-
-
-def check_data_quality(candles):
-    if len(candles)<40:return False,"Insufficient candles"
-    for c in candles[-40:]:
-        vals=[c["open"],c["high"],c["low"],c["close"]]
-        if not all(math.isfinite(v) for v in vals):return False,"Invalid price data"
-        if c["high"]<c["low"]:return False,"Invalid candle range"
-    return True,"GOOD"
-
-
-def check_overextension(price, ema9, atr):
-    if atr<=0:return {"extended":False,"distance":0,"ratio":0}
-    d=abs(price-ema9); r=d/atr
-    return {"extended":r>=1.5,"distance":d,"ratio":r}
-
+# ============================================================
+# MARKET DATA
+# ============================================================
 
 def fetch_1m_candles(symbol, api_key):
-    if not api_key:return []
+    if not api_key:
+        print("⚠️ TWELVE_DATA_API_KEY is missing")
+        return []
+
     try:
-        r=requests.get("https://api.twelvedata.com/time_series",params={"symbol":symbol,"interval":"1min","outputsize":100,"timezone":"UTC","order":"asc","apikey":api_key},timeout=20)
-        if r.status_code!=200:return []
-        data=r.json()
-        if data.get("status")=="error":
-            print(f"Market API error {symbol}: {data.get('message')}"); return []
-        out=[]
-        for x in data.get("values",[]):
+        r = requests.get(
+            "https://api.twelvedata.com/time_series",
+            params={
+                "symbol": symbol,
+                "interval": "1min",
+                "outputsize": 100,
+                "timezone": "UTC",
+                "order": "asc",
+                "apikey": api_key,
+            },
+            timeout=20,
+        )
+
+        if r.status_code != 200:
+            print(f"Market API HTTP {r.status_code} for {symbol}")
+            return []
+
+        data = r.json()
+
+        if data.get("status") == "error":
+            print(f"Market API error {symbol}: {data.get('message')}")
+            return []
+
+        result = []
+
+        for item in data.get("values", []):
             try:
-                c={"datetime":x["datetime"],"open":float(x["open"]),"high":float(x["high"]),"low":float(x["low"]),"close":float(x["close"]),"volume":None}
-                if "volume" in x:
-                    try:c["volume"]=float(x["volume"])
-                    except Exception:pass
-                out.append(c)
-            except Exception:continue
-        return out
-    except Exception as e:
-        print(f"Market data error {symbol}: {e}"); return []
+                result.append({
+                    "datetime": item["datetime"],
+                    "open": float(item["open"]),
+                    "high": float(item["high"]),
+                    "low": float(item["low"]),
+                    "close": float(item["close"]),
+                    "volume": (
+                        float(item["volume"])
+                        if item.get("volume") not in (None, "")
+                        else None
+                    ),
+                })
+            except Exception:
+                continue
+
+        return result
+
+    except Exception as exc:
+        print(f"Market data error {symbol}: {exc}")
+        return []
 
 
-def classify(score, extended):
-    if extended:return "⚠️ EXTENDED — move may already be stretched."
-    if score>=90:return "🔥 CONFIRMED ALIGNMENT"
-    if score>=80:return "🟢 STRONG DEVELOPING SETUP"
-    if score>=70:return "🟡 GOOD DEVELOPING SETUP"
-    if score>=60:return "🔵 EARLY SETUP"
-    return "⚪ DEVELOPING SETUP"
-
-
-def interpretation(score, extended):
-    if extended:return "⚠️ Setup is aligned, but price is extended."
-    if score>=90:return "🔥 VERY STRONG ALIGNMENT — multiple independent factors agree."
-    if score>=80:return "🟢 STRONG ALIGNMENT — trend, momentum and context agree."
-    if score>=70:return "🟡 GOOD ALIGNMENT — early setup has several confirmations."
-    if score>=60:return "🔵 EARLY SETUP — momentum is developing."
-    return "⚪ DEVELOPING SETUP — early directional evidence is present."
-
+# ============================================================
+# STRATEGY
+# ============================================================
 
 def analyze_market(asset, symbol, candles):
-    if len(candles)<40:return None
-    ok,_=check_data_quality(candles)
-    if not ok:return None
-    closes=[c["close"] for c in candles]; cur,prev,prev2=candles[-1],candles[-2],candles[-3]; price=cur["close"]
-    ema9=calculate_ema(closes,9); ema26=calculate_ema(closes,26); pe9=calculate_ema(closes[:-1],9); pe26=calculate_ema(closes[:-1],26)
-    rsi=calculate_rsi(closes); prsi=calculate_rsi(closes[:-1]); md=calculate_macd_series(closes)
-    if not md:return None
-    cm,pm,cs,ps=md["macd"],md["previous_macd"],md["signal"],md["previous_signal"]
-    bull_cross=pm<=ps and cm>cs; bear_cross=pm>=ps and cm<cs
-    rb=recent_macd_cross(md["macd_values"],md["signal_values"],True,3); rs=recent_macd_cross(md["macd_values"],md["signal_values"],False,3)
-    bull_macd=cm>cs; bear_macd=cm<cs; rising=cm>pm; falling=cm<pm
-    bullish=cur["close"]>cur["open"]; bearish=cur["close"]<cur["open"]
-    rising_price=price>prev["close"]>prev2["close"]; falling_price=price<prev["close"]<prev2["close"]
-    hh=cur["high"]>prev["high"] and cur["low"]>prev["low"]; ll=cur["high"]<prev["high"] and cur["low"]<prev["low"]
-    eb=ema9>ema26; es=ema9<ema26; ebc=pe9<=pe26 and ema9>ema26; esc=pe9>=pe26 and ema9<ema26
-    pab=price>ema9; pbs=price<ema9; rr=rsi>prsi; rf=rsi<prsi
-    buy=15*eb+10*pab+8*ebc+15*bull_macd+10*rising+15*bull_cross+12*(not bull_cross and rb)+8*(30<rsi<75)+5*rr+5*bullish+5*rising_price+4*hh
-    sell=15*es+10*pbs+8*esc+15*bear_macd+10*falling+15*bear_cross+12*(not bear_cross and rs)+8*(25<rsi<70)+5*rf+5*bearish+5*falling_price+4*ll
-    if buy>=sell and buy>=55: direction="BUY"; core=buy; reasons=[]
-    elif sell>buy and sell>=55: direction="SELL"; core=sell; reasons=[]
-    else:return None
-    if eb and direction=="BUY":reasons.append("EMA9 > EMA26")
-    if es and direction=="SELL":reasons.append("EMA9 < EMA26")
-    if (pab and direction=="BUY") or (pbs and direction=="SELL"):reasons.append("Price aligned with EMA9")
-    if (bull_macd and direction=="BUY") or (bear_macd and direction=="SELL"):reasons.append("MACD aligned")
-    if (rising and direction=="BUY") or (falling and direction=="SELL"):reasons.append("MACD momentum")
-    if (bull_cross and direction=="BUY") or (bear_cross and direction=="SELL"):reasons.append("Fresh MACD crossover")
-    elif (rb and direction=="BUY") or (rs and direction=="SELL"):reasons.append("Recent MACD crossover")
-    if (30<rsi<75 and direction=="BUY") or (25<rsi<70 and direction=="SELL"):reasons.append("RSI zone")
-    if (rr and direction=="BUY") or (rf and direction=="SELL"):reasons.append("RSI momentum")
-    if (bullish and direction=="BUY") or (bearish and direction=="SELL"):reasons.append("Directional candle")
-    if (rising_price and direction=="BUY") or (falling_price and direction=="SELL"):reasons.append("Short-term momentum")
-    if (hh and direction=="BUY") or (ll and direction=="SELL"):reasons.append("Market structure aligned")
+    if len(candles) < 40:
+        return None
 
-    atr=calculate_atr(candles); ad=calculate_adx(candles); ci=candle_quality(cur); mom=momentum_analysis(candles); levels=find_levels(candles); vwap=calculate_vwap(candles)
-    d5=timeframe_direction(aggregate_candles(candles,5)); d15=timeframe_direction(aggregate_candles(candles,15)); regime=detect_market_regime(ad["adx"],atr,candles); ext=check_overextension(price,ema9,atr); extended=ext["extended"]
-    bonus=0; adv=[]
-    if ad["adx"]>=25:
-        aligned=(direction=="BUY" and ad["plus_di"]>ad["minus_di"]) or (direction=="SELL" and ad["minus_di"]>ad["plus_di"])
-        bonus+=6 if aligned else -3; adv.append("ADX/DI aligned" if aligned else "ADX trend but DI conflict")
-    elif ad["adx"]>=18:bonus+=2; adv.append("Developing trend strength")
-    else:adv.append("Weak trend / ranging environment")
-    if (direction=="BUY" and d5=="BULLISH") or (direction=="SELL" and d5=="BEARISH"):bonus+=5; adv.append("5M direction aligned")
-    elif d5!="NEUTRAL":bonus-=2; adv.append("5M direction conflict")
-    if (direction=="BUY" and d15=="BULLISH") or (direction=="SELL" and d15=="BEARISH"):bonus+=5; adv.append("15M direction aligned")
-    elif d15!="NEUTRAL":bonus-=2; adv.append("15M direction conflict")
-    if (direction=="BUY" and mom["direction"]=="BULLISH") or (direction=="SELL" and mom["direction"]=="BEARISH"):
-        bonus+=3; adv.append("Momentum aligned")
-        if mom["state"]=="ACCELERATING":bonus+=3; adv.append("Momentum accelerating")
-        elif mom["state"]=="WEAKENING":bonus-=2; adv.append("Momentum weakening")
-    if ci["direction"]==("BULLISH" if direction=="BUY" else "BEARISH") and ci["strength"]>=45:bonus+=3; adv.append("Candle quality aligned")
-    if vwap is not None:
-        if (direction=="BUY" and price>vwap) or (direction=="SELL" and price<vwap):bonus+=3; adv.append("VWAP aligned")
-        else:bonus-=1; adv.append("VWAP conflict")
-    if atr>0:
-        room=(levels["resistance"]-price) if direction=="BUY" else (price-levels["support"])
-        if room>atr:bonus+=3; adv.append("Room to key level")
-        else:bonus-=3; adv.append("Key level nearby")
-    if regime.startswith("TRENDING"):bonus+=3; adv.append("Trend-friendly regime")
-    if extended:bonus-=6; adv.append("Price overextended from EMA9")
-    score=max(0,min(100,int(core+bonus)))
+    closes = [c["close"] for c in candles]
+    price = candles[-1]["close"]
+    current = candles[-1]
+    previous = candles[-2]
+    previous2 = candles[-3]
 
-    recent_lows=[c["low"] for c in candles[-6:-1]]; recent_highs=[c["high"] for c in candles[-6:-1]]
-    entry=price
-    if direction=="BUY":
-        sl=min(recent_lows); risk=entry-sl
-        if risk<=0:return None
-        tp=entry+risk*2
+    ema9 = ema(closes, 9)
+    ema26 = ema(closes, 26)
+    previous_ema9 = ema(closes[:-1], 9)
+    previous_ema26 = ema(closes[:-1], 26)
+
+    current_rsi = rsi(closes)
+    previous_rsi = rsi(closes[:-1])
+
+    md = macd(closes)
+    if not md:
+        return None
+
+    cm = md["macd"]
+    pm = md["previous_macd"]
+    cs = md["signal"]
+    ps = md["previous_signal"]
+
+    bull_cross = pm <= ps and cm > cs
+    bear_cross = pm >= ps and cm < cs
+
+    bull_macd = cm > cs
+    bear_macd = cm < cs
+
+    rising_macd = cm > pm
+    falling_macd = cm < pm
+
+    bullish_candle = current["close"] > current["open"]
+    bearish_candle = current["close"] < current["open"]
+
+    rising_price = price > previous["close"] > previous2["close"]
+    falling_price = price < previous["close"] < previous2["close"]
+
+    higher_structure = (
+        current["high"] > previous["high"]
+        and current["low"] > previous["low"]
+    )
+    lower_structure = (
+        current["high"] < previous["high"]
+        and current["low"] < previous["low"]
+    )
+
+    ema_bull = ema9 > ema26
+    ema_bear = ema9 < ema26
+
+    price_above_ema = price > ema9
+    price_below_ema = price < ema9
+
+    rsi_rising = current_rsi > previous_rsi
+    rsi_falling = current_rsi < previous_rsi
+
+    buy = (
+        15 * ema_bull
+        + 10 * price_above_ema
+        + 8 * (previous_ema9 <= previous_ema26 and ema9 > ema26)
+        + 15 * bull_macd
+        + 10 * rising_macd
+        + 15 * bull_cross
+        + 8 * (30 < current_rsi < 75)
+        + 5 * rsi_rising
+        + 5 * bullish_candle
+        + 5 * rising_price
+        + 4 * higher_structure
+    )
+
+    sell = (
+        15 * ema_bear
+        + 10 * price_below_ema
+        + 8 * (previous_ema9 >= previous_ema26 and ema9 < ema26)
+        + 15 * bear_macd
+        + 10 * falling_macd
+        + 15 * bear_cross
+        + 8 * (25 < current_rsi < 70)
+        + 5 * rsi_falling
+        + 5 * bearish_candle
+        + 5 * falling_price
+        + 4 * lower_structure
+    )
+
+    if buy >= sell and buy >= 55:
+        direction_value = "BUY"
+        core = buy
+    elif sell > buy and sell >= 55:
+        direction_value = "SELL"
+        core = sell
     else:
-        sl=max(recent_highs); risk=sl-entry
-        if risk<=0:return None
-        tp=entry-risk*2
-    move=abs(tp-entry); move_pct=move/entry*100 if entry else 0
-    ranges=[c["high"]-c["low"] for c in candles[-10:] if c["high"]>c["low"]]
-    duration="Unable to estimate"
-    if ranges:
-        est=max(1,abs(tp-entry)/(sum(ranges)/len(ranges))); lo=max(1,int(est*.7)); hi=max(lo+1,int(est*1.3)); duration=f"{lo}-{hi} minutes"
-    ts=get_eat_time().strftime("%Y-%m-%d %H:%M:%S EAT")
-    key=f"{asset}_{direction}_{candles[-1]['datetime']}"
-    if last_signal.get(asset)==key:return None
-    last_signal[asset]=key
-    interp=interpretation(score,extended); setup=classify(score,extended)
-    macd_status="Fresh crossover" if (bull_cross or bear_cross) else "Recent crossover" if ((direction=="BUY" and rb) or (direction=="SELL" and rs)) else "Momentum aligned"
-    bot=(f"🤖 *KETS — EARLY ENTRY SIGNAL — {asset}*\n━━━━━━━━━━━━━━━━━━\n📈 *Direction:* {'🟢 BUY / LONG' if direction=='BUY' else '🔴 SELL / SHORT'}\n💯 *Signal Strength:* {score}%\n🧠 *Interpretation:* {interp}\n🏷️ *Setup:* {setup}\n━━━━━━━━━━━━━━━━━━\n📍 *Market Price:* ${entry:,.2f}\n🎯 *Take Profit:* ${tp:,.2f}\n🛑 *Stop Loss:* ${sl:,.2f}\n📊 *Expected Price Move:* ${move:,.2f} ({move_pct:.2f}%)\n⏱️ *Estimated Duration:* {duration}\n━━━━━━━━━━━━━━━━━━\n📊 *1-MIN CHECK*\n├ EMA9: ${ema9:,.2f}\n├ EMA26: ${ema26:,.2f}\n├ RSI(14): {rsi:.2f}\n├ MACD: {cm:.5f}\n├ Signal: {cs:.5f}\n└ MACD Status: {macd_status}\n━━━━━━━━━━━━━━━━━━\n🧠 *INTELLIGENCE*\n├ Regime: {regime}\n├ ADX: {ad['adx']:.2f}\n├ DI+: {ad['plus_di']:.2f}\n├ DI-: {ad['minus_di']:.2f}\n├ ATR: ${atr:,.2f}\n├ Momentum: {mom['direction']} / {mom['state']}\n├ Candle: {ci['quality']}\n├ 5M: {d5}\n├ 15M: {d15}\n└ VWAP: {'$'+format(vwap,',.2f') if vwap is not None else 'Unavailable'}\n━━━━━━━━━━━━━━━━━━\n🎯 *LEVELS*\n├ Support: ${levels['support']:,.2f}\n└ Resistance: ${levels['resistance']:,.2f}\n━━━━━━━━━━━━━━━━━━\n🔎 *CORE:*\n" + "\n".join("• "+x for x in reasons) + "\n━━━━━━━━━━━━━━━━━━\n🧠 *ADVANCED:*\n" + "\n".join("• "+x for x in adv) + f"\n━━━━━━━━━━━━━━━━━━\n⏰ {ts}\n⚠️ Strategy-alignment score, not win probability.")
-    channel=(f"🤖 *KETS — EARLY ENTRY SIGNAL — {asset}*\n━━━━━━━━━━━━━━━━━━\n📈 *Direction:* {'🟢 BUY / LONG' if direction=='BUY' else '🔴 SELL / SHORT'}\n💯 *Signal Strength:* {score}%\n🧠 *Interpretation:* {interp}\n━━━━━━━━━━━━━━━━━━\n📍 *Market Price:* ${entry:,.2f}\n🎯 *Take Profit:* ${tp:,.2f}\n🛑 *Stop Loss:* ${sl:,.2f}\n📊 *Expected Price Move:* ${move:,.2f} ({move_pct:.2f}%)\n⏱️ *Estimated Duration:* {duration}\n━━━━━━━━━━━━━━━━━━\n⏰ {ts}\n⚠️ Strategy-alignment score, not win probability.")
-    return {"bot":bot,"channel":channel,"direction":direction,"score":score,"entry":entry,"take_profit":tp,"stop_loss":sl,"timestamp":ts}
+        return None
+
+    atr_value = atr(candles)
+    adx_value = adx(candles)
+    candle = candle_quality(current)
+    mom = momentum(candles)
+    lv = levels(candles)
+    vw = vwap(candles)
+
+    d5 = direction(aggregate(candles, 5))
+    d15 = direction(aggregate(candles, 15))
+
+    bonus = 0
+
+    if adx_value["adx"] >= 25:
+        aligned = (
+            direction_value == "BUY"
+            and adx_value["plus_di"] > adx_value["minus_di"]
+        ) or (
+            direction_value == "SELL"
+            and adx_value["minus_di"] > adx_value["plus_di"]
+        )
+        bonus += 6 if aligned else -3
+
+    if (direction_value == "BUY" and d5 == "BULLISH") or (
+        direction_value == "SELL" and d5 == "BEARISH"
+    ):
+        bonus += 5
+
+    if (direction_value == "BUY" and d15 == "BULLISH") or (
+        direction_value == "SELL" and d15 == "BEARISH"
+    ):
+        bonus += 5
+
+    if (direction_value == "BUY" and mom["direction"] == "BULLISH") or (
+        direction_value == "SELL" and mom["direction"] == "BEARISH"
+    ):
+        bonus += 3
+        if mom["state"] == "ACCELERATING":
+            bonus += 3
+        elif mom["state"] == "WEAKENING":
+            bonus -= 2
+
+    if candle["direction"] == (
+        "BULLISH" if direction_value == "BUY" else "BEARISH"
+    ) and candle["strength"] >= 45:
+        bonus += 3
+
+    if vw is not None:
+        if (direction_value == "BUY" and price > vw) or (
+            direction_value == "SELL" and price < vw
+        ):
+            bonus += 3
+        else:
+            bonus -= 1
+
+    score = max(0, min(100, int(core + bonus)))
+
+    # Recent 5 candles for practical SL/TP.
+    recent_lows = [c["low"] for c in candles[-6:-1]]
+    recent_highs = [c["high"] for c in candles[-6:-1]]
+
+    entry = price
+
+    if direction_value == "BUY":
+        stop = min(recent_lows)
+        risk = entry - stop
+        if risk <= 0:
+            return None
+        take_profit = entry + risk * 2
+    else:
+        stop = max(recent_highs)
+        risk = stop - entry
+        if risk <= 0:
+            return None
+        take_profit = entry - risk * 2
+
+    key = f"{asset}_{direction_value}_{candles[-1]['datetime']}"
+
+    with API_LOCK:
+        if LAST_SIGNAL_KEY.get(asset) == key:
+            return None
+        LAST_SIGNAL_KEY[asset] = key
+
+    timestamp = get_eat_time().isoformat()
+
+    return {
+        "asset": asset,
+        "market": asset,
+        "direction": direction_value,
+        "score": score,
+        "entry": entry,
+        "take_profit": take_profit,
+        "stop_loss": stop,
+        "timestamp": timestamp,
+        "rsi": current_rsi,
+        "ema9": ema9,
+        "ema26": ema26,
+        "macd": cm,
+        "macd_signal": cs,
+        "adx": adx_value["adx"],
+        "plus_di": adx_value["plus_di"],
+        "minus_di": adx_value["minus_di"],
+        "atr": atr_value,
+        "5m": d5,
+        "15m": d15,
+    }
 
 
-# ------------------------- ENGINE ----------------------------
-def build_startup_messages():
-    b="🤖 *KETS STRATEGY ENGINE ONLINE*\n━━━━━━━━━━━━━━━━━━\n✅ Backend connected\n📊 Timeframe: 1 minute\n🔄 Scan interval: 2 minutes\n⏰ Trading hours: 06:00-18:00 EAT\n💰 Weekdays: GOLD + BTC\n₿ Weekend: BTC ONLY\n🧠 Advanced intelligence ON\n━━━━━━━━━━━━━━━━━━\nℹ️ Strength is strategy alignment, not guaranteed win probability."
-    c="🤖 *KETS STRATEGY ENGINE ONLINE*\n━━━━━━━━━━━━━━━━━━\n✅ Signal system online\n📊 1-minute monitoring\n🔄 Analysis every 2 minutes\n⏰ Active: 06:00-18:00 EAT\n⚡ Early-entry detection ON\n━━━━━━━━━━━━━━━━━━\n📡 KETS is monitoring the market."
-    return b,c
+# ============================================================
+# STORAGE
+# ============================================================
 
+def update_market_state(asset, symbol, candles, signal=None):
+    if not candles:
+        return
+
+    latest = candles[-1]
+
+    with API_LOCK:
+        MARKET_STATE[asset] = {
+            "asset": asset,
+            "symbol": symbol,
+            "price": num(latest.get("close")),
+            "open": num(latest.get("open")),
+            "high": num(latest.get("high")),
+            "low": num(latest.get("low")),
+            "candle_time": latest.get("datetime"),
+            "candles": len(candles),
+            "signal": signal.get("direction") if signal else None,
+            "score": signal.get("score") if signal else None,
+            "status": "LIVE",
+            "updated_at": get_eat_time().isoformat(),
+        }
+
+
+def store_signal(signal):
+    now = get_eat_time()
+
+    item = dict(signal)
+    item["id"] = f"{signal['asset']}-{signal['direction']}-{now.timestamp()}"
+
+    with API_LOCK:
+        SIGNAL_HISTORY.append(item)
+
+        cutoff = now - dt.timedelta(days=HISTORY_DAYS)
+        SIGNAL_HISTORY[:] = [
+            x for x in SIGNAL_HISTORY
+            if dt.datetime.fromisoformat(x["timestamp"]) >= cutoff
+        ]
+
+
+# ============================================================
+# ENGINE
+# ============================================================
 
 def run_strategy():
-    global last_scan, next_scan
-    token=os.environ.get("TELEGRAM_BOT_TOKEN"); bot_id=os.environ.get("TELEGRAM_CHAT_ID"); channel_id=os.environ.get("TELEGRAM_CHANNEL_ID"); key=os.environ.get("TWELVE_DATA_API_KEY")
-    print("🚀 KETS Strategy Engine started — 1M / 2M")
-    sb,sc=build_startup_messages(); send_to_bot_and_channel(token,bot_id,channel_id,sb,sc)
+    global last_scan, next_scan, engine_started, engine_error
+
+    token = os.environ.get("TELEGRAM_BOT_TOKEN")
+    bot_id = os.environ.get("TELEGRAM_CHAT_ID")
+    channel_id = os.environ.get("TELEGRAM_CHANNEL_ID")
+    api_key = os.environ.get("TWELVE_DATA_API_KEY")
+
+    engine_started = True
+
+    print("🚀 KETS ENGINE ONLINE")
+    print(f"📡 Scan interval: {SCAN_SECONDS}s")
+    print(f"⏰ Trading restriction: {'06:00-18:00 EAT' if TRADING_HOURS_ONLY else '24/7'}")
+    print(f"🔑 Twelve Data key: {'FOUND' if api_key else 'MISSING'}")
+
     while True:
-        started=time.time()
+        started = time.time()
+
         try:
-            now=get_eat_time(); last_scan=now.isoformat()
+            now = get_eat_time()
+            last_scan = now.isoformat()
+            engine_error = None
+
             if not trading_hours_open():
-                time.sleep(120); continue
-            for asset,symbol in get_markets().items():
-                candles=fetch_1m_candles(symbol,key)
-                if not candles:
-                    with API_LOCK: MARKET_STATE[asset]={"asset":asset,"symbol":symbol,"status":"NO_DATA","updated_at":get_eat_time().isoformat()}
-                    continue
-                signal=analyze_market(asset,symbol,candles)
-                update_market_state(asset,symbol,candles,signal)
-                if signal:
-                    store_app_signal(asset,signal)
-                    send_to_bot_and_channel(token,bot_id,channel_id,signal["bot"],signal["channel"])
-                print(f"🔎 {asset}: ${candles[-1]['close']:,.2f} | signal={signal['direction'] if signal else 'NONE'}")
-        except Exception as e:
-            print(f"⚠️ KETS engine error: {e}")
-            try:
-                send_to_bot_and_channel(token,bot_id,channel_id,f"⚠️ *KETS ENGINE ERROR*\n`{str(e)[:500]}`\n🔄 Engine will continue.","⚠️ *KETS SYSTEM NOTICE*\nA temporary system issue was detected.\n🔄 Monitoring will continue.")
-            except Exception: pass
-        sleep_time=max(1,120-(time.time()-started)); next_scan=(get_eat_time()+datetime.timedelta(seconds=sleep_time)).isoformat(); time.sleep(sleep_time)
+                print("⏸️ Outside configured trading hours.")
+            else:
+                markets = get_markets()
+
+                for asset, symbol in markets.items():
+                    candles = fetch_1m_candles(symbol, api_key)
+
+                    if not candles:
+                        with API_LOCK:
+                            MARKET_STATE[asset] = {
+                                "asset": asset,
+                                "symbol": symbol,
+                                "status": "NO_DATA",
+                                "updated_at": get_eat_time().isoformat(),
+                            }
+                        continue
+
+                    signal = analyze_market(asset, symbol, candles)
+                    update_market_state(asset, symbol, candles, signal)
+
+                    if signal:
+                        store_signal(signal)
+
+                        text = (
+                            f"🤖 KETS SIGNAL — {asset}\n"
+                            f"Direction: {signal['direction']}\n"
+                            f"Score: {signal['score']}%\n"
+                            f"Entry: ${signal['entry']:,.2f}\n"
+                            f"TP: ${signal['take_profit']:,.2f}\n"
+                            f"SL: ${signal['stop_loss']:,.2f}\n"
+                            f"Time: {get_eat_time().strftime('%Y-%m-%d %H:%M:%S EAT')}"
+                        )
+
+                        send_to_bot_and_channel(
+                            token, bot_id, channel_id, text, text
+                        )
+
+                    print(
+                        f"🔎 {asset}: "
+                        f"${candles[-1]['close']:,.2f} | "
+                        f"signal={signal['direction'] if signal else 'NONE'}"
+                    )
+
+        except Exception as exc:
+            engine_error = str(exc)[:500]
+            print(f"⚠️ KETS ENGINE ERROR: {engine_error}")
+
+        sleep_for = max(1, SCAN_SECONDS - (time.time() - started))
+        next_scan = (
+            get_eat_time() + dt.timedelta(seconds=sleep_for)
+        ).isoformat()
+
+        time.sleep(sleep_for)
+
+
+# ============================================================
+# STARTUP
+# ============================================================
+
+def start_background_workers():
+    # Prevent duplicate workers if the module is imported more than once.
+    if getattr(app, "_kets_workers_started", False):
+        return
+
+    app._kets_workers_started = True
+
+    Thread(target=run_strategy, daemon=True, name="kets-engine").start()
+    Thread(target=self_awake, daemon=True, name="kets-heartbeat").start()
+
+    print("✅ KETS background workers started")
 
 
 if __name__ == "__main__":
-    Thread(target=keep_web_server_alive, daemon=True).start()
-    Thread(target=self_awake, daemon=True).start()
-    run_strategy()
+    start_background_workers()
+    port = int(os.environ.get("PORT", "8080"))
+    app.run(host="0.0.0.0", port=port)
+else:
+    # Required when Render starts the app with gunicorn bot:app.
+    start_background_workers()
