@@ -1,12 +1,38 @@
-KETS
-Early Entry Signals
-Connecting…
-Next check: --:--
-Access LOCKED
-Payment required
-1 Day 1 Week 1 Month
-Latest Signals
-Waiting for signals…
-History — 7 Days
-No history loaded.
-KETS Website Updates every 2 minutes
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+
+    <title>KETS Early Entry Signals</title>
+
+    <link rel="stylesheet" href="style.css">
+    <link rel="manifest" href="manifest.json">
+
+    <meta name="theme-color" content="#0b0f14">
+</head>
+
+<body>
+
+    <div id="app">
+        <div class="loading">
+            KETS Early Entry Signals<br>
+            Connecting...
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+
+    <script>
+        if ("serviceWorker" in navigator) {
+            window.addEventListener("load", function () {
+                navigator.serviceWorker.register("service-worker.js")
+                    .catch(function (error) {
+                        console.log("Service worker registration failed:", error);
+                    });
+            });
+        }
+    </script>
+
+</body>
+</html>
