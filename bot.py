@@ -412,15 +412,9 @@ def source_worker():
             f"{next_time}"
         )
 
-        # poll_source already calculated the target sleep
-        # from its elapsed time. Recalculate safely here.
-        time.sleep(
-            max(
-                1,
-                POLL_SECONDS
-                - 0
-            )
-        )
+        # Sleep until the next scheduled poll. poll_source() already
+        # calculated next_poll from the actual elapsed request time.
+        time.sleep(max(1, POLL_SECONDS))
 
 
 # ============================================================
@@ -479,53 +473,126 @@ def self_awake():
 # frontend does not need to know where the original bot lives.
 # ============================================================
 
+HTML = r"""<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#07101b">
+<title>KETS Early Entry Signals</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#07101b;color:#eef4ff;font-family:Arial,sans-serif}
+.app{max-width:1100px;margin:auto;padding:18px}
+header{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:16px}
+h1{font-size:25px;margin:0 0 5px}.sub{color:#91a0b8}
+.card{background:#0d1826;border:1px solid #203047;border-radius:14px;padding:15px;margin-bottom:14px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px}
+.label{font-size:12px;color:#91a0b8;text-transform:uppercase}
+.value{font-size:19px;font-weight:700;margin-top:6px}
+.status{display:flex;align-items:center;gap:8px}.dot{width:10px;height:10px;border-radius:50%;background:#f0ad4e;display:inline-block}
+.dot.ok{background:#22c878}.dot.bad{background:#ff5964}
+.row{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap}
+.market,.signal{background:#101d2d;border:1px solid #263a54;border-radius:10px;padding:12px;margin-top:10px}
+.buy{border-left:5px solid #22c878}.sell{border-left:5px solid #ff5964}
+.small{font-size:12px;color:#91a0b8;margin-top:5px}
+.muted{color:#91a0b8}
+.error{color:#ff8d98}
+</style>
+</head>
+<body>
+<main class="app">
+<header>
+<div><h1>🤖 KETS Early Entry Signals</h1><div class="sub">Original trading bot → KETS dashboard</div></div>
+<div class="status"><span id="dot" class="dot"></span><b id="top">Connecting...</b></div>
+</header>
+
+<section class="grid">
+<div class="card"><div class="label">System</div><div id="system" class="value">Connecting...</div></div>
+<div class="card"><div class="label">Source</div><div id="source" class="value">Checking...</div></div>
+<div class="card"><div class="label">Last Poll</div><div id="lastpoll" class="value">—</div></div>
+<div class="card"><div class="label">Signals</div><div id="count" class="value">0</div></div>
+</section>
+
+<section class="card">
+<div class="row"><b>Live Backend Market Data</b><span id="time" class="small">—</span></div>
+<div id="markets" class="muted">Waiting for market data...</div>
+</section>
+
+<section class="card">
+<div class="row"><b>Latest Signals</b><span class="small">06:00–18:00 EAT scanning window</span></div>
+<div id="signals" class="muted">Waiting for signals...</div>
+</section>
+
+<section class="card">
+<b>Connection diagnostics</b>
+<div id="diag" class="small">Checking KETS API...</div>
+</section>
+</main>
+
+<script>
+const $=id=>document.getElementById(id);
+function esc(v){return String(v??"").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[m]))}
+async function getJSON(path){
+  const c=new AbortController(); const t=setTimeout(()=>c.abort(),8000);
+  try{
+    const r=await fetch(path,{cache:"no-store",signal:c.signal});
+    if(!r.ok) throw new Error("HTTP "+r.status);
+    return await r.json();
+  }finally{clearTimeout(t)}
+}
+async function refresh(){
+  try{
+    const s=await getJSON("/api/status");
+    $("system").textContent=s.status||"online";
+    $("source").textContent=s.source_connected?"CONNECTED":"WAITING";
+    $("lastpoll").textContent=s.last_poll||"—";
+    $("count").textContent=s.signal_count??0;
+    $("time").textContent=s.time_eat||"—";
+    $("top").textContent=s.source_connected?"Original bot connected":"KETS online — source unavailable";
+    $("dot").className="dot "+(s.source_connected?"ok":"bad");
+    $("diag").textContent=s.source_connected
+      ?"KETS API is working and the original bot is responding."
+      :"KETS API is working, but the original bot has not responded yet.";
+    if(s.source_last_error) $("diag").textContent+=" Last error: "+s.source_last_error;
+
+    const m=await getJSON("/api/market");
+    const entries=Object.values(m.markets||{});
+    $("markets").innerHTML=entries.length?entries.map(x=>`
+      <div class="market">
+        <b>${esc(x.asset||"Market")} — ${esc(x.symbol||"")}</b>
+        <div class="value">${x.price==null?"NO DATA":"$"+Number(x.price).toLocaleString()}</div>
+        <div class="small">${esc(x.status||"LIVE")} • Signal: ${esc(x.signal||"NONE")} • Score: ${esc(x.score??"—")} • Updated: ${esc(x.updated_at||"—")}</div>
+      </div>`).join(""):"Waiting for market data...";
+
+    const q=await getJSON("/api/signals");
+    const sig=q.signals||[];
+    $("signals").innerHTML=sig.length?sig.slice(0,20).map(x=>`
+      <div class="signal ${String(x.direction).toUpperCase()==="BUY"?"buy":"sell"}">
+        <b>${String(x.direction).toUpperCase()==="BUY"?"🟢 BUY":"🔴 SELL"} — ${esc(x.asset||x.symbol||"Market")}</b>
+        <div>Score: <b>${esc(x.score??"—")}%</b></div>
+        <div>Entry: ${x.entry==null?"—":"$"+Number(x.entry).toLocaleString()}</div>
+        <div>TP: ${x.take_profit==null?"—":"$"+Number(x.take_profit).toLocaleString()}</div>
+        <div>SL: ${x.stop_loss==null?"—":"$"+Number(x.stop_loss).toLocaleString()}</div>
+        <div class="small">${esc(x.timestamp||"")}</div>
+      </div>`).join(""):"No signals yet.";
+  }catch(e){
+    $("top").textContent="KETS API ERROR";
+    $("system").textContent="API error";
+    $("dot").className="dot bad";
+    $("diag").innerHTML='<span class="error">The page is loading, but /api/status is not responding: '+esc(e.message)+'</span>';
+  }
+}
+refresh();
+setInterval(refresh,15000);
+</script>
+</body>
+</html>"""
+
+
 @app.route("/")
 def home():
-
-    base_dir = os.path.dirname(
-        os.path.abspath(__file__)
-    )
-
-    index_path = os.path.join(
-        base_dir,
-        "index.html"
-    )
-
-    if os.path.exists(index_path):
-
-        return send_from_directory(
-            base_dir,
-            "index.html"
-        )
-
-    return (
-        "KETS APP ONLINE — "
-        "connected to original trading bot"
-    )
-
-
-@app.route("/<path:filename>")
-def frontend_files(filename):
-
-    base_dir = os.path.dirname(
-        os.path.abspath(__file__)
-    )
-
-    requested = os.path.join(
-        base_dir,
-        filename
-    )
-
-    if os.path.isfile(requested):
-
-        return send_from_directory(
-            base_dir,
-            filename
-        )
-
-    return jsonify({
-        "error": "file_not_found"
-    }), 404
+    return HTML
 
 
 @app.route("/api/health")
