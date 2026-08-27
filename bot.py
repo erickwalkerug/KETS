@@ -1,825 +1,808 @@
 import os
 import time
+import math
+import threading
 import datetime as dt
-from threading import Thread, Lock
+from collections import deque
+from functools import wraps
 
 import requests
-from flask import Flask, jsonify, send_from_directory
-
-try:
-    from flask_cors import CORS
-except Exception:
-    CORS = None
-
+from flask import Flask, jsonify, request
 
 # ============================================================
-# KETS APP — SOURCE-BACKEND CONNECTOR
-#
+# KETS BOT / API — Twelve Data powered
+# ------------------------------------------------------------
 # IMPORTANT:
-# KETS APP DOES NOT GENERATE A SECOND TRADING STRATEGY.
-#
-# Data flow:
-#   ORIGINAL TRADING BOT
-#          ↓
-#   /api/status
-#   /api/market
-#   /api/signals
-#          ↓
-#       KETS APP
-#          ↓
-#      Web dashboard
-#
-# The original trading bot remains the source of truth for:
-# - market data
-# - BUY / SELL signals
-# - score
-# - entry
-# - take profit
-# - stop loss
-# - signal history
-#
-# KETS only fetches, caches and serves that data.
-#
-# Render:
-# - Flask web server
-# - background polling
-# - self-awake heartbeat
+# - Market indicators and strategy calculations stay backend-only.
+# - Frontend receives final signals, not EMA/RSI/MACD/ADX/etc.
+# - Put secrets in Render Environment Variables.
 # ============================================================
-
 
 app = Flask(__name__)
 
-if CORS:
-    try:
-        CORS(app)
-    except Exception:
-        pass
+# Optional CORS. The API remains usable if flask-cors isn't installed.
+try:
+    from flask_cors import CORS
+    CORS(app)
+except Exception:
+    pass
+
+TWELVE_DATA_API_KEY = os.getenv("TWELVE_DATA_API_KEY", "").strip()
+API_SECRET = os.getenv("KETS_API_SECRET", "").strip()
+
+# Optional Telegram settings. Leave empty if Telegram is not used.
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+TELEGRAM_CHANNEL_ID = os.getenv("TELEGRAM_CHANNEL_ID", "").strip()
+
+# Twelve Data symbols can be overridden in Render if needed.
+BTC_SYMBOL = os.getenv("BTC_SYMBOL", "BTC/USD").strip()
+GOLD_SYMBOL = os.getenv("GOLD_SYMBOL", "XAU/USD").strip()
+
+EAT = dt.timezone(dt.timedelta(hours=3))
+SIGNAL_START = dt.time(6, 0)
+SIGNAL_END = dt.time(18, 0)
+
+SCAN_SECONDS = 60
+BROADCAST_SECONDS = 120
+HISTORY_DAYS = 7
+HTTP_TIMEOUT = 20
+
+# Prices/candles are cached briefly so a failed request doesn't destroy
+# the whole API response.
+data_cache = {}
+signal_history = deque(maxlen=5000)
+last_signals = {}
+last_broadcast_at = 0.0
+engine_lock = threading.Lock()
 
 
-# ============================================================
-# CONFIGURATION
-# ============================================================
-
-SOURCE_API = (
-    os.environ.get("ORIGINAL_BOT_API_URL")
-    or os.environ.get("SOURCE_BOT_API_URL")
-    or "https://my-btc-bot-l0xm.onrender.com"
-).rstrip("/")
-
-POLL_SECONDS = int(
-    os.environ.get("KETS_POLL_SECONDS", "120")
-)
-
-HEARTBEAT_SECONDS = int(
-    os.environ.get("KETS_HEARTBEAT_SECONDS", "300")
-)
-
-SOURCE_TIMEOUT = int(
-    os.environ.get("KETS_SOURCE_TIMEOUT", "25")
-)
-
-PUBLIC_URL = (
-    os.environ.get("KETS_PUBLIC_URL")
-    or os.environ.get("RENDER_EXTERNAL_URL")
-    or ""
-).rstrip("/")
+def now_eat():
+    return dt.datetime.now(EAT)
 
 
-# ============================================================
-# STATE
-# ============================================================
-
-LOCK = Lock()
-
-SOURCE_STATE = {
-    "connected": False,
-    "status": "starting",
-    "last_success": None,
-    "last_error": None,
-    "source_api": SOURCE_API,
-}
-
-MARKET_DATA = {}
-SIGNALS = []
-
-LAST_SOURCE_STATUS = {}
-LAST_SOURCE_MARKET = {}
-LAST_SOURCE_SIGNALS = []
-
-last_poll = None
-next_poll = None
-engine_started = False
-worker_started = False
+def within_signal_hours(t=None):
+    t = t or now_eat()
+    current = t.time()
+    return SIGNAL_START <= current < SIGNAL_END
 
 
-# ============================================================
-# TIME
-# ============================================================
+def clean_old_history():
+    cutoff = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=HISTORY_DAYS)
+    kept = deque(maxlen=signal_history.maxlen)
+    for item in signal_history:
+        try:
+            ts = dt.datetime.fromisoformat(item["timestamp"])
+            if ts >= cutoff:
+                kept.append(item)
+        except Exception:
+            continue
+    signal_history.clear()
+    signal_history.extend(kept)
 
-def get_eat_time():
-    return (
-        dt.datetime.now(dt.timezone.utc)
-        + dt.timedelta(hours=3)
-    )
+
+def api_auth_required(fn):
+    @wraps(fn)
+    def wrapper(*args, **kwargs):
+        # If no secret is configured, keep local testing easy.
+        # Production Render deployment should set KETS_API_SECRET.
+        if API_SECRET:
+            supplied = request.headers.get("X-KETS-API-KEY", "")
+            if supplied != API_SECRET:
+                return jsonify({"ok": False, "error": "unauthorized"}), 401
+        return fn(*args, **kwargs)
+    return wrapper
 
 
-def iso_now():
-    return get_eat_time().isoformat()
+def twelve_data(endpoint, params):
+    if not TWELVE_DATA_API_KEY:
+        raise RuntimeError("TWELVE_DATA_API_KEY is not configured")
 
+    query = dict(params)
+    query["apikey"] = TWELVE_DATA_API_KEY
+    url = f"https://api.twelvedata.com/{endpoint}"
 
-# ============================================================
-# SAFE HTTP
-# ============================================================
-
-def get_json(path):
-    url = f"{SOURCE_API}{path}"
-
-    response = requests.get(
-        url,
-        timeout=SOURCE_TIMEOUT,
-        headers={
-            "Cache-Control": "no-cache",
-            "User-Agent": "KETS-App-Connector/1.0",
-        },
-    )
-
+    response = requests.get(url, params=query, timeout=HTTP_TIMEOUT)
     response.raise_for_status()
+    data = response.json()
 
-    return response.json()
+    if isinstance(data, dict) and data.get("status") == "error":
+        raise RuntimeError(data.get("message", "Twelve Data error"))
+
+    return data
 
 
-# ============================================================
-# NORMALIZATION
-#
-# The original backend already exposes the API shape KETS needs.
-# These functions also tolerate small variations in field names.
-# ============================================================
+def fetch_candles(symbol, interval="1min", outputsize=300):
+    key = (symbol, interval, outputsize)
+    try:
+        data = twelve_data(
+            "time_series",
+            {
+                "symbol": symbol,
+                "interval": interval,
+                "outputsize": outputsize,
+                "format": "JSON",
+                "order": "ASC",
+            },
+        )
+        values = data.get("values", [])
+        if not values:
+            raise RuntimeError(f"No candle data returned for {symbol}")
 
-def normalize_market_payload(payload):
-    if not isinstance(payload, dict):
-        return {}
-
-    markets = payload.get("markets")
-
-    if isinstance(markets, dict):
-        return markets
-
-    if isinstance(markets, list):
-        result = {}
-
-        for item in markets:
-            if not isinstance(item, dict):
-                continue
-
-            asset = (
-                item.get("asset")
-                or item.get("market")
-                or item.get("symbol")
+        candles = []
+        for x in values:
+            candles.append(
+                {
+                    "time": x["datetime"],
+                    "open": float(x["open"]),
+                    "high": float(x["high"]),
+                    "low": float(x["low"]),
+                    "close": float(x["close"]),
+                    "volume": float(x.get("volume", 0) or 0),
+                }
             )
-
-            if asset:
-                result[str(asset)] = item
-
-        return result
-
-    return {}
-
-
-def normalize_signal_payload(payload):
-    if not isinstance(payload, dict):
-        return []
-
-    signals = payload.get("signals")
-
-    if isinstance(signals, list):
-        return signals
-
-    if isinstance(payload.get("data"), list):
-        return payload["data"]
-
-    return []
+        data_cache[key] = {"at": time.time(), "candles": candles}
+        return candles
+    except Exception:
+        cached = data_cache.get(key)
+        if cached:
+            return cached["candles"]
+        raise
 
 
-def clean_signal(signal):
-    if not isinstance(signal, dict):
+def ema(values, period):
+    if len(values) < period:
         return None
+    k = 2.0 / (period + 1)
+    out = sum(values[:period]) / period
+    for value in values[period:]:
+        out = value * k + out * (1 - k)
+    return out
 
-    result = dict(signal)
 
-    # Make common aliases consistent for the KETS frontend.
-    if "direction" not in result:
-        result["direction"] = (
-            result.get("signal")
-            or result.get("side")
-            or result.get("action")
-        )
-
-    if "entry" not in result:
-        result["entry"] = (
-            result.get("price")
-            or result.get("entry_price")
-        )
-
-    if "take_profit" not in result:
-        result["take_profit"] = (
-            result.get("tp")
-            or result.get("takeProfit")
-        )
-
-    if "stop_loss" not in result:
-        result["stop_loss"] = (
-            result.get("sl")
-            or result.get("stopLoss")
-        )
-
-    if "timestamp" not in result:
-        result["timestamp"] = (
-            result.get("time")
-            or result.get("created_at")
-            or result.get("createdAt")
-        )
-
+def ema_series(values, period):
+    if len(values) < period:
+        return [None] * len(values)
+    result = [None] * (period - 1)
+    current = sum(values[:period]) / period
+    result.append(current)
+    k = 2.0 / (period + 1)
+    for value in values[period:]:
+        current = value * k + current * (1 - k)
+        result.append(current)
     return result
 
 
-# ============================================================
-# SOURCE POLLER
-# ============================================================
+def rsi(values, period=14):
+    if len(values) < period + 1:
+        return None, []
+    gains, losses = [], []
+    for i in range(1, len(values)):
+        change = values[i] - values[i - 1]
+        gains.append(max(change, 0))
+        losses.append(max(-change, 0))
 
-def poll_source():
-    global last_poll
-    global next_poll
-    global LAST_SOURCE_STATUS
-    global LAST_SOURCE_MARKET
-    global LAST_SOURCE_SIGNALS
+    avg_gain = sum(gains[:period]) / period
+    avg_loss = sum(losses[:period]) / period
+    series = [None] * period
 
-    started = time.time()
+    def calc(g, l):
+        if l == 0:
+            return 100.0
+        rs = g / l
+        return 100.0 - (100.0 / (1.0 + rs))
 
-    with LOCK:
-        last_poll = iso_now()
+    series.append(calc(avg_gain, avg_loss))
 
+    for i in range(period, len(gains)):
+        avg_gain = ((avg_gain * (period - 1)) + gains[i]) / period
+        avg_loss = ((avg_loss * (period - 1)) + losses[i]) / period
+        series.append(calc(avg_gain, avg_loss))
+
+    return series[-1], series
+
+
+def macd(values, fast_period=12, slow_period=26, signal_period=9):
+    if len(values) < slow_period + signal_period:
+        return None, None, []
+
+    fast = ema_series(values, fast_period)
+    slow = ema_series(values, slow_period)
+    macd_line = []
+    for a, b in zip(fast, slow):
+        macd_line.append(None if a is None or b is None else a - b)
+
+    usable = [x for x in macd_line if x is not None]
+    signal_series = ema_series(usable, signal_period)
+    signal_map = [None] * (len(macd_line) - len(signal_series)) + signal_series
+
+    pairs = []
+    for m, s in zip(macd_line, signal_map):
+        if m is not None and s is not None:
+            pairs.append((m, s))
+
+    if not pairs:
+        return None, None, []
+    return pairs[-1][0], pairs[-1][1], pairs
+
+
+def atr(candles, period=14):
+    if len(candles) < period + 1:
+        return None
+    trs = []
+    for i in range(1, len(candles)):
+        c = candles[i]
+        prev_close = candles[i - 1]["close"]
+        tr = max(
+            c["high"] - c["low"],
+            abs(c["high"] - prev_close),
+            abs(c["low"] - prev_close),
+        )
+        trs.append(tr)
+    return sum(trs[-period:]) / period
+
+
+def adx_and_di(candles, period=14):
+    # Wilder-style ADX approximation.
+    if len(candles) < period * 2 + 2:
+        return None, None, None
+
+    trs, plus_dm, minus_dm = [], [], []
+    for i in range(1, len(candles)):
+        cur, prev = candles[i], candles[i - 1]
+        up = cur["high"] - prev["high"]
+        down = prev["low"] - cur["low"]
+
+        plus = up if up > down and up > 0 else 0
+        minus = down if down > up and down > 0 else 0
+        tr = max(
+            cur["high"] - cur["low"],
+            abs(cur["high"] - prev["close"]),
+            abs(cur["low"] - prev["close"]),
+        )
+        trs.append(tr)
+        plus_dm.append(plus)
+        minus_dm.append(minus)
+
+    def wilder(seq, p):
+        value = sum(seq[:p])
+        out = [None] * (p - 1) + [value]
+        for x in seq[p:]:
+            value = value - value / p + x
+            out.append(value)
+        return out
+
+    tr_s = wilder(trs, period)
+    p_s = wilder(plus_dm, period)
+    m_s = wilder(minus_dm, period)
+
+    dx = []
+    last_pdi = last_mdi = None
+    for t, p, m in zip(tr_s, p_s, m_s):
+        if t in (None, 0):
+            dx.append(None)
+            continue
+        pdi = 100 * p / t
+        mdi = 100 * m / t
+        last_pdi, last_mdi = pdi, mdi
+        denom = pdi + mdi
+        dx.append(0 if denom == 0 else 100 * abs(pdi - mdi) / denom)
+
+    usable_dx = [x for x in dx if x is not None]
+    if len(usable_dx) < period:
+        return None, last_pdi, last_mdi
+
+    adx_value = sum(usable_dx[-period:]) / period
+    return adx_value, last_pdi, last_mdi
+
+
+def direction_from_candles(candles, lookback=5):
+    if len(candles) < lookback + 1:
+        return "NEUTRAL"
+    start = candles[-lookback - 1]["close"]
+    end = candles[-1]["close"]
+    if end > start:
+        return "BULLISH"
+    if end < start:
+        return "BEARISH"
+    return "NEUTRAL"
+
+
+def structure(candles):
+    if len(candles) < 8:
+        return "INSUFFICIENT DATA"
+    recent = candles[-6:]
+    first_half = recent[:3]
+    second_half = recent[3:]
+    h1 = max(x["high"] for x in first_half)
+    h2 = max(x["high"] for x in second_half)
+    l1 = min(x["low"] for x in first_half)
+    l2 = min(x["low"] for x in second_half)
+
+    if h2 < h1 and l2 < l1:
+        return "Lower High + Lower Low"
+    if h2 > h1 and l2 > l1:
+        return "Higher High + Higher Low"
+    return "MIXED"
+
+
+def candle_quality(c):
+    rng = max(c["high"] - c["low"], 1e-12)
+    body = abs(c["close"] - c["open"])
+    body_ratio = body / rng
+    if c["close"] < c["open"] and body_ratio >= 0.65:
+        return "STRONG BEARISH"
+    if c["close"] > c["open"] and body_ratio >= 0.65:
+        return "STRONG BULLISH"
+    if c["close"] < c["open"]:
+        return "BEARISH"
+    if c["close"] > c["open"]:
+        return "BULLISH"
+    return "DOJI"
+
+
+def support_resistance(candles, lookback=30):
+    sample = candles[-lookback:]
+    support = min(x["low"] for x in sample)
+    resistance = max(x["high"] for x in sample)
+    return support, resistance
+
+
+def analyze(symbol, label):
+    candles_1m = fetch_candles(symbol, "1min", 300)
+    closes = [x["close"] for x in candles_1m]
+    price = closes[-1]
+
+    e9 = ema(closes, 9)
+    e26 = ema(closes, 26)
+    rsi_value, rsi_series = rsi(closes, 14)
+    macd_value, macd_signal, macd_pairs = macd(closes)
+    atr_value = atr(candles_1m, 14)
+    adx_value, di_plus, di_minus = adx_and_di(candles_1m, 14)
+    struct = structure(candles_1m)
+    candle = candle_quality(candles_1m[-1])
+
+    # 5M/15M are independently fetched and used for confirmation.
+    candles_5m = fetch_candles(symbol, "5min", 100)
+    candles_15m = fetch_candles(symbol, "15min", 100)
+    dir5 = direction_from_candles(candles_5m)
+    dir15 = direction_from_candles(candles_15m)
+
+    support, resistance = support_resistance(candles_1m)
+    distance_support = abs(price - support)
+    distance_resistance = abs(resistance - price)
+
+    bullish = 0
+    bearish = 0
+    bull_reasons = []
+    bear_reasons = []
+
+    if e9 is not None and e26 is not None:
+        if e9 > e26:
+            bullish += 1
+            bull_reasons.append("EMA9 > EMA26")
+        elif e9 < e26:
+            bearish += 1
+            bear_reasons.append("EMA9 < EMA26")
+
+    if e9 is not None:
+        if price > e9:
+            bullish += 1
+            bull_reasons.append("Price above EMA9")
+        elif price < e9:
+            bearish += 1
+            bear_reasons.append("Price below EMA9")
+
+    if macd_value is not None and macd_signal is not None:
+        if macd_value > macd_signal:
+            bullish += 1
+            bull_reasons.append("MACD bullish")
+        elif macd_value < macd_signal:
+            bearish += 1
+            bear_reasons.append("MACD bearish")
+
+        if len(macd_pairs) >= 2:
+            prev_macd, prev_signal = macd_pairs[-2]
+            if macd_value > prev_macd:
+                bullish += 1
+                bull_reasons.append("MACD rising")
+            elif macd_value < prev_macd:
+                bearish += 1
+                bear_reasons.append("MACD falling")
+
+    if rsi_value is not None:
+        if rsi_value >= 55:
+            bullish += 1
+            bull_reasons.append("RSI bullish zone")
+        elif rsi_value <= 45:
+            bearish += 1
+            bear_reasons.append("RSI sell zone")
+
+        if len(rsi_series) >= 2 and rsi_series[-2] is not None:
+            if rsi_value > rsi_series[-2]:
+                bullish += 1
+                bull_reasons.append("RSI rising")
+            elif rsi_value < rsi_series[-2]:
+                bearish += 1
+                bear_reasons.append("RSI falling")
+
+    if candles_1m[-1]["close"] > candles_1m[-1]["open"]:
+        bullish += 1
+        bull_reasons.append("Bullish candle")
+    elif candles_1m[-1]["close"] < candles_1m[-1]["open"]:
+        bearish += 1
+        bear_reasons.append("Bearish candle")
+
+    if struct == "Higher High + Higher Low":
+        bullish += 2
+        bull_reasons.append("Higher High + Higher Low")
+    elif struct == "Lower High + Lower Low":
+        bearish += 2
+        bear_reasons.append("Lower High + Lower Low")
+
+    if dir5 == "BULLISH":
+        bullish += 2
+        bull_reasons.append("5M direction aligned")
+    elif dir5 == "BEARISH":
+        bearish += 2
+        bear_reasons.append("5M direction aligned")
+
+    if dir15 == "BULLISH":
+        bullish += 2
+        bull_reasons.append("15M direction aligned")
+    elif dir15 == "BEARISH":
+        bearish += 2
+        bear_reasons.append("15M direction aligned")
+
+    if adx_value is not None:
+        if adx_value >= 25:
+            if di_plus is not None and di_minus is not None:
+                if di_plus > di_minus:
+                    bullish += 3
+                    bull_reasons.append("ADX trend + DI bullish")
+                elif di_minus > di_plus:
+                    bearish += 3
+                    bear_reasons.append("ADX trend + DI bearish")
+
+    total = bullish + bearish
+    if total == 0:
+        direction = "WAIT"
+        strength = 0
+        reasons = []
+    else:
+        direction = "BUY" if bullish > bearish else "SELL" if bearish > bullish else "WAIT"
+        winning = max(bullish, bearish)
+        strength = round(min(100, 50 + (winning / max(total, 1)) * 50))
+        reasons = bull_reasons if direction == "BUY" else bear_reasons
+
+    # Conservative early-entry filter: only broadcast a directional signal
+    # when several independent factors align.
+    aligned = (
+        direction in ("BUY", "SELL")
+        and strength >= 60
+        and ((direction == "BUY" and bullish >= 5) or
+             (direction == "SELL" and bearish >= 5))
+    )
+
+    if not aligned:
+        direction = "WAIT"
+
+    regime = "TRENDING" if adx_value is not None and adx_value >= 25 else "RANGING"
+
+    # TP/SL use ATR internally; the formula is not returned to clients.
+    move = max((atr_value or price * 0.001) * 4.0, price * 0.0005)
+    risk = max((atr_value or price * 0.001) * 2.0, price * 0.00025)
+
+    if direction == "SELL":
+        tp = price - move
+        sl = price + risk
+        expected_move = abs(price - tp)
+    elif direction == "BUY":
+        tp = price + move
+        sl = price - risk
+        expected_move = abs(tp - price)
+    else:
+        tp = sl = expected_move = None
+
+    # Public object intentionally contains no indicators/tools.
+    return {
+        "market": label,
+        "symbol": symbol,
+        "direction": direction,
+        "strength": int(strength),
+        "price": round(price, 2),
+        "take_profit": round(tp, 2) if tp is not None else None,
+        "stop_loss": round(sl, 2) if sl is not None else None,
+        "expected_move": round(expected_move, 2) if expected_move is not None else None,
+        "estimated_duration": "4-8 minutes" if direction != "WAIT" else None,
+        "setup": "CONFIRMED ALIGNMENT" if aligned else "NO SIGNAL",
+        "regime": regime,
+        "advanced_intelligence": True,
+        "early_entry_detection": True,
+        "strength_scoring": True,
+        "timestamp": now_eat().isoformat(),
+        "conditions": reasons if aligned else [],
+    }
+
+
+def public_signal(signal):
+    # Do not expose internal strategy calculations.
+    allowed = {
+        "market", "symbol", "direction", "strength", "price",
+        "take_profit", "stop_loss", "expected_move",
+        "estimated_duration", "setup", "regime",
+        "advanced_intelligence", "early_entry_detection",
+        "strength_scoring", "timestamp"
+    }
+    return {k: signal.get(k) for k in allowed}
+
+
+def telegram_send(text, chat_id):
+    if not TELEGRAM_BOT_TOKEN or not chat_id:
+        return False
     try:
-        # ------------------------------------------------------
-        # 1. STATUS
-        # ------------------------------------------------------
-        status_payload = get_json("/api/status")
-
-        # ------------------------------------------------------
-        # 2. MARKET DATA
-        # ------------------------------------------------------
-        market_payload = get_json("/api/market")
-
-        # ------------------------------------------------------
-        # 3. SIGNALS
-        # ------------------------------------------------------
-        signals_payload = get_json("/api/signals")
-
-        markets = normalize_market_payload(
-            market_payload
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+        r = requests.post(
+            url,
+            json={"chat_id": chat_id, "text": text, "disable_web_page_preview": True},
+            timeout=HTTP_TIMEOUT,
         )
-
-        raw_signals = normalize_signal_payload(
-            signals_payload
-        )
-
-        normalized_signals = []
-
-        for signal in raw_signals:
-            cleaned = clean_signal(signal)
-
-            if cleaned is not None:
-                normalized_signals.append(
-                    cleaned
-                )
-
-        now = iso_now()
-
-        with LOCK:
-            LAST_SOURCE_STATUS = (
-                status_payload
-                if isinstance(status_payload, dict)
-                else {}
-            )
-
-            LAST_SOURCE_MARKET = (
-                markets
-            )
-
-            LAST_SOURCE_SIGNALS = (
-                normalized_signals
-            )
-
-            MARKET_DATA.clear()
-            MARKET_DATA.update(markets)
-
-            SIGNALS.clear()
-            SIGNALS.extend(
-                normalized_signals
-            )
-
-            SOURCE_STATE["connected"] = True
-            SOURCE_STATE["status"] = "connected"
-            SOURCE_STATE["last_success"] = now
-            SOURCE_STATE["last_error"] = None
-
-        print(
-            f"✅ SOURCE CONNECTED | "
-            f"markets={len(markets)} | "
-            f"signals={len(normalized_signals)}"
-        )
-
-        source_status = (
-            status_payload.get("status")
-            if isinstance(status_payload, dict)
-            else None
-        )
-
-        print(
-            f"📡 Original bot status: "
-            f"{source_status or 'unknown'}"
-        )
-
-        for asset, market in markets.items():
-            if isinstance(market, dict):
-                print(
-                    f"📊 {asset}: "
-                    f"price={market.get('price')} | "
-                    f"signal={market.get('signal')} | "
-                    f"score={market.get('score')}"
-                )
-
-    except Exception as exc:
-
-        error = str(exc)[:500]
-
-        with LOCK:
-            SOURCE_STATE["connected"] = False
-            SOURCE_STATE["status"] = "source_unavailable"
-            SOURCE_STATE["last_error"] = error
-
-        print(
-            f"⚠️ SOURCE FETCH ERROR: {error}"
-        )
-
-    elapsed = time.time() - started
-
-    sleep_for = max(
-        1,
-        POLL_SECONDS - elapsed
-    )
-
-    with LOCK:
-        next_poll = (
-            get_eat_time()
-            + dt.timedelta(seconds=sleep_for)
-        ).isoformat()
+        return r.ok
+    except Exception:
+        return False
 
 
-def source_worker():
-    global engine_started
-
-    engine_started = True
-
-    print(
-        "🚀 KETS SOURCE CONNECTOR ONLINE"
-    )
-
-    print(
-        f"📡 Source: {SOURCE_API}"
-    )
-
-    print(
-        f"🔄 Poll interval: {POLL_SECONDS}s"
-    )
-
-    print(
-        "🧠 Strategy generation: DISABLED"
-    )
-
-    print(
-        "🎯 Original trading bot = SOURCE OF TRUTH"
-    )
-
-    while True:
-
-        poll_source()
-
-        with LOCK:
-            next_time = next_poll
-
-        print(
-            f"⏱️ Next source fetch: "
-            f"{next_time}"
-        )
-
-        # Sleep until the next scheduled poll. poll_source() already
-        # calculated next_poll from the actual elapsed request time.
-        time.sleep(max(1, POLL_SECONDS))
-
-
-# ============================================================
-# SELF-AWAKE
-# ============================================================
-
-def public_url():
+def signal_text(s):
     return (
-        PUBLIC_URL
-        or os.environ.get("RENDER_EXTERNAL_URL")
-        or ""
-    ).rstrip("/")
-
-
-def self_awake():
-
-    while True:
-
-        url = public_url()
-
-        if url:
-
-            try:
-                response = requests.get(
-                    f"{url}/api/health",
-                    timeout=15,
-                )
-
-                print(
-                    "💓 KETS heartbeat: "
-                    f"HTTP {response.status_code}"
-                )
-
-            except Exception as exc:
-
-                print(
-                    f"💓 Heartbeat failed: {exc}"
-                )
-
-        else:
-
-            print(
-                "💓 Heartbeat waiting for "
-                "RENDER_EXTERNAL_URL / KETS_PUBLIC_URL"
-            )
-
-        time.sleep(
-            HEARTBEAT_SECONDS
-        )
-
-
-# ============================================================
-# WEB API
-#
-# KETS exposes the same main endpoints as the source so the
-# frontend does not need to know where the original bot lives.
-# ============================================================
-
-HTML = r"""<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<meta name="theme-color" content="#07101b">
-<title>KETS Early Entry Signals</title>
-<style>
-*{box-sizing:border-box}
-body{margin:0;background:#07101b;color:#eef4ff;font-family:Arial,sans-serif}
-.app{max-width:1100px;margin:auto;padding:18px}
-header{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:16px}
-h1{font-size:25px;margin:0 0 5px}.sub{color:#91a0b8}
-.card{background:#0d1826;border:1px solid #203047;border-radius:14px;padding:15px;margin-bottom:14px}
-.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px}
-.label{font-size:12px;color:#91a0b8;text-transform:uppercase}
-.value{font-size:19px;font-weight:700;margin-top:6px}
-.status{display:flex;align-items:center;gap:8px}.dot{width:10px;height:10px;border-radius:50%;background:#f0ad4e;display:inline-block}
-.dot.ok{background:#22c878}.dot.bad{background:#ff5964}
-.row{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap}
-.market,.signal{background:#101d2d;border:1px solid #263a54;border-radius:10px;padding:12px;margin-top:10px}
-.buy{border-left:5px solid #22c878}.sell{border-left:5px solid #ff5964}
-.small{font-size:12px;color:#91a0b8;margin-top:5px}
-.muted{color:#91a0b8}
-.error{color:#ff8d98}
-</style>
-</head>
-<body>
-<main class="app">
-<header>
-<div><h1>🤖 KETS Early Entry Signals</h1><div class="sub">Original trading bot → KETS dashboard</div></div>
-<div class="status"><span id="dot" class="dot"></span><b id="top">Connecting...</b></div>
-</header>
-
-<section class="grid">
-<div class="card"><div class="label">System</div><div id="system" class="value">Connecting...</div></div>
-<div class="card"><div class="label">Source</div><div id="source" class="value">Checking...</div></div>
-<div class="card"><div class="label">Last Poll</div><div id="lastpoll" class="value">—</div></div>
-<div class="card"><div class="label">Signals</div><div id="count" class="value">0</div></div>
-</section>
-
-<section class="card">
-<div class="row"><b>Live Backend Market Data</b><span id="time" class="small">—</span></div>
-<div id="markets" class="muted">Waiting for market data...</div>
-</section>
-
-<section class="card">
-<div class="row"><b>Latest Signals</b><span class="small">06:00–18:00 EAT scanning window</span></div>
-<div id="signals" class="muted">Waiting for signals...</div>
-</section>
-
-<section class="card">
-<b>Connection diagnostics</b>
-<div id="diag" class="small">Checking KETS API...</div>
-</section>
-</main>
-
-<script>
-const $=id=>document.getElementById(id);
-function esc(v){return String(v??"").replace(/[&<>"']/g,m=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[m]))}
-async function getJSON(path){
-  const c=new AbortController(); const t=setTimeout(()=>c.abort(),8000);
-  try{
-    const r=await fetch(path,{cache:"no-store",signal:c.signal});
-    if(!r.ok) throw new Error("HTTP "+r.status);
-    return await r.json();
-  }finally{clearTimeout(t)}
-}
-async function refresh(){
-  try{
-    const s=await getJSON("/api/status");
-    $("system").textContent=s.status||"online";
-    $("source").textContent=s.source_connected?"CONNECTED":"WAITING";
-    $("lastpoll").textContent=s.last_poll||"—";
-    $("count").textContent=s.signal_count??0;
-    $("time").textContent=s.time_eat||"—";
-    $("top").textContent=s.source_connected?"Original bot connected":"KETS online — source unavailable";
-    $("dot").className="dot "+(s.source_connected?"ok":"bad");
-    $("diag").textContent=s.source_connected
-      ?"KETS API is working and the original bot is responding."
-      :"KETS API is working, but the original bot has not responded yet.";
-    if(s.source_last_error) $("diag").textContent+=" Last error: "+s.source_last_error;
-
-    const m=await getJSON("/api/market");
-    const entries=Object.values(m.markets||{});
-    $("markets").innerHTML=entries.length?entries.map(x=>`
-      <div class="market">
-        <b>${esc(x.asset||"Market")} — ${esc(x.symbol||"")}</b>
-        <div class="value">${x.price==null?"NO DATA":"$"+Number(x.price).toLocaleString()}</div>
-        <div class="small">${esc(x.status||"LIVE")} • Signal: ${esc(x.signal||"NONE")} • Score: ${esc(x.score??"—")} • Updated: ${esc(x.updated_at||"—")}</div>
-      </div>`).join(""):"Waiting for market data...";
-
-    const q=await getJSON("/api/signals");
-    const sig=q.signals||[];
-    $("signals").innerHTML=sig.length?sig.slice(0,20).map(x=>`
-      <div class="signal ${String(x.direction).toUpperCase()==="BUY"?"buy":"sell"}">
-        <b>${String(x.direction).toUpperCase()==="BUY"?"🟢 BUY":"🔴 SELL"} — ${esc(x.asset||x.symbol||"Market")}</b>
-        <div>Score: <b>${esc(x.score??"—")}%</b></div>
-        <div>Entry: ${x.entry==null?"—":"$"+Number(x.entry).toLocaleString()}</div>
-        <div>TP: ${x.take_profit==null?"—":"$"+Number(x.take_profit).toLocaleString()}</div>
-        <div>SL: ${x.stop_loss==null?"—":"$"+Number(x.stop_loss).toLocaleString()}</div>
-        <div class="small">${esc(x.timestamp||"")}</div>
-      </div>`).join(""):"No signals yet.";
-  }catch(e){
-    $("top").textContent="KETS API ERROR";
-    $("system").textContent="API error";
-    $("dot").className="dot bad";
-    $("diag").innerHTML='<span class="error">The page is loading, but /api/status is not responding: '+esc(e.message)+'</span>';
-  }
-}
-refresh();
-setInterval(refresh,15000);
-</script>
-</body>
-</html>"""
-
-
-@app.route("/")
-def home():
-    return HTML
-
-
-@app.route("/api/health")
-def api_health():
-
-    with LOCK:
-
-        return jsonify({
-            "ok": True,
-            "status": "online",
-            "kets_engine": "source_connector",
-            "source_api": SOURCE_API,
-            "source_connected":
-                SOURCE_STATE["connected"],
-            "time_eat": iso_now(),
-        })
-
-
-@app.route("/api/status")
-def api_status():
-
-    with LOCK:
-
-        source_status = (
-            LAST_SOURCE_STATUS
-            if isinstance(
-                LAST_SOURCE_STATUS,
-                dict
-            )
-            else {}
-        )
-
-        return jsonify({
-            "status": (
-                "online"
-                if engine_started
-                else "starting"
-            ),
-
-            "engine_started":
-                engine_started,
-
-            "mode":
-                "SOURCE_BACKEND",
-
-            "strategy_engine":
-                "DISABLED",
-
-            "source_api":
-                SOURCE_API,
-
-            "source_connected":
-                SOURCE_STATE["connected"],
-
-            "source_status":
-                source_status.get(
-                    "status"
-                ),
-
-            "source_last_scan":
-                source_status.get(
-                    "last_scan"
-                ),
-
-            "source_next_scan":
-                source_status.get(
-                    "next_scan"
-                ),
-
-            "last_poll":
-                last_poll,
-
-            "next_poll":
-                next_poll,
-
-            "refresh_interval_seconds":
-                POLL_SECONDS,
-
-            "signal_count":
-                len(SIGNALS),
-
-            "markets":
-                list(MARKET_DATA.keys()),
-
-            "source_last_success":
-                SOURCE_STATE[
-                    "last_success"
-                ],
-
-            "source_last_error":
-                SOURCE_STATE[
-                    "last_error"
-                ],
-
-            "time_eat":
-                iso_now(),
-        })
-
-
-@app.route("/api/market")
-def api_market():
-
-    with LOCK:
-
-        return jsonify({
-            "markets":
-                dict(MARKET_DATA),
-
-            "source":
-                SOURCE_API,
-
-            "source_connected":
-                SOURCE_STATE[
-                    "connected"
-                ],
-
-            "time_eat":
-                iso_now(),
-        })
-
-
-@app.route("/api/signals")
-def api_signals():
-
-    with LOCK:
-
-        return jsonify({
-            "signals":
-                list(SIGNALS),
-
-            "source":
-                SOURCE_API,
-
-            "source_connected":
-                SOURCE_STATE[
-                    "connected"
-                ],
-
-            "time_eat":
-                iso_now(),
-        })
-
-
-@app.route("/api/source")
-def api_source():
-
-    with LOCK:
-
-        return jsonify({
-            "source_api":
-                SOURCE_API,
-
-            "connected":
-                SOURCE_STATE[
-                    "connected"
-                ],
-
-            "status":
-                SOURCE_STATE[
-                    "status"
-                ],
-
-            "last_success":
-                SOURCE_STATE[
-                    "last_success"
-                ],
-
-            "last_error":
-                SOURCE_STATE[
-                    "last_error"
-                ],
-
-            "source_status":
-                LAST_SOURCE_STATUS,
-
-            "time_eat":
-                iso_now(),
-        })
-
-
-# ============================================================
-# STARTUP
-# ============================================================
-
-def start_workers():
-
-    global worker_started
-
-    if worker_started:
-        return
-
-    worker_started = True
-
-    Thread(
-        target=source_worker,
-        daemon=True,
-        name="kets-source-worker",
-    ).start()
-
-    Thread(
-        target=self_awake,
-        daemon=True,
-        name="kets-heartbeat",
-    ).start()
-
-    print(
-        "✅ KETS background workers started"
+        f"🤖 KETS — EARLY ENTRY SIGNAL — {s['market']}\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"📈 Direction: {s['direction']}\n"
+        f"💯 Signal Strength: {s['strength']}%\n"
+        f"🏷️ Setup: {s['setup']}\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"📍 Market Price: ${s['price']:,.2f}\n"
+        f"🎯 Take Profit: ${s['take_profit']:,.2f}\n"
+        f"🛑 Stop Loss: ${s['stop_loss']:,.2f}\n"
+        f"📊 Expected Price Move: ${s['expected_move']:,.2f}\n"
+        f"⏱️ Estimated Duration: {s['estimated_duration']}\n"
+        f"━━━━━━━━━━━━━━━━━━\n"
+        f"🧠 Market Regime: {s['regime']}\n"
+        f"⏰ Time: {s['timestamp']}\n"
+        f"⚠️ Strength is an alignment score, not a guaranteed win probability."
     )
 
 
-start_workers()
+def market_update(btc, gold):
+    return (
+        "🤖 KETS — 2-MINUTE MARKET UPDATE\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        f"🎯 KETS BTC: {'SIGNAL SENT' if btc['direction'] != 'WAIT' else 'NO SIGNAL'}\n"
+        f"📈 Direction: {btc['direction']}\n"
+        f"💯 Strength: {btc['strength']}%\n"
+        f"📍 Price: ${btc['price']:,.2f}\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        f"🎯 KETS GOLD: {'SIGNAL SENT' if gold['direction'] != 'WAIT' else 'NO SIGNAL'}\n"
+        f"📈 Direction: {gold['direction']}\n"
+        f"💯 Strength: {gold['strength']}%\n"
+        f"📍 Price: ${gold['price']:,.2f}\n"
+        "━━━━━━━━━━━━━━━━━━\n"
+        f"⏰ {now_eat().strftime('%Y-%m-%d %H:%M:%S EAT')}\n"
+        "🧠 Advanced intelligence: ON\n"
+        "⚡ Early-entry detection: ON\n"
+        "💯 Strength scoring: ON\n"
+        "📡 Destination: BOT + CHANNEL\n"
+        "🔄 Next scan: ~2 minutes"
+    )
+
+
+def engine_loop():
+    global last_broadcast_at
+    while True:
+        started = time.time()
+        try:
+            clean_old_history()
+
+            if within_signal_hours():
+                with engine_lock:
+                    btc = analyze(BTC_SYMBOL, "BTC")
+                    gold = analyze(GOLD_SYMBOL, "GOLD")
+
+                    last_signals["BTC"] = public_signal(btc)
+                    last_signals["GOLD"] = public_signal(gold)
+
+                    for s in (btc, gold):
+                        if s["direction"] != "WAIT":
+                            # Avoid adding duplicate identical signals every minute.
+                            previous = signal_history[-1] if signal_history else None
+                            if not previous or not (
+                                previous.get("market") == s["market"]
+                                and previous.get("direction") == s["direction"]
+                                and previous.get("price") == public_signal(s)["price"]
+                            ):
+                                signal_history.append(public_signal(s))
+
+                            # Telegram detailed signal.
+                            if TELEGRAM_CHAT_ID:
+                                telegram_send(signal_text(s), TELEGRAM_CHAT_ID)
+
+                    if time.time() - last_broadcast_at >= BROADCAST_SECONDS:
+                        text = market_update(btc, gold)
+                        if TELEGRAM_CHAT_ID:
+                            telegram_send(text, TELEGRAM_CHAT_ID)
+                        if TELEGRAM_CHANNEL_ID and TELEGRAM_CHANNEL_ID != TELEGRAM_CHAT_ID:
+                            telegram_send(text, TELEGRAM_CHANNEL_ID)
+                        last_broadcast_at = time.time()
+
+        except Exception as exc:
+            app.logger.exception("KETS engine error: %s", exc)
+
+        elapsed = time.time() - started
+        time.sleep(max(1, SCAN_SECONDS - elapsed))
+
+
+@app.get("/")
+def root():
+    return jsonify({
+        "ok": True,
+        "service": "KETS Signal API",
+        "status": "online",
+        "market_data": "Twelve Data",
+        "signal_hours": "06:00-18:00 EAT",
+        "history_days": HISTORY_DAYS,
+        "indicators_public": False,
+    })
+
+
+@app.get("/health")
+def health():
+    return jsonify({
+        "ok": True,
+        "status": "awake",
+        "time_eat": now_eat().isoformat(),
+        "within_signal_hours": within_signal_hours(),
+        "twelve_data_configured": bool(TWELVE_DATA_API_KEY),
+    })
+
+
+@app.get("/api/signals")
+@api_auth_required
+def api_signals():
+    clean_old_history()
+    active = within_signal_hours()
+    return jsonify({
+        "ok": True,
+        "active": active,
+        "signals": {
+            "BTC": last_signals.get("BTC"),
+            "GOLD": last_signals.get("GOLD"),
+        } if active else {},
+        "server_time": now_eat().isoformat(),
+        "next_broadcast": next_broadcast_seconds(),
+    })
+
+
+@app.get("/api/history")
+@api_auth_required
+def api_history():
+    clean_old_history()
+    # History is intentionally public-safe and limited to the last 7 days.
+    return jsonify({
+        "ok": True,
+        "history_days": HISTORY_DAYS,
+        "history": list(signal_history),
+    })
+
+
+@app.get("/api/status")
+@api_auth_required
+def api_status():
+    now = now_eat()
+    stop = dt.datetime.combine(now.date(), SIGNAL_END, tzinfo=EAT)
+    start = dt.datetime.combine(now.date(), SIGNAL_START, tzinfo=EAT)
+
+    if now < start:
+        seconds_to_start = int((start - now).total_seconds())
+    else:
+        seconds_to_start = 0
+
+    if now < stop:
+        seconds_to_stop = int((stop - now).total_seconds())
+    else:
+        seconds_to_stop = 0
+
+    return jsonify({
+        "ok": True,
+        "signal_window": {
+            "start": "06:00 EAT",
+            "end": "18:00 EAT",
+            "active": within_signal_hours(now),
+            "seconds_to_start": seconds_to_start,
+            "seconds_to_stop": seconds_to_stop,
+        },
+        "next_broadcast_seconds": next_broadcast_seconds(),
+        "server_time": now.isoformat(),
+    })
+
+
+def next_broadcast_seconds():
+    if last_broadcast_at <= 0:
+        return BROADCAST_SECONDS
+    return max(0, int(BROADCAST_SECONDS - (time.time() - last_broadcast_at)))
 
 
 # ============================================================
-# MAIN
+# Subscription API
+# ------------------------------------------------------------
+# These are plan definitions and server-side entitlement hooks.
+# Payment verification must be connected to a real payment provider
+# before automatically marking an account paid.
 # ============================================================
+
+PLANS = {
+    "1_day": {
+        "name": "1 Day",
+        "ugx": 5000,
+        "usd": 5,
+        "days": 1,
+    },
+    "1_week": {
+        "name": "1 Week",
+        "ugx": 30000,
+        "usd": 30,
+        "days": 7,
+    },
+    "1_month": {
+        "name": "1 Month",
+        "ugx": 100000,
+        "usd": 100,
+        "days": 30,
+    },
+    "1_year": {
+        "name": "1 Year",
+        "ugx": 1000000,
+        "usd": 1000,
+        "days": 365,
+    },
+}
+
+
+@app.get("/api/plans")
+def plans():
+    return jsonify({
+        "ok": True,
+        "plans": PLANS,
+        "uganda": {
+            "currency": "UGX",
+            "mtn": "+256791058183",
+            "airtel": "+256747427556",
+        },
+        "international": {
+            "currency": "USD",
+            "bank_account": "9030028492447",
+        },
+        "signal_hours": "06:00-18:00 EAT",
+    })
+
+
+# Frontend can use this endpoint to display the locked state.
+# A real authenticated user/payment service should replace the placeholder.
+@app.get("/api/access")
+@api_auth_required
+def access():
+    return jsonify({
+        "ok": True,
+        "paid": False,
+        "signals_locked": True,
+        "message": "Payment verification is required before live signals are unlocked.",
+    })
+
+
+def start_engine():
+    thread = threading.Thread(target=engine_loop, daemon=True)
+    thread.start()
+
 
 if __name__ == "__main__":
-
-    port = int(
-        os.environ.get(
-            "PORT",
-            "8080"
-        )
-    )
-
-    app.run(
-        host="0.0.0.0",
-        port=port
-    )
+    start_engine()
+    port = int(os.getenv("PORT", "10000"))
+    app.run(host="0.0.0.0", port=port, threaded=True)
