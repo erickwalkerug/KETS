@@ -1,0 +1,6 @@
+services:
+  - type: web
+    name: kets
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn bot:app --workers 1 --threads 4 --timeout 120
