@@ -1,9 +1,0 @@
-{
-  "name": "KETS Signal Intelligence",
-  "short_name": "KETS",
-  "start_url": "./",
-  "display": "standalone",
-  "background_color": "#050b14",
-  "theme_color": "#08111f",
-  "icons": []
-}
