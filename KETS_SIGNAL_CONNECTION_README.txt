@@ -1,0 +1,18 @@
+## Direct bot -> website signal bridge
+
+The website accepts authenticated POST requests from the KETS trading bot at `/api/signals`. The bot sends JSON with the `X-KETS-API-KEY` header. The website validates the shared secret, normalizes the payload, rejects malformed/unauthorized requests, prevents duplicate signal IDs, stores the signal for the 7-day history, and makes it immediately available to the existing dashboard API.
+
+Required WEBSITE Render variable:
+`KETS_SIGNAL_RECEIVER_KEY=<same secret configured on the trading bot>`
+
+For compatibility, the receiver also accepts the existing `KETS_SIGNAL_SOURCE_KEY`, `KETS_API_KEY`, or `KETS_SIGNALS_API_KEY` when `KETS_SIGNAL_RECEIVER_KEY` is not set.
+
+Recommended WEBSITE Render variables:
+`KETS_SIGNAL_RECEIVER_KEY=<same secret as bot>`
+`KETS_DISABLE_ENGINE=1`
+`KETS_DISABLE_SOURCE_BRIDGE=1`
+
+The browser never receives the secret. The bot communicates server-to-server directly with:
+`https://kets.onrender.com/api/signals`
+
+The older pull-based source bridge remains in the code as an optional compatibility/fallback mechanism, but direct POST delivery is now the primary connection path.
