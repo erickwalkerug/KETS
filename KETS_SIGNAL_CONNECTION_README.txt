@@ -1,22 +1,10 @@
-# KETS Signal Connection
 
-This package preserves the existing KETS rules and connects the website to the trading signal API.
+## Automatic source bridge
+The website now runs a server-side signal-source bridge in the background. It polls the configured source every 10 seconds and caches `/api/history` and `/api/signals`, so delivery does not depend on a browser request. It logs each source request and exposes non-secret diagnostics at `/api/source-status`.
 
-Signal flow:
-Trading Bot -> KETS Signal API -> Website -> User access rules
+Required WEBSITE Render variables:
+KETS_SIGNAL_SOURCE_URL=https://my-btc-bot-l0xm.onrender.com
+KETS_SIGNAL_SOURCE_KEY=<same secret as the trading bot API key>
 
-Existing website rules are preserved, including:
-- live signals for authorized/paid users
-- delayed signals for users who are not entitled to live access
-- existing country/currency and payment logic
-- existing Telegram functionality
-- existing developer/admin interface
-
-Render environment variables for the WEBSITE service:
-KETS_SIGNAL_SOURCE_URL=https://YOUR-BOT-RENDER-URL
-KETS_SIGNAL_SOURCE_KEY=YOUR_KETS_API_KEY
-
-The source URL should point to the Render service running the trading bot/API.
-The key must be the same value as KETS_API_KEY on the trading bot service.
-
-Do not put the private API key in browser/client-side code.
+Optional:
+KETS_SOURCE_POLL_SECONDS=10
