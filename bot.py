@@ -491,6 +491,7 @@ def api_payment_history():
     return jsonify({"payments":[dict(r) for r in rows], "currency":"UGX"})
 
 @app.route("/developer")
+@app.route("/developer/dashboard")
 def developer_page():
     return send_from_directory(os.path.dirname(os.path.abspath(__file__)), "developer.html")
 
