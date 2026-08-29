@@ -1,1 +1,0 @@
-const CACHE="kets-v1";self.addEventListener("install",e=>e.waitUntil(caches.open(CACHE).then(c=>c.addAll(["/","/styles.css","/app.js","/static/kets-icon.svg","/static/kets-logo.svg"]))));self.addEventListener("fetch",e=>{if(e.request.method==="GET"&&e.request.url.startsWith(self.location.origin))e.respondWith(fetch(e.request).catch(()=>caches.match(e.request)));});
