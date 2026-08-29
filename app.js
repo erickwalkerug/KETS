@@ -1,0 +1,199 @@
+const API_BASE=window.location.origin, REFRESH_MS=10000, TIMER_MS=1000;
+const freshHash=new URLSearchParams(location.hash.replace(/^#/,"?"));
+const hashToken=freshHash.get("login")||"";
+sessionStorage.removeItem("kets_user_token");
+if(hashToken)sessionStorage.setItem("kets_user_token",hashToken);
+const state={token:hashToken,user:null,access:null,signals:{},history:[],payments:[],community:{},status:{},plans:{},clockOffsetMs:0,signalWindowDeadlineMs:0,nextBroadcastDeadlineMs:0,loading:false};
+const $=id=>document.getElementById(id);
+function headers(extra={}){return {Accept:"application/json",...(state.token?{Authorization:`Bearer ${state.token}`}:{}) ,...extra};}
+async function api(path,opts={}){
+ const r=await fetch(API_BASE+path,{...opts,headers:headers(opts.headers||{})});
+ const d=await r.json().catch(()=>({}));
+ if(!r.ok) throw Error(d.error||`HTTP ${r.status}`);
+ return d;
+}
+function money(v,currency="UGX"){return v==null||!Number.isFinite(Number(v))?"--":currency+" "+Number(v).toLocaleString();}
+function isUganda(){return String(state.user?.country_code||"UG").toUpperCase()==="UG";}
+function planAmount(p){return isUganda()?p?.ugx:p?.usd;}
+function planCurrency(){return isUganda()?"UGX":"USD";}
+function countdown(sec){sec=Math.max(0,Math.floor(Number(sec)||0));return `${String(Math.floor(sec/3600)).padStart(2,"0")}:${String(Math.floor(sec%3600/60)).padStart(2,"0")}:${String(sec%60).padStart(2,"0")}`;}
+function esc(v){return String(v??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[c]));}
+function serverNowMs(){return Date.now()+state.clockOffsetMs;}
+function signalAge(ts){const s=Date.parse(ts);return Number.isFinite(s)?countdown((serverNowMs()-s)/1000):"--";}
+function setTimerDeadlines(status){
+ const serverMs=Date.parse(status?.server_time||status?.time_eat||"");
+ if(Number.isFinite(serverMs)) state.clockOffsetMs=serverMs-Date.now();
+ const w=status?.signal_window||{};
+ state.signalWindowDeadlineMs=serverNowMs()+Number(w.active?w.seconds_to_stop:w.seconds_to_start||0)*1000;
+ state.nextBroadcastDeadlineMs=serverNowMs()+Math.max(0,Number(status?.next_broadcast_seconds||0))*1000;
+}
+function tickTimers(){
+ if(!state.token||$("app")?.classList.contains("hidden")) return;
+ const now=serverNowMs();
+ const w=state.status.signal_window||{};
+ const signalSeconds=Math.max(0,Math.ceil((state.signalWindowDeadlineMs-now)/1000));
+ const nextSeconds=Math.max(0,Math.ceil((state.nextBroadcastDeadlineMs-now)/1000));
+ if($("signalWindow")) $("signalWindow").textContent=countdown(signalSeconds);
+ if($("windowLabel")) $("windowLabel").textContent=w.active?"Time left before signals stop":"Until signals start at 06:00 EAT";
+ if($("nextBroadcast")) $("nextBroadcast").textContent=countdown(nextSeconds);
+ document.querySelectorAll(".signal-card[data-signal-timestamp]").forEach(card=>{
+   const parsed=Date.parse(card.dataset.signalTimestamp||"");
+   const age=card.querySelector(".metric:nth-child(2) strong");
+   if(age&&Number.isFinite(parsed)) age.textContent=countdown((now-parsed)/1000);
+ });
+}
+function updateCountryCurrency(){
+ const sel=$("regCountry"), note=$("currencyNote");
+ if(!sel||!note)return;
+ const ug=sel.value==="UG";
+ note.innerHTML=`Currency: <strong>${ug?"UGX":"USD"}</strong> · ${ug?"Uganda plans":"International plans"}`;
+}
+function showAuth(tab="login"){
+ $("authScreen").classList.remove("hidden");$("app").classList.add("hidden");
+ document.querySelectorAll(".tab").forEach(b=>b.classList.toggle("active",b.dataset.tab===tab));
+ $("loginForm").classList.toggle("hidden",tab!=="login");$("registerForm").classList.toggle("hidden",tab!=="register");
+}
+function showApp(){ $("authScreen").classList.add("hidden");$("app").classList.remove("hidden");}
+function authMsg(t,bad=true){$("authMsg").textContent=t;$("authMsg").className="form-message "+(bad?"error":"ok");}
+async function finishLogin(d){state.token=d.token;sessionStorage.setItem("kets_user_token",d.token);state.user=d.user;showApp();await loadAll();}
+async function login(){
+ try{const d=await api("/api/auth/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({email:$("loginEmail").value.trim(),password:$("loginPassword").value})});await finishLogin(d);}
+ catch(e){authMsg(e.message);}
+}
+async function register(){
+ try{const d=await api("/api/auth/register",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:$("regName").value.trim(),email:$("regEmail").value.trim(),password:$("regPassword").value,country_code:$("regCountry").value,country_name:$("regCountry").value==="UG"?"Uganda":"Other"})});await finishLogin(d);}
+ catch(e){authMsg(e.message);}
+}
+function renderProfile(){
+ const u=state.user;if(!u)return;
+ $("profileName").textContent=u.name||"KETS User";$("profileEmail").textContent=u.email;
+ $("miniName").textContent=(u.name||"Profile").split(" ")[0];
+}
+function renderAccess(){
+ const a=state.access, c=$("accessCard");
+ if(a?.paid&&!a.plan){c.innerHTML=`<strong>Developer override</strong><span>Server access override is active.</span>`;return;}
+ if(!a?.paid){c.innerHTML=`<strong>No active plan</strong><span>Choose a plan below to unlock live signals.</span>`;return;}
+ const p=state.plans[a.plan];$("accessPlan").textContent=p?p.name.toUpperCase():a.plan.toUpperCase();
+ $("accessExpiry").textContent=a.expires?`Expires ${new Date(a.expires).toLocaleString()}`:"Active";
+ c.innerHTML=`<strong>${esc(p?.name||a.plan)} · ${money(planAmount(p),planCurrency())}</strong><span>Active until ${new Date(a.expires).toLocaleString()}</span>`;
+}
+function renderSignals(){
+ const grid=$("signalGrid"), paid=!!state.access?.paid, mode=state.signalMode||"delayed";
+ $("lockedCard").style.display=paid?"none":"flex";
+ grid.innerHTML=["BTC","GOLD"].map(m=>{
+   const s=state.signals?.[m];
+   if(!s)return `<article class="signal-card"><div class="signal-top"><div class="market">${m}</div><div class="direction wait">${paid?"WAIT":"DELAYED"}</div></div><div class="price">--</div><div class="strength">${paid?"No current signal.":"No signal is available yet at the 30-minute delay."}</div></article>`;
+   const dir=(s.direction||"WAIT").toLowerCase();
+   const label=paid?"LIVE":"30M DELAY";
+   return `<article class="signal-card ${dir}" data-signal-timestamp="${esc(s.timestamp||"")}">
+     <div class="signal-top"><div class="market">KETS ${esc(s.market||m)}</div><div class="direction ${dir}">${label}</div></div>
+     <div class="price">${money(s.current_price??s.price)}</div>
+     <div class="entry-line">Entry ${money(s.entry??s.price)}</div>
+     <div class="strength"><span>${paid?"LIVE SIGNAL":"DELAYED SIGNAL"} · Strength ${Number(s.score??s.strength??0)}%</span><div class="bar"><i style="width:${Math.min(100,Number(s.score??s.strength??0))}%"></i></div></div>
+     <div class="metrics">
+       <div class="metric"><span>Signal time</span><strong>${esc(s.timestamp?new Date(s.timestamp).toLocaleString():"--")}</strong></div>
+       <div class="metric"><span>Signal age</span><strong>${signalAge(s.timestamp)}</strong></div>
+       <div class="metric"><span>Market move</span><strong>${money(s.price_move)}</strong></div>
+       <div class="metric"><span>Expected move</span><strong>${money(s.expected_move)}</strong></div>
+       <div class="metric"><span>Estimated duration</span><strong>${esc(s.estimated_duration||"--")}</strong></div>
+       <div class="metric"><span>Take profit</span><strong>${money(s.take_profit)}</strong></div>
+       <div class="metric"><span>Stop loss</span><strong>${money(s.stop_loss)}</strong></div>
+     </div>
+   </article>`;
+ }).join("");
+}
+function renderHistory(){
+ const el=$("historyList");if(!state.history.length){el.innerHTML=`<div class="empty">No signals recorded in the last 7 days.</div>`;return;}
+ el.innerHTML=state.history.slice().reverse().slice(0,80).map(s=>`<div class="history-row"><div><div class="history-market">${esc(s.market||s.asset||"")}</div><div class="history-meta">${esc(s.timestamp?new Date(s.timestamp).toLocaleString():"")}</div></div><div class="history-dir ${(s.direction||"").toLowerCase()}">${esc(s.direction||"--")} · ${esc(s.strength||0)}%</div><div class="history-price">${money(s.price)}</div></div>`).join("");
+}
+function renderPayments(){
+ const el=$("paymentHistory");if(!state.payments.length){el.innerHTML=`<div class="empty">No payments yet.</div>`;return;}
+ el.innerHTML=state.payments.map(p=>`<div class="history-row"><div><div class="history-market">${esc(state.plans[p.plan]?.name||p.plan)}</div><div class="history-meta">${esc(new Date(p.created_at).toLocaleString())} · ${esc(p.network||"Pesapal")}</div></div><div class="history-dir ${p.status==="COMPLETED"?"buy":"wait"}">${esc(p.status)}</div><div class="history-price">${money(p.amount,p.currency||planCurrency())}</div></div>`).join("");
+}
+function renderCommunity(){
+ const el=$("communityGrid"), order=["30_min","1_hour","4_hour","1_day","1_week","1_month","1_year"];
+ el.innerHTML=order.map((k,i)=>`<div class="community-card"><div class="community-icon" aria-hidden="true">${["♙","◉","◈","◆","★","✦","♛"][i]}</div><div class="community-copy"><span>${esc(state.plans[k]?.name||k)}</span><strong>${Number(state.community[k]||0).toLocaleString()}</strong><small>paid users</small></div></div>`).join("");
+}
+function renderStatus(){
+ const w=state.status.signal_window||{};$("engineStatus").textContent=state.status.engine_running?"Engine online":"Engine offline";
+ tickTimers();
+}
+function renderPlans(){
+ const abroad=!isUganda();
+ const entries=Object.entries(state.plans).filter(([id,p])=>!abroad || p.usd!=null);if($("plansCurrencyLabel"))$("plansCurrencyLabel").textContent=planCurrency();
+ $("plansGrid").innerHTML=entries.map(([id,p])=>{const cur=planCurrency(),amt=planAmount(p);return `<div class="plan"><span class="plan-tag">${p.seconds<=3600?"SHORT ACCESS":"SUBSCRIPTION"}</span><h3>${esc(p.name)}</h3><strong>${money(amt,cur)}</strong><span>Pesapal · ${cur}${isUganda()?" · MTN/Airtel where available":" · International payment methods"}</span><button class="primary-btn" onclick="openPayment('${esc(id)}')">Choose plan</button></div>`}).join("");
+}
+window.openPayment=plan=>{
+ const p=state.plans[plan], abroad=!isUganda(), cur=planCurrency(), amt=planAmount(p),m=document.createElement("div");m.className="modal";m.innerHTML=`<div class="modal-box"><button class="close-btn" onclick="this.closest('.modal').remove()">×</button><span class="eyebrow">SECURE PAYMENT</span><h2>${esc(p.name)} · ${money(amt,cur)}</h2><p class="muted">Payment email is fixed to your signed-in account.</p><label>Email<input value="${esc(state.user.email)}" disabled></label>${abroad?`<label>Phone (optional)<input id="payPhone" type="tel" placeholder="International phone number"></label><input id="payNetwork" type="hidden" value="INTERNATIONAL">`:`<label>Mobile-money phone<input id="payPhone" type="tel" placeholder="07XXXXXXXX"></label><label>Network<select id="payNetwork"><option value="MTN">MTN</option><option value="AIRTEL">Airtel</option></select></label>`}<button class="primary-btn full" onclick="startPayment('${esc(plan)}')">Continue to Pesapal</button><div id="payResult" class="payment-result"></div></div>`;document.body.appendChild(m);
+};
+window.startPayment=async plan=>{
+ const r=document.getElementById("payResult");r.textContent="Creating secure Pesapal payment…";
+ try{const d=await api("/api/payments/create",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({plan,email:state.user.email,phone:document.getElementById("payPhone").value,network:document.getElementById("payNetwork").value})});r.innerHTML=`Payment created. Opening Pesapal… <small>${esc(d.tx_ref)}</small>`;location.href=d.redirect_url;}catch(e){r.textContent=e.message;}
+};
+function openProfile(){
+ const u=state.user,m=$("profileModal");m.classList.remove("hidden");m.innerHTML=`<div class="modal-box"><button class="close-btn" onclick="this.classList.add('x');document.getElementById('profileModal').classList.add('hidden')">×</button><span class="eyebrow">ACCOUNT</span><h2>Your profile</h2><label>Full name<input id="editName" value="${esc(u.name||"")}"></label><div id="profileMsg" class="form-message"></div><button class="primary-btn full" id="saveProfile">Save profile</button><button class="danger-btn full" id="logoutBtn">Sign out</button></div>`;
+ 
+ $("saveProfile").onclick=async()=>{try{const d=await api("/api/auth/profile",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:$("editName").value.trim()})});state.user=d.user;m.classList.add("hidden");renderProfile();}catch(e){$("profileMsg").textContent=e.message;}};
+ $("logoutBtn").onclick=()=>{state.token="";sessionStorage.removeItem("kets_user_token");location.reload();};
+}
+async function loadAll(){
+ if(state.loading)return;
+ state.loading=true;
+ try{
+  const me=await api("/api/auth/me");state.user=me.user;state.access=me.access;
+  const [status,history,access,plans,community,payments]=await Promise.all([api("/api/status"),api("/api/history"),api("/api/access"),api("/api/plans"),api("/api/community"),api("/api/payments/history")]);
+  state.status=status;setTimerDeadlines(status);state.history=history.history||[];state.access=access;state.plans=plans.plans||{};state.community=community.counts||{};state.payments=payments.payments||[];
+  try{const signalFeed=await api("/api/signals");state.signals=signalFeed.signals||{};state.signalMode=signalFeed.mode||"delayed";state.signalDelayMinutes=Number(signalFeed.delay_minutes||0);}catch{state.signals={};state.signalMode=state.access?.paid?"live":"delayed";state.signalDelayMinutes=state.access?.paid?0:30;}
+  showApp();renderProfile();renderAccess();renderStatus();renderSignals();renderHistory();renderPayments();renderCommunity();renderPlans();
+ }catch(e){state.token="";sessionStorage.removeItem("kets_user_token");showAuth("login");if($("authMsg"))authMsg(e.message);}
+ finally{state.loading=false;}
+}
+document.querySelectorAll(".tab").forEach(b=>b.onclick=()=>showAuth(b.dataset.tab));
+$("regCountry")?.addEventListener("change",updateCountryCurrency);updateCountryCurrency();$("loginBtn").onclick=login;$("registerBtn").onclick=register;$("profileBtn").onclick=openProfile;$("editProfileBtn").onclick=openProfile;$("plansBtn").onclick=()=>document.getElementById("plansSection").scrollIntoView({behavior:"smooth"});
+const q=new URLSearchParams(location.search);if(q.get("payment")==="success")history.replaceState({},document.title,"/");if(location.hash)history.replaceState({},document.title,"/");
+if(state.token)loadAll();else showAuth("login");
+setInterval(()=>{if(state.token&&!$("app").classList.contains("hidden")&&!state.loading)loadAll()},REFRESH_MS);
+setInterval(tickTimers,TIMER_MS);
+
+if("serviceWorker" in navigator){navigator.serviceWorker.register("/service-worker.js").catch(()=>{});}
+
+
+// KETS PWA installation
+let ketsDeferredInstallPrompt=null;
+const installPromptEl=()=>document.getElementById("installPrompt");
+const isKetsStandalone=()=>window.matchMedia("(display-mode: standalone)").matches||window.navigator.standalone===true;
+function isIosKets(){return /iphone|ipad|ipod/i.test(navigator.userAgent)&&!isKetsStandalone();}
+function showKetsInstallPrompt(){
+  const el=installPromptEl();
+  if(!el||isKetsStandalone()) return;
+  el.classList.remove("hidden");
+}
+function hideKetsInstallPrompt(){
+  const el=installPromptEl(); if(el) el.classList.add("hidden");
+}
+window.addEventListener("beforeinstallprompt",e=>{
+  e.preventDefault();
+  ketsDeferredInstallPrompt=e;
+  showKetsInstallPrompt();
+});
+window.addEventListener("appinstalled",()=>{
+  ketsDeferredInstallPrompt=null;
+  hideKetsInstallPrompt();
+});
+document.addEventListener("DOMContentLoaded",()=>{
+  const btn=document.getElementById("installBtn"), close=document.getElementById("installClose");
+  if(close) close.onclick=hideKetsInstallPrompt;
+  if(btn) btn.onclick=async()=>{
+    if(ketsDeferredInstallPrompt){
+      ketsDeferredInstallPrompt.prompt();
+      const result=await ketsDeferredInstallPrompt.userChoice.catch(()=>null);
+      if(result?.outcome==="accepted") hideKetsInstallPrompt();
+      ketsDeferredInstallPrompt=null;
+    }else if(isIosKets()){
+      alert("To install KETS on iPhone/iPad: tap Share in Safari, then choose “Add to Home Screen”.");
+    }else{
+      alert("If your browser supports installation, open the browser menu and choose “Install app” or “Add to Home screen”.");
+    }
+  };
+  if(isIosKets()) setTimeout(showKetsInstallPrompt,1200);
+});
