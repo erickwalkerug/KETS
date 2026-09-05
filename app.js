@@ -58,11 +58,19 @@ function parseSignalTime(s){
   return n;
 }
 function setTimerDeadlines(status){
+ // All countdowns use the server clock so phone clock drift does not break them.
  const serverMs=Date.parse(status?.server_time||status?.time_eat||"");
  if(Number.isFinite(serverMs)) state.clockOffsetMs=serverMs-Date.now();
+ const now=serverNowMs();
  const w=status?.signal_window||{};
- state.signalWindowDeadlineMs=serverNowMs()+Number(w.active?w.seconds_to_stop:w.seconds_to_start||0)*1000;
- state.nextBroadcastDeadlineMs=serverNowMs()+Math.max(0,Number(status?.next_broadcast_seconds||0))*1000;
+ const windowSeconds=Math.max(0,Number(w.active?w.seconds_to_stop:w.seconds_to_start||0));
+ state.signalWindowDeadlineMs=now+windowSeconds*1000;
+ // Use the absolute next_scan timestamp for the next-signal countdown.
+ // Previously this card incorrectly displayed the dashboard refresh timer.
+ const nextScanMs=Date.parse(status?.next_scan||"");
+ state.nextBroadcastDeadlineMs=Number.isFinite(nextScanMs)
+   ? nextScanMs
+   : now+Math.max(0,Number(status?.next_broadcast_seconds||0))*1000;
 }
 function tickTimers(){
  if(!state.token||$("app")?.classList.contains("hidden")) return;
@@ -77,10 +85,10 @@ function tickTimers(){
    state.nextRefreshDeadlineMs=now+REFRESH_MS;
    if(!state.refreshInProgress && !state.loading) refreshDisplayedSignals();
  }
- const nextSeconds=Math.max(0,Math.ceil((state.nextRefreshDeadlineMs-now)/1000));
+ const nextBroadcastSeconds=Math.max(0,Math.ceil((state.nextBroadcastDeadlineMs-now)/1000));
  if($("signalWindow")) $("signalWindow").textContent=countdown(signalSeconds);
  if($("windowLabel")) $("windowLabel").textContent=w.active?"Time left before signals stop":"Until signals start at 06:00 EAT";
- if($("nextBroadcast")) $("nextBroadcast").textContent=countdown(nextSeconds);
+ if($("nextBroadcast")) $("nextBroadcast").textContent=countdown(nextBroadcastSeconds);
  const expiryEl=$("paymentExpiryTimer");
  if(expiryEl && state.access?.expires){
    const exp=Date.parse(state.access.expires);
