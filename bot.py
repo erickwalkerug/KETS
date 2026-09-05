@@ -2054,241 +2054,229 @@ def calculate_entry_quality(
     plus_di, minus_di, direction_5m, direction_15m, momentum,
     candle_info, vwap, extension
 ):
-    """Additive 0-100 entry-quality layer matching the trading bot."""
-    points = 0.0
-    maximum = 0.0
-    reasons = []
+    """Strict 0-100 entry-location gate.
 
-    for timeframe, direction in (("5M", direction_5m), ("15M", direction_15m)):
-        maximum += 10.0
-        aligned = (
-            signal_type == "BUY" and direction == "BULLISH"
-        ) or (
-            signal_type == "SELL" and direction == "BEARISH"
-        )
-        if aligned:
-            points += 10.0
-            reasons.append(f"{timeframe} trend aligned")
-        else:
-            reasons.append(f"{timeframe} trend not aligned")
-
+    This is intentionally separate from the core strategy score.  It answers
+    one question: is *this exact 1-minute candle* a good place to enter now?
+    The score has a fixed 100-point denominator so missing volume/VWAP data can
+    never inflate the result.
+    """
     closes = [c["close"] for c in candles]
+    reasons = []
+    points = 0.0
+
+    def aligned(direction):
+        return (
+            (signal_type == "BUY" and direction == "BULLISH") or
+            (signal_type == "SELL" and direction == "BEARISH")
+        )
+
+    # 20 pts — higher-timeframe agreement. Both are required by the hard gate.
+    htf5 = aligned(direction_5m)
+    htf15 = aligned(direction_15m)
+    points += 10 if htf5 else 0
+    points += 10 if htf15 else 0
+    reasons.append("5M trend aligned" if htf5 else "5M trend conflict")
+    reasons.append("15M trend aligned" if htf15 else "15M trend conflict")
+
+    # 15 pts — actual entry structure, not merely a bullish/bearish candle.
     ema20 = calculate_ema(closes, 20)
     ema50 = calculate_ema(closes, 50)
-    maximum += 15.0
     ema_structure = (
-        signal_type == "BUY" and current_price > ema20 > ema50
-    ) or (
-        signal_type == "SELL" and current_price < ema20 < ema50
+        (signal_type == "BUY" and current_price > ema20 > ema50) or
+        (signal_type == "SELL" and current_price < ema20 < ema50)
     )
     if ema_structure:
-        points += 15.0
+        points += 15
         reasons.append("EMA20/EMA50 entry structure aligned")
     else:
         reasons.append("EMA20/EMA50 entry structure not aligned")
 
-    maximum += 15.0
+    # 15 pts — trend strength + DI direction. ADX below 20 is not a quality
+    # early entry even when the raw strategy score happens to be high.
+    di_ok = (
+        (signal_type == "BUY" and plus_di > minus_di) or
+        (signal_type == "SELL" and minus_di > plus_di)
+    )
     previous_adx = None
     if len(candles) >= 41:
         previous_adx = calculate_adx(candles[:-1], 14).get("adx")
-    trend_direction_ok = (
-        signal_type == "BUY" and plus_di > minus_di
-    ) or (
-        signal_type == "SELL" and minus_di > plus_di
-    )
     adx_rising = previous_adx is not None and adx > previous_adx
-    if adx >= 25 and trend_direction_ok and (adx_rising or previous_adx is None):
-        points += 15.0
-        reasons.append("ADX strong and trend direction confirmed")
-    elif adx >= 25 and trend_direction_ok:
-        points += 10.0
-        reasons.append("ADX strong and trend direction confirmed")
+    if adx >= 25 and di_ok and (adx_rising or previous_adx is None):
+        points += 15
+        reasons.append("ADX strong, DI aligned and trend strengthening")
+    elif adx >= 25 and di_ok:
+        points += 12
+        reasons.append("ADX strong and DI aligned")
+    elif adx >= 20 and di_ok:
+        points += 8
+        reasons.append("ADX developing and DI aligned")
     else:
-        reasons.append("ADX/DI entry confirmation incomplete")
+        reasons.append("ADX/DI trend confirmation weak")
 
-    volumes = [c.get("volume") for c in candles]
-    valid_volumes = [
-        v for v in volumes
-        if isinstance(v, (int, float)) and math.isfinite(v) and v > 0
-    ]
-    if len(valid_volumes) >= 21:
-        current_volume = candles[-1].get("volume")
-        previous_volumes = [
-            c.get("volume") for c in candles[-21:-1]
-            if isinstance(c.get("volume"), (int, float))
-            and math.isfinite(c.get("volume")) and c.get("volume") > 0
-        ]
-        if current_volume is not None and previous_volumes:
-            average_volume = sum(previous_volumes) / len(previous_volumes)
-            volume_ratio = current_volume / average_volume if average_volume > 0 else 0
-            maximum += 15.0
-            if volume_ratio >= 1.50:
-                points += 15.0
-                reasons.append(f"Volume expansion confirmed ({volume_ratio:.2f}x)")
-            elif volume_ratio >= 1.00:
-                points += 7.0
-                reasons.append(f"Volume present but not expanded ({volume_ratio:.2f}x)")
-            else:
-                reasons.append(f"Volume below recent average ({volume_ratio:.2f}x)")
-        else:
-            reasons.append("Volume unavailable for confirmation")
+    # 10 pts — candle close quality. Prefer decisive closes without requiring
+    # every signal to be a breakout, preserving the early-entry objective.
+    candle_ok = False
+    breakout_close = False
+    if candles:
+        cur = candles[-1]
+        full_range = cur["high"] - cur["low"]
+        if full_range > 0:
+            close_position = (cur["close"] - cur["low"]) / full_range
+            strong_buy = signal_type == "BUY" and close_position >= 0.65 and cur["close"] > cur["open"]
+            strong_sell = signal_type == "SELL" and close_position <= 0.35 and cur["close"] < cur["open"]
+            breakout_close = (
+                signal_type == "BUY" and cur["close"] > candles[-2]["high"]
+            ) or (
+                signal_type == "SELL" and cur["close"] < candles[-2]["low"]
+            )
+            candle_ok = breakout_close or (strong_buy or strong_sell) and candle_info.get("strength", 0) >= 55
+    if breakout_close:
+        points += 10
+        reasons.append("Breakout candle closed with confirmation")
+    elif candle_ok:
+        points += 7
+        reasons.append("Directional candle close confirmed")
     else:
-        reasons.append("Volume unavailable for confirmation")
+        reasons.append("Candle close lacks decisive entry confirmation")
 
-    maximum += 10.0
-    full_range = candles[-1]["high"] - candles[-1]["low"]
-    if full_range > 0:
-        close_position = (candles[-1]["close"] - candles[-1]["low"]) / full_range
-        strong_buy_close = (
-            signal_type == "BUY" and close_position >= 0.65
-            and candles[-1]["close"] > candles[-1]["open"]
-        )
-        strong_sell_close = (
-            signal_type == "SELL" and close_position <= 0.35
-            and candles[-1]["close"] < candles[-1]["open"]
-        )
-        breakout_close = (
-            signal_type == "BUY" and candles[-1]["close"] > candles[-2]["high"]
-        ) or (
-            signal_type == "SELL" and candles[-1]["close"] < candles[-2]["low"]
-        )
-        if breakout_close:
-            points += 10.0
-            reasons.append("Breakout candle closed beyond prior range")
-        elif ((strong_buy_close or strong_sell_close)
-              and candle_info.get("strength", 0) >= 55):
-            points += 7.0
-            reasons.append("Strong directional candle close")
-        else:
-            reasons.append("Candle close confirmation weak")
-    else:
-        reasons.append("Candle range unavailable")
-
-    maximum += 10.0
-    momentum_aligned = (
-        signal_type == "BUY" and momentum.get("direction") == "BULLISH"
-    ) or (
-        signal_type == "SELL" and momentum.get("direction") == "BEARISH"
-    )
+    # 10 pts — momentum must agree; accelerating gets full credit.
+    momentum_aligned = aligned(momentum.get("direction"))
     if momentum_aligned:
-        points += 10.0
-        if momentum.get("state") == "ACCELERATING":
+        state = momentum.get("state")
+        if state == "ACCELERATING":
+            points += 10
             reasons.append("Momentum aligned and accelerating")
-        elif momentum.get("state") == "STABLE":
+        elif state == "STABLE":
+            points += 8
             reasons.append("Momentum aligned and stable")
         else:
+            points += 5
             reasons.append("Momentum aligned but weakening")
     else:
         reasons.append("Momentum direction conflict")
 
-    if vwap is not None:
-        maximum += 10.0
-        vwap_aligned = (
-            signal_type == "BUY" and current_price > vwap
-        ) or (
-            signal_type == "SELL" and current_price < vwap
-        )
-        if vwap_aligned:
-            points += 10.0
-            reasons.append("VWAP aligned")
-        else:
-            reasons.append("VWAP conflict")
-    else:
-        reasons.append("VWAP unavailable")
-
-    maximum += 10.0
-    if not extension.get("extended", False):
-        points += 10.0
-        reasons.append("Price not excessively extended")
-    else:
-        reasons.append("Price excessively extended from EMA9")
-
-    maximum += 5.0
-    if len(candles) >= 3:
-        previous_candle = candles[-2]
-        previous2_candle = candles[-3]
-        buy_retest = (
-            signal_type == "BUY"
-            and previous_candle["close"] > previous2_candle["high"]
-            and candles[-1]["low"] <= previous_candle["high"]
-            and candles[-1]["close"] > previous_candle["high"]
-        )
-        sell_retest = (
-            signal_type == "SELL"
-            and previous_candle["close"] < previous2_candle["low"]
-            and candles[-1]["high"] >= previous_candle["low"]
-            and candles[-1]["close"] < previous_candle["low"]
-        )
-        if buy_retest or sell_retest:
-            points += 5.0
-            reasons.append("Breakout retest held")
-        else:
-            reasons.append("No clean breakout retest")
-
-    opposite_candle = (
-        signal_type == "BUY" and candle_info.get("direction") == "BEARISH"
-    ) or (
-        signal_type == "SELL" and candle_info.get("direction") == "BULLISH"
-    )
-    opposite_momentum = (
-        signal_type == "BUY" and momentum.get("direction") == "BEARISH"
-    ) or (
-        signal_type == "SELL" and momentum.get("direction") == "BULLISH"
-    )
-    clear_reversal = (
-        opposite_candle and opposite_momentum
-        and candle_info.get("strength", 0) >= 55
-    )
-    if clear_reversal:
-        reasons.append("CLEAR REVERSAL WARNING — entry veto")
-
-    # Additional entry-quality checks: these are deliberately additive to the
-    # original KETS strategy rather than replacing EMA/RSI/MACD logic.
+    # 10 pts — healthy RSI entry zone. Avoid buying exhaustion / selling
+    # exhaustion while still allowing genuine early entries.
     rsi_now = calculate_rsi(closes)
     rsi_entry_ok = (
-        signal_type == "BUY" and 42 <= rsi_now <= 68
-    ) or (
-        signal_type == "SELL" and 32 <= rsi_now <= 58
+        (signal_type == "BUY" and 42 <= rsi_now <= 68) or
+        (signal_type == "SELL" and 32 <= rsi_now <= 58)
     )
-    maximum += 10.0
-    if rsi_entry_ok:
-        points += 10.0
-        reasons.append(f"RSI entry zone healthy ({rsi_now:.1f})")
+    rsi_ideal = (
+        (signal_type == "BUY" and 48 <= rsi_now <= 62) or
+        (signal_type == "SELL" and 38 <= rsi_now <= 52)
+    )
+    if rsi_ideal:
+        points += 10
+        reasons.append(f"RSI in ideal early-entry zone ({rsi_now:.1f})")
+    elif rsi_entry_ok:
+        points += 7
+        reasons.append(f"RSI in acceptable entry zone ({rsi_now:.1f})")
     else:
-        reasons.append(f"RSI entry zone weak/exhausted ({rsi_now:.1f})")
+        reasons.append(f"RSI weak/exhausted for entry ({rsi_now:.1f})")
 
-    # Require directional market structure, not just a single bullish/bearish
-    # candle. This reduces late entries after a one-candle spike.
+    # 10 pts — price-location / chase protection. This is a major difference
+    # between trend quality and entry quality.
+    extension_ratio = extension.get("ratio", 0.0) if isinstance(extension, dict) else 0.0
+    if extension.get("extended", False):
+        reasons.append(f"Price too far from EMA9 ({extension_ratio:.2f} ATR)")
+    elif extension_ratio <= 0.75:
+        points += 10
+        reasons.append(f"Entry location clean ({extension_ratio:.2f} ATR from EMA9)")
+    elif extension_ratio <= 1.10:
+        points += 7
+        reasons.append(f"Entry location acceptable ({extension_ratio:.2f} ATR from EMA9)")
+    else:
+        points += 3
+        reasons.append(f"Entry location getting stretched ({extension_ratio:.2f} ATR)")
+
+    # 5 pts — 3-candle directional structure.
     structure_ok = False
     if len(candles) >= 4:
         a, b, c = candles[-3], candles[-2], candles[-1]
         structure_ok = (
-            signal_type == "BUY"
-            and b["high"] >= a["high"] and b["low"] >= a["low"]
-            and c["high"] >= b["high"] and c["low"] >= b["low"]
-        ) or (
-            signal_type == "SELL"
-            and b["high"] <= a["high"] and b["low"] <= a["low"]
-            and c["high"] <= b["high"] and c["low"] <= b["low"]
+            (signal_type == "BUY" and b["high"] >= a["high"] and b["low"] >= a["low"] and c["high"] >= b["high"] and c["low"] >= b["low"]) or
+            (signal_type == "SELL" and b["high"] <= a["high"] and b["low"] <= a["low"] and c["high"] <= b["high"] and c["low"] <= b["low"])
         )
-    maximum += 10.0
     if structure_ok:
-        points += 10.0
-        reasons.append("Short-term market structure confirms entry")
+        points += 5
+        reasons.append("3-candle market structure confirms direction")
     else:
-        reasons.append("Short-term market structure not fully confirmed")
+        reasons.append("3-candle structure not fully confirmed")
 
-    quality_score = round(
-        max(0.0, min(100.0, (points / maximum) * 100.0))
-    ) if maximum > 0 else 0
+    # 3 pts — volume is useful when supplied, but never required for markets
+    # where the feed does not provide trustworthy volume.
+    volume_score = 0
+    valid_volumes = [
+        c.get("volume") for c in candles
+        if isinstance(c.get("volume"), (int, float)) and math.isfinite(c.get("volume")) and c.get("volume") > 0
+    ]
+    if len(valid_volumes) >= 21 and isinstance(candles[-1].get("volume"), (int, float)):
+        prev = [c["volume"] for c in candles[-21:-1] if isinstance(c.get("volume"), (int, float)) and c["volume"] > 0]
+        if prev:
+            ratio = candles[-1]["volume"] / (sum(prev) / len(prev))
+            if ratio >= 1.5:
+                volume_score = 3
+                reasons.append(f"Volume expansion confirmed ({ratio:.2f}x)")
+            elif ratio >= 1.0:
+                volume_score = 1
+                reasons.append(f"Volume present ({ratio:.2f}x average)")
+            else:
+                reasons.append(f"Volume below average ({ratio:.2f}x)")
+    else:
+        reasons.append("Volume unavailable — not used as a penalty")
+    points += volume_score
 
+    # 2 pts — VWAP location when volume/VWAP is trustworthy.
+    if vwap is not None:
+        vwap_ok = (
+            (signal_type == "BUY" and current_price > vwap) or
+            (signal_type == "SELL" and current_price < vwap)
+        )
+        if vwap_ok:
+            points += 2
+            reasons.append("VWAP aligned")
+        else:
+            reasons.append("VWAP conflict")
+    else:
+        reasons.append("VWAP unavailable — not used as a penalty")
+
+    # Reversal veto: a strong opposite candle AND opposite momentum is enough
+    # to invalidate the setup regardless of score.
+    opposite_candle = (
+        (signal_type == "BUY" and candle_info.get("direction") == "BEARISH") or
+        (signal_type == "SELL" and candle_info.get("direction") == "BULLISH")
+    )
+    opposite_momentum = (
+        (signal_type == "BUY" and momentum.get("direction") == "BEARISH") or
+        (signal_type == "SELL" and momentum.get("direction") == "BULLISH")
+    )
+    clear_reversal = opposite_candle and opposite_momentum and candle_info.get("strength", 0) >= 55
     if clear_reversal:
-        status = "REJECT — REVERSAL"
-    elif extension.get("extended", False):
-        status = "CAUTION — EXTENDED"
-    elif quality_score >= 80:
+        reasons.append("CLEAR REVERSAL WARNING — entry veto")
+
+    # Fixed denominator: 100 possible points regardless of feed features.
+    quality_score = round(max(0.0, min(100.0, points)))
+
+    # Mandatory gates prevent a high aggregate score from masking a bad entry.
+    hard_fail = []
+    if not htf5: hard_fail.append("5M conflict")
+    if not htf15: hard_fail.append("15M conflict")
+    if not ema_structure: hard_fail.append("EMA structure")
+    if adx < 20 or not di_ok: hard_fail.append("ADX/DI")
+    if not rsi_entry_ok: hard_fail.append("RSI zone")
+    if extension.get("extended", False): hard_fail.append("overextended")
+    if clear_reversal: hard_fail.append("reversal")
+    if not candle_ok: hard_fail.append("candle confirmation")
+
+    if hard_fail:
+        status = "REJECT — " + ", ".join(hard_fail[:3])
+    elif quality_score >= 85:
+        status = "A+ HIGH QUALITY ENTRY"
+    elif quality_score >= 78:
         status = "HIGH QUALITY ENTRY"
-    elif quality_score >= 65:
+    elif quality_score >= 72:
         status = "ACCEPTABLE ENTRY"
     else:
         status = "LOW QUALITY ENTRY"
@@ -2297,6 +2285,7 @@ def calculate_entry_quality(
         "score": quality_score,
         "status": status,
         "clear_reversal": clear_reversal,
+        "hard_fail": hard_fail,
         "ema20": ema20,
         "ema50": ema50,
         "adx_rising": adx_rising,
@@ -2433,10 +2422,11 @@ def analyze_market(asset, symbol, candles):
     opposite_5m = (direction == "BUY" and d5 == "BEARISH") or (direction == "SELL" and d5 == "BULLISH")
     opposite_15m = (direction == "BUY" and d15 == "BEARISH") or (direction == "SELL" and d15 == "BULLISH")
     if (
-        entry_quality_score < 70
+        entry_quality_score < 72
         or entry_quality["clear_reversal"]
+        or entry_quality.get("hard_fail")
         or extended
-        or ad["adx"] < 15
+        or ad["adx"] < 20
         or (opposite_5m and opposite_15m)
     ):
         return None

@@ -9,3 +9,17 @@ KETS FINAL FIXES
 - Public dashboard continues to hide strategy indicators.
 - Signal history retained for 7 days.
 - Trading window remains 06:00-18:00 EAT.
+
+ENTRY QUALITY HARDENING — 2026-09-05
+- Rebuilt entry-quality scoring with a fixed 100-point denominator.
+- Missing volume/VWAP data can no longer inflate the quality percentage.
+- Added mandatory 5M and 15M directional agreement.
+- Added mandatory EMA20/EMA50 entry structure.
+- Raised the minimum ADX gate to 20 and require DI direction alignment.
+- Added mandatory RSI entry-zone validation.
+- Added mandatory decisive 1-minute candle-close confirmation.
+- Added stricter price-location/chasing protection around EMA9 and ATR.
+- Preserved early entries by allowing strong directional closes as well as breakouts.
+- Added hard rejection for reversal, overextension, timeframe conflict, weak trend, and failed entry structure.
+- Final broadcast gate now requires entry quality >=72 with no hard-fail condition.
+- bot.py passes Python syntax compilation after the changes.
