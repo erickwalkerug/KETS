@@ -176,3 +176,7 @@
   .history-row{grid-template-columns:1fr auto}
   .history-entry-quality{display:none}
 }
+
+
+/* Prevent double-submit and make sign-in progress visible. */
+.primary-btn:disabled{opacity:.65;cursor:wait;}

@@ -8,14 +8,17 @@ const $=id=>document.getElementById(id);
 function headers(extra={}){return {Accept:"application/json",...(state.token?{Authorization:`Bearer ${state.token}`}:{}) ,...extra};}
 async function api(path,opts={}){
  const controller=new AbortController();
- const timeout=setTimeout(()=>controller.abort(),20000);
+ const timeoutMs=Number(opts.timeoutMs)||20000;
+ const fetchOpts={...opts};
+ delete fetchOpts.timeoutMs;
+ const timeout=setTimeout(()=>controller.abort(),timeoutMs);
  try{
-  const r=await fetch(API_BASE+path,{...opts,signal:controller.signal,headers:headers(opts.headers||{})});
+  const r=await fetch(API_BASE+path,{...fetchOpts,signal:controller.signal,headers:headers(fetchOpts.headers||{})});
   const d=await r.json().catch(()=>({}));
   if(!r.ok) throw Error(d.error||`HTTP ${r.status}`);
   return d;
  }catch(e){
-  if(e.name==="AbortError") throw Error("Server is taking too long to respond. Please try again.");
+  if(e.name==="AbortError") throw Error("KETS server is waking up or taking too long. Please wait a moment and try again.");
   throw e;
  }finally{clearTimeout(timeout);}
 }
@@ -82,21 +85,34 @@ function updateCountryCurrency(){
  const ug=sel.value==="UG";
  note.innerHTML=`Currency: <strong>${ug?"UGX":"USD"}</strong> · ${ug?"Uganda plans":"International plans"}`;
 }
+function warmBackend(){
+ // Render free services can sleep. Wake the KETS web service in the background
+ // without blocking the login screen or waiting for payment plans.
+ fetch(API_BASE+"/api/health",{cache:"no-store"}).catch(()=>{});
+}
 async function loadAuthPlans(){
- try{
-  const d=await api("/api/plans");
-  const plans=d.plans||{};
-  const render=(id)=>{
+ const targets=["loginPlansGrid","registerPlansGrid"];
+ targets.forEach(id=>{if($(id))$(id).innerHTML=`<div class="empty">Connecting to KETS…</div>`});
+ let lastError=null;
+ for(let attempt=0;attempt<2;attempt++){
+  try{
+   const d=await api("/api/plans",{timeoutMs:attempt===0?15000:30000});
+   const plans=d.plans||{};
+   state.plans=plans;
+   const render=(id)=>{
     const el=$(id); if(!el)return;
-    el.innerHTML=Object.entries(plans).filter(([_,p])=>authIsUganda()||p.usd!=null).map(([key,p])=>{
+    const entries=Object.entries(plans).filter(([_,p])=>authIsUganda()||p.usd!=null);
+    el.innerHTML=entries.length?entries.map(([key,p])=>{
       const cur=authIsUganda()?"UGX":"USD", amount=authIsUganda()?p.ugx:p.usd;
       return `<div class="plan"><span class="plan-tag">${p.seconds<=3600?"SHORT ACCESS":"SUBSCRIPTION"}</span><h3>${esc(p.name)}</h3><strong>${money(amount,cur)}</strong><span>${cur}</span><button class="primary-btn full" onclick="openAuthPayment('${esc(key)}')">Pay & activate</button></div>`;
-    }).join("");
-  };
-  render("loginPlansGrid"); render("registerPlansGrid");
- }catch(e){
-  ["loginPlansGrid","registerPlansGrid"].forEach(id=>{if($(id))$(id).innerHTML=`<div class="empty">Payment plans unavailable right now.</div>`});
+    }).join(""):`<div class="empty">No payment plans are currently available.</div>`;
+   };
+   render("loginPlansGrid"); render("registerPlansGrid");
+   return;
+  }catch(e){lastError=e;}
+  if(attempt===0) await new Promise(r=>setTimeout(r,1200));
  }
+ targets.forEach(id=>{if($(id))$(id).innerHTML=`<div class="empty">Plans could not be loaded. KETS is still online — tap Sign in again or refresh the page.</div>`});
 }
 window.openAuthPayment=async plan=>{
  const email=($("loginEmail")?.value||$("regEmail")?.value||"").trim().toLowerCase();
@@ -130,25 +146,32 @@ function authMsg(t,bad=true, target="loginMsg"){
  el.className="form-message "+(bad?"error":"ok");
 }
 async function finishLogin(d){state.token=d.token;sessionStorage.setItem("kets_user_token",d.token);state.user=d.user;showApp();await loadAll();}
+let loginInProgress=false;
 async function login(){
- try{const d=await api("/api/auth/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({email:$("loginEmail").value.trim(),password:$("loginPassword").value})});await finishLogin(d);}
- catch(e){
+ if(loginInProgress)return;
+ const btn=$("loginBtn");
+ const email=$("loginEmail")?.value.trim()||"";
+ const password=$("loginPassword")?.value||"";
+ if(!email||!password){authMsg("Enter your email and password.",true,"loginMsg");return;}
+ loginInProgress=true;
+ if(btn){btn.disabled=true;btn.dataset.originalText=btn.textContent;btn.textContent="Signing in…";}
+ authMsg("Connecting securely to KETS…",false,"loginMsg");
+ try{
+  const d=await api("/api/auth/login",{method:"POST",timeoutMs:60000,headers:{"Content-Type":"application/json"},body:JSON.stringify({email,password})});
+  await finishLogin(d);
+ }catch(e){
   const msg=String(e.message||"Sign-in failed.");
   const friendly=msg.toLowerCase().includes("account not found")
     ? "No KETS account was found for this email. Create your account first, then sign in."
     : `Sign-in failed: ${msg}`;
   authMsg(friendly,true,"loginMsg");
   if(msg.toLowerCase().includes("active payment plan")) loadAuthPlans();
+ }finally{
+  loginInProgress=false;
+  if(btn){btn.disabled=false;btn.textContent=btn.dataset.originalText||"Sign in";}
+ }
 }
-}
-async function register(){
- try{
-  await api("/api/auth/register",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name:$("regName").value.trim(),email:$("regEmail").value.trim(),password:$("regPassword").value,country_code:$("regCountry").value,country_name:$("regCountry").value==="UG"?"Uganda":"Other"})});
-  $("loginEmail").value=$("regEmail").value.trim();
-  showAuth("login");
-  authMsg("Account created successfully. Choose a payment plan, complete payment, then sign in.",false,"loginMsg");
- }catch(e){authMsg(`Account creation failed: ${e.message}`,true,"registerMsg");}
-}
+
 function renderProfile(){
  const u=state.user;if(!u)return;
  $("profileName").textContent=u.name||"KETS User";$("profileEmail").textContent=u.email;
@@ -251,7 +274,7 @@ function renderRichDashboard(s, asset){
    </div>
    <div class="entry-quality-gate">
     <span>90+ ENTRY GATE</span>
-    <b>${(entry_quality_required === false ? "NOT REQUIRED":!gateAvailable?"SOURCE DATA PENDING":gatePass?"PASS — QUALITY CONFIRMED":"WAIT — ENTRY QUALITY FILTER"}</b>
+    <b>${(entry_quality_required === false ? "NOT REQUIRED":!gateAvailable?"SOURCE DATA PENDING":gatePass?"PASS — QUALITY CONFIRMED":"WAIT — ENTRY QUALITY FILTER")}</b>
    </div>
    <div class="entry-quality-reasons">
     ${eqReasons.length?eqReasons.map(reason=>`<span class="eq-check ${/CLEAR REVERSAL|excessively extended|not aligned|incomplete|conflict|weak/i.test(String(reason))?"warn":"ok"}">${/CLEAR REVERSAL/i.test(String(reason))?"⛔":"•"} ${esc(reason)}</span>`).join(""):`<span class="eq-check pending">• Entry-quality details will appear when supplied by the trading engine.</span>`}
@@ -381,6 +404,7 @@ async function loadAll(){
  finally{state.loading=false;}
 }
 document.querySelectorAll(".tab").forEach(b=>b.onclick=()=>showAuth(b.dataset.tab));
+warmBackend();
 $("regCountry")?.addEventListener("change",()=>{updateCountryCurrency();loadAuthPlans();});updateCountryCurrency();
 if($("loginBtn")) $("loginBtn").onclick=login;
 if($("registerBtn")) $("registerBtn").onclick=register;
