@@ -75,13 +75,13 @@ function setTimerDeadlines(status){
  }else if(Number.isFinite(suppliedSeconds) && suppliedSeconds>0){
    state.nextBroadcastDeadlineMs=now+Math.floor(suppliedSeconds)*1000;
  }else{
-   // Last-resort display fallback: KETS scans once per minute. This keeps
+   // Last-resort display fallback: KETS scans every 1 minute. This keeps
    // the dashboard countdown alive even during the short gap before the
    // engine publishes its next_scan timestamp.
-   const nextMinute=new Date(now+60000);
+   const nextMinute=new Date(now+120000);
    nextMinute.setUTCSeconds(0,0);
    state.nextBroadcastDeadlineMs=nextMinute.getTime();
-   if(state.nextBroadcastDeadlineMs<=now) state.nextBroadcastDeadlineMs=now+60000;
+   if(state.nextBroadcastDeadlineMs<=now) state.nextBroadcastDeadlineMs=now+120000;
  }
 }
 function tickTimers(){

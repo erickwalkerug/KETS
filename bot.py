@@ -25,7 +25,7 @@ except Exception:
 
 # ============================================================
 # KETS STRATEGY ENGINE — PRODUCTION BACKEND
-# 1M analysis / 1M scan / Telegram bot + channel / Web API
+# 1M analysis / 2M scan / Telegram bot + channel / Web API
 # ============================================================
 
 API_LOCK = Lock()
@@ -198,9 +198,10 @@ def trading_hours_open():
 
 
 def get_markets():
-    if get_eat_time().weekday() >= 5:
-        return {"BTC": "BTC/USD"}
-    return {"GOLD": "XAU/USD"}
+    # KETS market schedule: GOLD on weekdays only.
+    if get_eat_time().weekday() < 5:
+        return {"GOLD": "XAU/USD"}
+    return {}
 
 
 def _num(x):
@@ -321,6 +322,7 @@ def api_status():
             "data_provider_configured": bool(os.environ.get("TWELVE_DATA_API_KEY")),
             "refresh_interval_seconds": 60,
             "dashboard_refresh_interval_seconds": 10,
+            "scan_interval_seconds": 60,
             "history_days": SIGNAL_HISTORY_DAYS,
             "trading_hours_eat": "06:00-18:00",
             "signal_window": signal_window(),
@@ -2031,7 +2033,7 @@ def detect_market_regime(adx, atr, candles):
 
 
 def check_data_quality(candles):
-    if len(candles)<40:return False,"Insufficient candles"
+    if len(candles)<60:return False,"Insufficient candles"
     for c in candles[-40:]:
         vals=[c["open"],c["high"],c["low"],c["close"]]
         if not all(math.isfinite(v) for v in vals):return False,"Invalid price data"
@@ -2240,6 +2242,42 @@ def calculate_entry_quality(
     if clear_reversal:
         reasons.append("CLEAR REVERSAL WARNING — entry veto")
 
+    # Additional entry-quality checks: these are deliberately additive to the
+    # original KETS strategy rather than replacing EMA/RSI/MACD logic.
+    rsi_now = calculate_rsi(closes)
+    rsi_entry_ok = (
+        signal_type == "BUY" and 42 <= rsi_now <= 68
+    ) or (
+        signal_type == "SELL" and 32 <= rsi_now <= 58
+    )
+    maximum += 10.0
+    if rsi_entry_ok:
+        points += 10.0
+        reasons.append(f"RSI entry zone healthy ({rsi_now:.1f})")
+    else:
+        reasons.append(f"RSI entry zone weak/exhausted ({rsi_now:.1f})")
+
+    # Require directional market structure, not just a single bullish/bearish
+    # candle. This reduces late entries after a one-candle spike.
+    structure_ok = False
+    if len(candles) >= 4:
+        a, b, c = candles[-3], candles[-2], candles[-1]
+        structure_ok = (
+            signal_type == "BUY"
+            and b["high"] >= a["high"] and b["low"] >= a["low"]
+            and c["high"] >= b["high"] and c["low"] >= b["low"]
+        ) or (
+            signal_type == "SELL"
+            and b["high"] <= a["high"] and b["low"] <= a["low"]
+            and c["high"] <= b["high"] and c["low"] <= b["low"]
+        )
+    maximum += 10.0
+    if structure_ok:
+        points += 10.0
+        reasons.append("Short-term market structure confirms entry")
+    else:
+        reasons.append("Short-term market structure not fully confirmed")
+
     quality_score = round(
         max(0.0, min(100.0, (points / maximum) * 100.0))
     ) if maximum > 0 else 0
@@ -2283,7 +2321,25 @@ def fetch_1m_candles(symbol, api_key):
                     except Exception:pass
                 out.append(c)
             except Exception:continue
-        return out
+        # Never score the still-forming 1-minute candle. Twelve Data can
+        # return the current minute, which makes crossover/candle quality
+        # flicker and creates false early entries.
+        completed=[]
+        now_utc=datetime.datetime.now(datetime.timezone.utc).replace(second=0,microsecond=0)
+        for c in out:
+            raw=str(c.get("datetime", "")).strip()
+            try:
+                stamp=datetime.datetime.fromisoformat(raw.replace("Z", "+00:00"))
+            except Exception:
+                try:
+                    stamp=datetime.datetime.strptime(raw, "%Y-%m-%d %H:%M:%S").replace(tzinfo=datetime.timezone.utc)
+                except Exception:
+                    continue
+            if stamp.tzinfo is None:
+                stamp=stamp.replace(tzinfo=datetime.timezone.utc)
+            if stamp.astimezone(datetime.timezone.utc).replace(second=0,microsecond=0) < now_utc:
+                completed.append(c)
+        return completed
     except Exception as e:
         print(f"Market data error {symbol}: {e}"); return []
 
@@ -2307,7 +2363,7 @@ def interpretation(score, extended):
 
 
 def analyze_market(asset, symbol, candles):
-    if len(candles)<40:return None
+    if len(candles)<60:return None
     ok,_=check_data_quality(candles)
     if not ok:return None
     closes=[c["close"] for c in candles]; cur,prev,prev2=candles[-1],candles[-2],candles[-3]; price=cur["close"]
@@ -2372,7 +2428,17 @@ def analyze_market(asset, symbol, candles):
     if regime.startswith("TRENDING"):bonus+=3; adv.append("Trend-friendly regime")
     if extended:bonus-=6; adv.append("Price overextended from EMA9")
     score=max(0,min(100,int(core+bonus)))
-    if score>=90 and (entry_quality_score<80 or entry_quality["clear_reversal"] or extended):
+    # Hard entry-quality veto. A high strategy-alignment score must never
+    # override poor entry location, reversal risk, or a stretched market.
+    opposite_5m = (direction == "BUY" and d5 == "BEARISH") or (direction == "SELL" and d5 == "BULLISH")
+    opposite_15m = (direction == "BUY" and d15 == "BEARISH") or (direction == "SELL" and d15 == "BULLISH")
+    if (
+        entry_quality_score < 70
+        or entry_quality["clear_reversal"]
+        or extended
+        or ad["adx"] < 15
+        or (opposite_5m and opposite_15m)
+    ):
         return None
 
     recent_lows=[c["low"] for c in candles[-6:-1]]; recent_highs=[c["high"] for c in candles[-6:-1]]
@@ -2403,7 +2469,7 @@ def analyze_market(asset, symbol, candles):
 
 # ------------------------- ENGINE ----------------------------
 def build_startup_messages():
-    b="🤖 *KETS STRATEGY ENGINE ONLINE*\n━━━━━━━━━━━━━━━━━━\n✅ Backend connected\n📊 Timeframe: 1 minute\n🔄 Scan interval: 1 minute\n⏰ Trading hours: 06:00-18:00 EAT\n💰 Monday-Friday: GOLD ONLY\n₿ Weekend: BTC ONLY\n🧠 Advanced intelligence ON\n━━━━━━━━━━━━━━━━━━\nℹ️ Strength is strategy alignment, not guaranteed win probability."
+    b="🤖 *KETS STRATEGY ENGINE ONLINE*\n━━━━━━━━━━━━━━━━━━\n✅ Backend connected\n📊 Timeframe: 1 minute\n🔄 Scan interval: 2 minutes\n⏰ Trading hours: 06:00-18:00 EAT\n💰 Monday-Friday: GOLD only\n₿ Weekend: BTC ONLY\n🧠 Advanced intelligence ON\n━━━━━━━━━━━━━━━━━━\nℹ️ Strength is strategy alignment, not guaranteed win probability."
     c="🤖 *KETS STRATEGY ENGINE ONLINE*\n━━━━━━━━━━━━━━━━━━\n✅ Signal system online\n📊 1-minute monitoring\n🔄 Analysis every 1 minute\n⏰ Active: 06:00-18:00 EAT\n⚡ Early-entry detection ON\n━━━━━━━━━━━━━━━━━━\n📡 KETS is monitoring the market."
     return b,c
 

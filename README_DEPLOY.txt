@@ -28,7 +28,7 @@ SECURITY
 
 WEBSITE FEATURES
 - 6:00 AM–6:00 PM EAT signal window
-- 1-minute strategy scan/update interval
+- 2-minute strategy scan/update interval
 - Monday-Friday: GOLD (XAU/USD) only
 - Saturday-Sunday: BTC (BTC/USD) only
 - Live BUY/SELL signal display when unlocked
