@@ -226,6 +226,7 @@ function renderRichDashboard(s, asset){
  const eqStatus=String((s?.entry_quality_status??s?.entryQualityStatus??s?.entry_quality?.status)||"").trim();
  const eqReversal=Boolean(s?.entry_quality_reversal??s?.entryQualityReversal??s?.entry_quality?.clear_reversal);
  const eqReasons=Array.isArray(s?.entry_quality_reasons)?s.entry_quality_reasons:(Array.isArray(s?.entry_quality?.reasons)?s.entry_quality.reasons:[]);
+ const entry_quality_required=s?.entry_quality_required!==false;
  const eqExtended=/EXTENDED/i.test(eqStatus)||eqReasons.some(x=>/excessively extended/i.test(String(x)));
  const gateAvailable=eqScore!==null;
  const gatePass=gateAvailable && score>=90 && eqScore>=80 && !eqReversal && !eqExtended;
