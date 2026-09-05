@@ -37,7 +37,7 @@ last_signal = {}
 # Private signal-source bridge. The website polls the trading bot directly so
 # signal delivery does not depend on a browser request reaching /api/signals.
 SOURCE_LOCK = Lock()
-SOURCE_CACHE = {"signals": {}, "history": [], "last_ok": None, "last_status": None, "last_error": None}
+SOURCE_CACHE = {"signals": {}, "history": [], "last_ok": None, "last_status": None, "last_error": None, "last_scan": None, "next_scan": None}
 SOURCE_POLL_SECONDS = max(5, int(os.environ.get("KETS_SOURCE_POLL_SECONDS", "10")))
 
 def _source_config():
@@ -98,6 +98,19 @@ def _sync_signal_source_once():
         except Exception as e:
             print(f"⚠️ KETS source bridge: history unavailable: {str(e)[:180]}")
 
+        # Keep the website countdown synchronized with the actual strategy
+        # engine when the source exposes /api/status. Older source versions
+        # may not have it, so failure here is intentionally non-fatal.
+        source_status = {}
+        try:
+            rs = requests.get(url + "/api/status", headers=headers, timeout=8)
+            if rs.status_code == 200:
+                candidate = rs.json()
+                if isinstance(candidate, dict):
+                    source_status = candidate
+        except Exception as e:
+            print(f"⚠️ KETS source bridge: status unavailable: {str(e)[:120]}")
+
         r = requests.get(url + "/api/signals", headers=headers, timeout=15)
         print(f"📥 KETS source bridge: GET /api/signals -> {r.status_code}")
         if r.status_code != 200:
@@ -142,6 +155,9 @@ def _sync_signal_source_once():
             SOURCE_CACHE["last_ok"] = get_eat_time().isoformat()
             SOURCE_CACHE["last_status"] = 200
             SOURCE_CACHE["last_error"] = None
+            SOURCE_CACHE["last_scan"] = source_status.get("last_scan") or source_status.get("last_scan_time")
+            SOURCE_CACHE["next_scan"] = source_status.get("next_scan") or source_status.get("next_broadcast")
+
 
         print(f"💾 KETS source bridge: imported {imported} history item(s) into permanent storage")
 
@@ -272,22 +288,49 @@ def api_health():
 
 @app.route("/api/status")
 def api_status():
+    now = get_eat_time()
+    local_next = globals().get("next_scan")
+    local_last = globals().get("last_scan")
+    local_engine = bool(globals().get("engine_started", False))
+    snap = _source_snapshot()
+
+    # When this website is configured as a bridge (the normal Render setup),
+    # use the source engine's real scan timestamps. If an older source does
+    # not publish them, fall back to a deterministic one-minute boundary.
+    next_scan = snap.get("next_scan") or local_next
+    last_scan = snap.get("last_scan") or local_last
+    try:
+        next_dt = datetime.datetime.fromisoformat(str(next_scan)) if next_scan else None
+        if next_dt is None or next_dt <= now:
+            next_dt = (now + datetime.timedelta(minutes=1)).replace(second=0, microsecond=0)
+            if next_dt <= now:
+                next_dt += datetime.timedelta(minutes=1)
+            next_scan = next_dt.isoformat()
+        next_seconds = max(0, int((next_dt - now).total_seconds()))
+    except Exception:
+        next_dt = (now + datetime.timedelta(minutes=1)).replace(second=0, microsecond=0)
+        if next_dt <= now:
+            next_dt += datetime.timedelta(minutes=1)
+        next_scan = next_dt.isoformat()
+        next_seconds = max(0, int((next_dt - now).total_seconds()))
+
     with API_LOCK:
         return jsonify({
             "status": "online",
-            "engine_running": bool(globals().get("engine_started", False)) or bool(os.environ.get("KETS_SIGNAL_SOURCE_URL")),
+            "engine_running": local_engine or bool(os.environ.get("KETS_SIGNAL_SOURCE_URL")),
             "data_provider_configured": bool(os.environ.get("TWELVE_DATA_API_KEY")),
             "refresh_interval_seconds": 60,
             "dashboard_refresh_interval_seconds": 10,
             "history_days": SIGNAL_HISTORY_DAYS,
             "trading_hours_eat": "06:00-18:00",
             "signal_window": signal_window(),
-            "next_broadcast_seconds": max(0, int((datetime.datetime.fromisoformat(globals().get("next_scan", get_eat_time().isoformat())) - get_eat_time()).total_seconds())) if globals().get("next_scan") else 0,
-            "server_time": get_eat_time().isoformat(),
-            "last_scan": globals().get("last_scan"),
-            "next_scan": globals().get("next_scan"),
-            # Always advertise the market dashboard for the current trading
-            # day, even before the first engine scan populates MARKET_STATE.
+            "next_broadcast_seconds": next_seconds,
+            "server_time": now.isoformat(),
+            "last_scan": last_scan,
+            "next_scan": next_scan,
+            "source_last_ok": snap.get("last_ok"),
+            "source_last_status": snap.get("last_status"),
+            "source_last_error": snap.get("last_error"),
             "markets": list(get_markets().keys()),
             "signal_count": len(SIGNAL_HISTORY),
         })
@@ -2370,12 +2413,15 @@ def run_strategy():
     token=os.environ.get("TELEGRAM_BOT_TOKEN"); bot_id=os.environ.get("TELEGRAM_CHAT_ID"); channel_id=os.environ.get("TELEGRAM_CHANNEL_ID"); key=os.environ.get("TWELVE_DATA_API_KEY")
     print("🚀 KETS Strategy Engine started — 1M / 1M")
     sb,sc=build_startup_messages(); send_to_bot_and_channel(token,bot_id,channel_id,sb,sc)
+    next_scan=(get_eat_time()+datetime.timedelta(seconds=60)).isoformat()
     while True:
         started=time.time()
         try:
             now=get_eat_time(); last_scan=now.isoformat()
             if not trading_hours_open():
-                time.sleep(60); continue
+                sleep_time=60
+                next_scan=(get_eat_time()+datetime.timedelta(seconds=sleep_time)).isoformat()
+                time.sleep(sleep_time); continue
             for asset,symbol in get_markets().items():
                 candles=fetch_1m_candles(symbol,key)
                 if not candles:

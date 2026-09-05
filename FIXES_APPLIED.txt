@@ -1,0 +1,18 @@
+KETS COMPLETE FIX — 2026-09-05
+
+This package fixes the dashboard/application issues found in the supplied TIMERS-FIXED build:
+
+1. Sign-in session persistence fixed: the previous JavaScript deleted the saved session token on every page load.
+2. Registration fixed: the frontend referenced an undefined register() function, which could stop the rest of app.js from executing.
+3. Next-signal countdown fixed: uses the real source engine next_scan when available and a safe one-minute fallback when it is not yet published.
+4. Countdown no longer gets stuck at 00:00:00 while a refresh request is slow.
+5. Backend /api/status now synchronizes source-engine last_scan/next_scan when available.
+6. Strategy engine now initializes next_scan immediately and updates it even outside trading hours.
+7. Service-worker cache version bumped and application assets use network-first fetching, preventing stale JavaScript from surviving a deployment.
+8. PWA icon paths fixed to match the actual files in the package.
+9. Existing KETS strategy, payment, signal history, Telegram, and 06:00-18:00 EAT rules were preserved.
+
+RENDER
+- Deploy this package as the complete KETS service.
+- Keep the KETS signal source URL/key configured if the website is using the separate trading bot as its signal source.
+- After deployment, open the site once in Chrome and refresh it after the new deployment is live so the new service-worker cache is installed.

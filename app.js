@@ -1,9 +1,10 @@
 const API_BASE=window.location.origin, REFRESH_MS=10000, TIMER_MS=1000;
 const freshHash=new URLSearchParams(location.hash.replace(/^#/,"?"));
 const hashToken=freshHash.get("login")||"";
-sessionStorage.removeItem("kets_user_token");
+const storedToken=sessionStorage.getItem("kets_user_token")||"";
+const initialToken=hashToken||storedToken;
 if(hashToken)sessionStorage.setItem("kets_user_token",hashToken);
-const state={token:hashToken,user:null,access:null,signals:{},history:[],payments:[],status:{},plans:{},clockOffsetMs:0,signalWindowDeadlineMs:0,nextBroadcastDeadlineMs:0,nextRefreshDeadlineMs:0,loading:false,refreshInProgress:false};
+const state={token:initialToken,user:null,access:null,signals:{},history:[],payments:[],status:{},plans:{},clockOffsetMs:0,signalWindowDeadlineMs:0,nextBroadcastDeadlineMs:0,nextRefreshDeadlineMs:0,loading:false,refreshInProgress:false};
 const $=id=>document.getElementById(id);
 function headers(extra={}){return {Accept:"application/json",...(state.token?{Authorization:`Bearer ${state.token}`}:{}) ,...extra};}
 async function api(path,opts={}){
@@ -67,10 +68,21 @@ function setTimerDeadlines(status){
  state.signalWindowDeadlineMs=now+windowSeconds*1000;
  // Use the absolute next_scan timestamp for the next-signal countdown.
  // Previously this card incorrectly displayed the dashboard refresh timer.
- const nextScanMs=Date.parse(status?.next_scan||"");
- state.nextBroadcastDeadlineMs=Number.isFinite(nextScanMs)
-   ? nextScanMs
-   : now+Math.max(0,Number(status?.next_broadcast_seconds||0))*1000;
+ const nextScanMs=parseKetsDate(status?.next_scan||"");
+ const suppliedSeconds=Number(status?.next_broadcast_seconds);
+ if(Number.isFinite(nextScanMs) && nextScanMs>now){
+   state.nextBroadcastDeadlineMs=nextScanMs;
+ }else if(Number.isFinite(suppliedSeconds) && suppliedSeconds>0){
+   state.nextBroadcastDeadlineMs=now+Math.floor(suppliedSeconds)*1000;
+ }else{
+   // Last-resort display fallback: KETS scans once per minute. This keeps
+   // the dashboard countdown alive even during the short gap before the
+   // engine publishes its next_scan timestamp.
+   const nextMinute=new Date(now+60000);
+   nextMinute.setUTCSeconds(0,0);
+   state.nextBroadcastDeadlineMs=nextMinute.getTime();
+   if(state.nextBroadcastDeadlineMs<=now) state.nextBroadcastDeadlineMs=now+60000;
+ }
 }
 function tickTimers(){
  if(!state.token||$("app")?.classList.contains("hidden")) return;
@@ -154,6 +166,37 @@ window.startAuthPayment=async plan=>{
   location.href=d.redirect_url;
  }catch(e){r.textContent=e.message;}
 };
+
+let registerInProgress=false;
+async function register(){
+ if(registerInProgress)return;
+ const name=($("regName")?.value||"").trim();
+ const email=($("regEmail")?.value||"").trim().toLowerCase();
+ const password=$("regPassword")?.value||"";
+ const countryCode=$("regCountry")?.value||"UG";
+ if(!name){authMsg("Enter your full name.",true,"registerMsg");return;}
+ if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)){authMsg("Enter a valid email address.",true,"registerMsg");return;}
+ if(password.length<8){authMsg("Password must be at least 8 characters.",true,"registerMsg");return;}
+ registerInProgress=true;
+ const btn=$("registerBtn");
+ if(btn){btn.disabled=true;btn.dataset.originalText=btn.textContent;btn.textContent="Creating account…";}
+ authMsg("Creating your KETS account…",false,"registerMsg");
+ try{
+   const d=await api("/api/auth/register",{method:"POST",timeoutMs:30000,headers:{"Content-Type":"application/json"},body:JSON.stringify({name,email,password,country_code:countryCode,country_name:countryCode==="UG"?"Uganda":"Other"})});
+   // Registration itself is free, but normal live access requires an active
+   // payment. Put the credentials into Sign in and let the user choose a plan
+   // from the payment cards without losing the newly created account.
+   $("loginEmail").value=email;
+   $("loginPassword").value=password;
+   showAuth("login");
+   authMsg("Account created successfully. Choose a payment plan below to activate live KETS access.",false,"loginMsg");
+ }catch(e){
+   authMsg(`Account creation failed: ${e.message}`,true,"registerMsg");
+ }finally{
+   registerInProgress=false;
+   if(btn){btn.disabled=false;btn.textContent=btn.dataset.originalText||"Create account";}
+ }
+}
 
 function showAuth(tab="login"){
  $("authScreen").classList.remove("hidden");$("app").classList.add("hidden");
@@ -450,7 +493,7 @@ if($("registerBtn")) $("registerBtn").onclick=register;
 if($("profileBtn")) $("profileBtn").onclick=openProfile;
 if($("editProfileBtn")) $("editProfileBtn").onclick=openProfile;
 const q=new URLSearchParams(location.search);if(q.get("payment")==="success")history.replaceState({},document.title,"/");if(location.hash)history.replaceState({},document.title,"/");
-state.nextRefreshDeadlineMs=Date.now()+REFRESH_MS;
+state.nextRefreshDeadlineMs=serverNowMs()+REFRESH_MS;
 if(state.token)loadAll();else showAuth("login");
 async function refreshDisplayedSignals(){
  if(!state.token||$("app")?.classList.contains("hidden")||state.loading||state.refreshInProgress)return;
