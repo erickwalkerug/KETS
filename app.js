@@ -3,7 +3,7 @@ const freshHash=new URLSearchParams(location.hash.replace(/^#/,"?"));
 const hashToken=freshHash.get("login")||"";
 sessionStorage.removeItem("kets_user_token");
 if(hashToken)sessionStorage.setItem("kets_user_token",hashToken);
-const state={token:hashToken,user:null,access:null,signals:{},history:[],payments:[],status:{},plans:{},clockOffsetMs:0,signalWindowDeadlineMs:0,nextBroadcastDeadlineMs:0,nextRefreshDeadlineMs:0,loading:false};
+const state={token:hashToken,user:null,access:null,signals:{},history:[],payments:[],status:{},plans:{},clockOffsetMs:0,signalWindowDeadlineMs:0,nextBroadcastDeadlineMs:0,nextRefreshDeadlineMs:0,loading:false,refreshInProgress:false};
 const $=id=>document.getElementById(id);
 function headers(extra={}){return {Accept:"application/json",...(state.token?{Authorization:`Bearer ${state.token}`}:{}) ,...extra};}
 async function api(path,opts={}){
@@ -69,6 +69,14 @@ function tickTimers(){
  const now=serverNowMs();
  const w=state.status.signal_window||{};
  const signalSeconds=Math.max(0,Math.ceil((state.signalWindowDeadlineMs-now)/1000));
+ // The refresh countdown is a UI clock, not the duration of the network request.
+ // Reset it immediately when it reaches zero so a slow Render/API response can
+ // never leave the dashboard stuck at 00:00:00. A separate guard prevents
+ // overlapping refresh requests.
+ if(state.nextRefreshDeadlineMs<=now){
+   state.nextRefreshDeadlineMs=now+REFRESH_MS;
+   if(!state.refreshInProgress && !state.loading) refreshDisplayedSignals();
+ }
  const nextSeconds=Math.max(0,Math.ceil((state.nextRefreshDeadlineMs-now)/1000));
  if($("signalWindow")) $("signalWindow").textContent=countdown(signalSeconds);
  if($("windowLabel")) $("windowLabel").textContent=w.active?"Time left before signals stop":"Until signals start at 06:00 EAT";
@@ -90,29 +98,35 @@ function warmBackend(){
  // without blocking the login screen or waiting for payment plans.
  fetch(API_BASE+"/api/health",{cache:"no-store"}).catch(()=>{});
 }
-async function loadAuthPlans(){
+const BUILTIN_PLANS={
+ "30_min":{name:"30 Minutes",ugx:500,seconds:1800},
+ "1_hour":{name:"1 Hour",ugx:1000,seconds:3600},
+ "4_hour":{name:"4 Hours",ugx:3000,seconds:14400},
+ "1_day":{name:"1 Day",ugx:5000,usd:1,seconds:86400},
+ "1_week":{name:"1 Week",ugx:30000,usd:5,seconds:604800},
+ "1_month":{name:"1 Month",ugx:50000,usd:15,seconds:2592000},
+ "1_year":{name:"1 Year",ugx:1000000,seconds:31536000}
+};
+function renderAuthPlans(plans){
  const targets=["loginPlansGrid","registerPlansGrid"];
- targets.forEach(id=>{if($(id))$(id).innerHTML=`<div class="empty">Connecting to KETS…</div>`});
- let lastError=null;
- for(let attempt=0;attempt<2;attempt++){
-  try{
-   const d=await api("/api/plans",{timeoutMs:attempt===0?15000:30000});
-   const plans=d.plans||{};
-   state.plans=plans;
-   const render=(id)=>{
-    const el=$(id); if(!el)return;
-    const entries=Object.entries(plans).filter(([_,p])=>authIsUganda()||p.usd!=null);
-    el.innerHTML=entries.length?entries.map(([key,p])=>{
-      const cur=authIsUganda()?"UGX":"USD", amount=authIsUganda()?p.ugx:p.usd;
-      return `<div class="plan"><span class="plan-tag">${p.seconds<=3600?"SHORT ACCESS":"SUBSCRIPTION"}</span><h3>${esc(p.name)}</h3><strong>${money(amount,cur)}</strong><span>${cur}</span><button class="primary-btn full" onclick="openAuthPayment('${esc(key)}')">Pay & activate</button></div>`;
-    }).join(""):`<div class="empty">No payment plans are currently available.</div>`;
-   };
-   render("loginPlansGrid"); render("registerPlansGrid");
-   return;
-  }catch(e){lastError=e;}
-  if(attempt===0) await new Promise(r=>setTimeout(r,1200));
- }
- targets.forEach(id=>{if($(id))$(id).innerHTML=`<div class="empty">Plans could not be loaded. KETS is still online — tap Sign in again or refresh the page.</div>`});
+ targets.forEach(id=>{
+   const el=$(id); if(!el)return;
+   const entries=Object.entries(plans||{}).filter(([_,p])=>authIsUganda()||p.usd!=null);
+   el.innerHTML=entries.length?entries.map(([key,p])=>{
+     const cur=authIsUganda()?"UGX":"USD", amount=authIsUganda()?p.ugx:p.usd;
+     return `<div class="plan"><span class="plan-tag">${p.seconds<=3600?"SHORT ACCESS":"SUBSCRIPTION"}</span><h3>${esc(p.name)}</h3><strong>${money(amount,cur)}</strong><span>${cur}</span><button class="primary-btn full" onclick="openAuthPayment('${esc(key)}')">Pay & activate</button></div>`;
+   }).join(""):`<div class="empty">No payment plans are currently available.</div>`;
+ });
+}
+function loadAuthPlans(){
+ // Payment plans are static configuration. Render them immediately instead of
+ // waiting for a sleeping Render service to answer /api/plans. The API result
+ // is still fetched in the background so server-side pricing remains authoritative.
+ state.plans=Object.keys(state.plans||{}).length?state.plans:BUILTIN_PLANS;
+ renderAuthPlans(state.plans);
+ api("/api/plans",{timeoutMs:8000}).then(d=>{
+   if(d?.plans && Object.keys(d.plans).length){ state.plans=d.plans; renderAuthPlans(state.plans); }
+ }).catch(()=>{});
 }
 window.openAuthPayment=async plan=>{
  const email=($("loginEmail")?.value||$("regEmail")?.value||"").trim().toLowerCase();
@@ -395,14 +409,30 @@ async function loadAll(){
  if(state.loading)return;
  state.loading=true;
  try{
-  const me=await api("/api/auth/me");state.user=me.user;state.access=me.access;
-  const [status,history,access,plans,payments]=await Promise.all([api("/api/status"),api("/api/history"),api("/api/access"),api("/api/plans"),api("/api/payments/history")]);
-  state.status=status;setTimerDeadlines(status);state.history=history.history||[];state.access=access;state.plans=plans.plans||{};state.payments=payments.payments||[];
-  try{const signalFeed=await api("/api/signals");state.signals=signalFeed.signals||{};state.signalMode="live";state.signalDelayMinutes=0;}catch{state.signals={};state.signalMode="live";state.signalDelayMinutes=0;}
-  showApp();renderProfile();renderAccess();renderStatus();renderSignals();renderHistory();renderPayments();renderPlans();
-  refreshDisplayedSignals();
- }catch(e){state.token="";sessionStorage.removeItem("kets_user_token");showAuth("login");if($("loginMsg"))authMsg(e.message,true,"loginMsg");}
- finally{state.loading=false;}
+  // Authenticate first, then show the dashboard immediately. Do not make the
+  // whole page wait for payment history or a slow secondary endpoint.
+  const me=await api("/api/auth/me",{timeoutMs:30000});
+  state.user=me.user; state.access=me.access;
+  showApp(); renderProfile(); renderAccess();
+  renderAuthPlans(state.plans&&Object.keys(state.plans).length?state.plans:BUILTIN_PLANS);
+  state.loading=false;
+
+  // Essential dashboard data loads together. Each section keeps its previous
+  // data if one endpoint is temporarily unavailable.
+  Promise.all([api("/api/status",{timeoutMs:12000}),api("/api/signals",{timeoutMs:12000})])
+   .then(([status,signalFeed])=>{
+     state.status=status; setTimerDeadlines(status);
+     state.signals=signalFeed.signals||{}; state.signalMode="live"; state.signalDelayMinutes=0;
+     renderStatus(); renderSignals();
+   }).catch(()=>{});
+
+  api("/api/history",{timeoutMs:12000}).then(d=>{state.history=d.history||[];renderHistory();}).catch(()=>{});
+  api("/api/plans",{timeoutMs:8000}).then(d=>{if(d?.plans){state.plans=d.plans;renderPlans();renderAuthPlans(d.plans);}}).catch(()=>{});
+  api("/api/payments/history",{timeoutMs:12000}).then(d=>{state.payments=d.payments||[];renderPayments();}).catch(()=>{});
+ }catch(e){
+  state.loading=false; state.token=""; sessionStorage.removeItem("kets_user_token"); showAuth("login");
+  if($("loginMsg"))authMsg(e.message,true,"loginMsg");
+ }
 }
 document.querySelectorAll(".tab").forEach(b=>b.onclick=()=>showAuth(b.dataset.tab));
 warmBackend();
@@ -415,7 +445,8 @@ const q=new URLSearchParams(location.search);if(q.get("payment")==="success")his
 state.nextRefreshDeadlineMs=Date.now()+REFRESH_MS;
 if(state.token)loadAll();else showAuth("login");
 async function refreshDisplayedSignals(){
- if(!state.token||$("app")?.classList.contains("hidden")||state.loading)return;
+ if(!state.token||$("app")?.classList.contains("hidden")||state.loading||state.refreshInProgress)return;
+ state.refreshInProgress=true;
  try{
   // Signal display is refreshed independently so a payment/profile/API hiccup
   // cannot prevent a newly available signal from reaching the page.
@@ -437,7 +468,6 @@ async function refreshDisplayedSignals(){
   renderSignals();
   renderHistory();
 
-  state.nextRefreshDeadlineMs=serverNowMs()+REFRESH_MS;
   const stamp=$("signalsLastUpdated");
   if(stamp){
    stamp.textContent=`Updated ${new Date().toLocaleTimeString()} · LIVE`;
@@ -447,9 +477,12 @@ async function refreshDisplayedSignals(){
   // temporary network/render failure instead of blanking the dashboard.
   const stamp=$("signalsLastUpdated");
   if(stamp && !stamp.textContent) stamp.textContent="Waiting for signal feed…";
+ }finally{
+  state.refreshInProgress=false;
  }
 }
-setInterval(refreshDisplayedSignals,REFRESH_MS);
+// The timer drives refresh scheduling. This keeps the visible countdown alive
+// even when an API request takes longer than 10 seconds.
 setInterval(tickTimers,TIMER_MS);
 
 if("serviceWorker" in navigator){navigator.serviceWorker.register("/service-worker.js").catch(()=>{});}
