@@ -733,7 +733,41 @@ def api_source_status():
 # Production: Render Postgres via DATABASE_URL.
 # Local/dev fallback: SQLite kets.db.
 # Postgres is preferred automatically whenever DATABASE_URL is present.
-DATABASE_URL = os.environ.get("SUPABASE_DB_URL", "").strip() or os.environ.get("DATABASE_URL", "").strip()
+def _normalize_database_url(value):
+    """Normalize Supabase pooler URLs for Render's persistent backend.
+
+    Keeps the existing environment-variable setup unchanged. If an older
+    Render variable contains the Supabase transaction-pooler port (6543),
+    automatically switch it to the Session Pooler port (5432), which is the
+    connection mode used by this long-running Flask/Gunicorn service.
+    """
+    value = (value or "").strip()
+    if not value:
+        return value
+    try:
+        parts = urlsplit(value)
+        host = (parts.hostname or "").lower()
+        if host.endswith(".pooler.supabase.com") and parts.port == 6543:
+            hostname = parts.hostname
+            if ":" in hostname and not hostname.startswith("["):
+                hostname = f"[{hostname}]"
+            netloc = hostname
+            if parts.username is not None:
+                from urllib.parse import quote
+                netloc = quote(parts.username, safe="") + ":"
+                if parts.password is not None:
+                    netloc += quote(parts.password, safe="")
+                netloc += "@" + hostname
+            netloc += ":5432"
+            return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
+    except Exception as exc:
+        print(f"⚠️ Database URL normalization skipped: {str(exc)[:160]}")
+    return value
+
+DATABASE_URL = _normalize_database_url(
+    os.environ.get("SUPABASE_DB_URL", "").strip()
+    or os.environ.get("DATABASE_URL", "").strip()
+)
 DB_PATH = os.environ.get("KETS_DB_PATH", os.path.join(os.path.dirname(os.path.abspath(__file__)), "kets.db"))
 # SQLite needs a process lock because the fallback database is file-based.
 # PostgreSQL does not: allowing concurrent connections prevents the background
