@@ -6,12 +6,11 @@ services:
     startCommand: gunicorn app:app --workers 1 --threads 4 --timeout 120
     healthCheckPath: /api/health
     envVars:
-      # Render Postgres is the permanent cloud store for registered users,
-      # profiles, payments, and subscription history.
-      - key: DATABASE_URL
-        fromDatabase:
-          name: kets-db
-          property: connectionString
+      # Supabase PostgreSQL is the permanent cloud store for users,
+      # profiles, payments, subscriptions and signals.
+      # Set SUPABASE_DB_URL in Render to the Supabase PostgreSQL connection string.
+      - key: SUPABASE_DB_URL
+        sync: false
       - key: KETS_SESSION_SECRET
         generateValue: true
       - key: KETS_DISABLE_ENGINE
@@ -31,10 +30,3 @@ services:
       # Use the same secret as the bot's KETS_API_KEY.
       - key: KETS_SIGNAL_RECEIVER_KEY
         sync: false
-
-databases:
-  - name: kets-db
-    databaseName: kets
-    user: kets
-    plan: free
-    # Keep the database in the same Render region as the KETS web service.

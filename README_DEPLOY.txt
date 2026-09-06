@@ -1,4 +1,4 @@
-KETS WEBSITE VERSION
+KETS WEBSITE VERSION — SUPABASE PERMANENT STORAGE
 
 This package removes the Android/PWA installation dependency. KETS is now a normal responsive website that users open in Chrome.
 
@@ -19,6 +19,7 @@ IMPORTANT ENVIRONMENT VARIABLES
 - KETS_PUBLIC_URL = https://kets.onrender.com unless you use a custom domain
 - KETS_SESSION_SECRET = long random secret used to sign KETS access tokens
 - KETS_ACCESS = leave locked in production; set paid only for temporary owner/admin override
+- SUPABASE_DB_URL = Supabase PostgreSQL connection string (recommended permanent storage)
 
 SECURITY
 - bot.py contains the strategy and remains server-side.
@@ -101,7 +102,7 @@ PLANS
 RENDER CLOUD PERSISTENCE
 The production account store is now Render Postgres. The Blueprint provisions a managed Postgres database named kets-db and injects its internal connection string into DATABASE_URL. Registered users, password hashes, profiles, payments, payment history, and subscription records are stored in Postgres instead of the web service's ephemeral filesystem. Render documents that Blueprint `fromDatabase` injects the database connection string into the service, and Render Postgres provides durable managed storage and recovery features.
 
-IMPORTANT: the KETS web service and Postgres database must be in the same Render region when using the Blueprint's internal connection string. If the existing KETS web service is already in another region, create/move the Postgres database to that same region before syncing the Blueprint.
+IMPORTANT: the KETS web service and Supabase database must be in the same Render region when using the Blueprint's internal connection string. If the existing KETS web service is already in another region, create/move the Postgres database to that same region before syncing the Blueprint.
 
 LOCAL FALLBACK
 If DATABASE_URL is not set, KETS continues to use the local kets.db SQLite file for development/testing. Production should use DATABASE_URL.
