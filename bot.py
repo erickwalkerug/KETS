@@ -5,6 +5,15 @@ import requests
 import secrets
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 
+# Flask application exposed to Gunicorn.
+# Must be created before any @app.route decorators below.
+app = Flask(__name__)
+
+@app.route("/api/health", methods=["GET"])
+def api_health():
+    return jsonify({"ok": True, "service": "KETS"})
+
+
 # Supabase REST storage: uses ONLY the Project URL + Publishable Key.
 # No PostgreSQL connection string, database password, service-role key, or
 # local SQLite database is required for the deployed service.
