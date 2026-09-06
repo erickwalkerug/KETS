@@ -509,8 +509,8 @@ def _store_received_signal(item):
         SOURCE_CACHE["last_error"] = None
 
     # Permanent database storage is independent of the in-memory API cache.
-    # This survives Render restarts/deploys when DATABASE_URL points to the
-    # KETS Render Postgres database.
+    # This survives Render restarts/deploys when SUPABASE_DB_URL points to the
+    # KETS Supabase PostgreSQL database.
     _persist_signal(item)
     return duplicate
 
@@ -733,7 +733,7 @@ def api_source_status():
 # Production: Render Postgres via DATABASE_URL.
 # Local/dev fallback: SQLite kets.db.
 # Postgres is preferred automatically whenever DATABASE_URL is present.
-DATABASE_URL = (os.environ.get("DATABASE_URL") or "").strip()
+DATABASE_URL = (os.environ.get("SUPABASE_DB_URL") or os.environ.get("DATABASE_URL") or "").strip()
 DB_PATH = os.environ.get("KETS_DB_PATH", os.path.join(os.path.dirname(os.path.abspath(__file__)), "kets.db"))
 # SQLite needs a process lock because the fallback database is file-based.
 # PostgreSQL does not: allowing concurrent connections prevents the background
