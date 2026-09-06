@@ -733,7 +733,7 @@ def api_source_status():
 # Production: Render Postgres via DATABASE_URL.
 # Local/dev fallback: SQLite kets.db.
 # Postgres is preferred automatically whenever DATABASE_URL is present.
-DATABASE_URL = (os.environ.get("SUPABASE_DB_URL") or os.environ.get("DATABASE_URL") or "").strip()
+DATABASE_URL = os.environ.get("SUPABASE_DB_URL", "").strip() or os.environ.get("DATABASE_URL", "").strip()
 DB_PATH = os.environ.get("KETS_DB_PATH", os.path.join(os.path.dirname(os.path.abspath(__file__)), "kets.db"))
 # SQLite needs a process lock because the fallback database is file-based.
 # PostgreSQL does not: allowing concurrent connections prevents the background
@@ -1776,11 +1776,11 @@ def update_market_state(asset, symbol, candles, signal=None):
 
 
 def _persist_signal(item):
-    """Persist a signal in Render Postgres (or local SQLite fallback).
+    """FINAL STEP: persist the signal received by the website into Supabase.
 
-    The signal payload is stored as JSON so new dashboard fields can be added
-    without requiring a schema migration for every field. Signal IDs are the
-    idempotency key, preventing duplicate deliveries.
+    Flow: trading bot -> /api/signals -> KETS website -> this function -> Supabase.
+    The browser never writes signals directly to Supabase. The complete
+    normalized signal is retained in payload JSON and signal IDs are idempotent.
     """
     try:
         now = get_eat_time().isoformat()

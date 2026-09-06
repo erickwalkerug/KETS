@@ -17,15 +17,7 @@ services:
         value: "1"
       # Keep the direct bot -> website POST receiver enabled.
       - key: KETS_DISABLE_SOURCE_BRIDGE
-        value: "0"
-      # The website also pulls the bot's existing 7-day history on startup
-      # and periodically so older signals can be imported into Postgres.
-      - key: KETS_SIGNAL_SOURCE_URL
-        value: "https://my-btc-bot-l0xm.onrender.com"
-      # Set this to the same secret used by the trading bot's KETS_API_KEY.
-      # Never commit the actual secret.
-      - key: KETS_SIGNAL_SOURCE_KEY
-        sync: false
+        value: "1"
       # Receiver secret for direct POSTs from the trading bot.
       # Use the same secret as the bot's KETS_API_KEY.
       - key: KETS_SIGNAL_RECEIVER_KEY
