@@ -1,0 +1,20 @@
+KETS SIGN-IN HTTP 500 FIX
+=========================
+
+Fixed in this deployment package:
+
+1. The Supabase REST client no longer sends the sb_publishable_* key as
+   Authorization: Bearer.
+2. The publishable key is sent only through the `apikey` header, as required
+   for the new Supabase API-key format.
+3. The existing KETS sign-in flow, Supabase Project URL + Publishable Key
+   configuration, pricing, signals, and trading schedule are preserved.
+
+Render environment variables remain:
+SUPABASE_URL=https://YOUR-PROJECT.supabase.co
+SUPABASE_PUBLISHABLE_KEY=YOUR_SUPABASE_PUBLISHABLE_KEY
+
+No DATABASE_URL, database password, service-role key, or secret Supabase key
+is required by this package.
+
+After replacing the deployed files, redeploy the KETS Render service.

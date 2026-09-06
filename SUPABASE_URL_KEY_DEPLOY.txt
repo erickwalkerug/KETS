@@ -7,5 +7,5 @@ SUPABASE_PUBLISHABLE_KEY=YOUR_SUPABASE_PUBLISHABLE_KEY
 Do NOT configure DATABASE_URL or SUPABASE_DB_URL.
 Do NOT add a Supabase database password or service-role key.
 
-The backend talks to Supabase through the REST API at /rest/v1.
+The backend talks to Supabase through the REST API at /rest/v1 and sends the publishable key in the apikey header only.
 The included render.yaml uses: gunicorn app:app --workers 1 --threads 4 --timeout 120

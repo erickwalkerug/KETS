@@ -102,9 +102,12 @@ class SupabaseConnection:
         if not SUPABASE_URL or not SUPABASE_PUBLISHABLE_KEY:
             raise RuntimeError("SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY must be configured.")
         self.base = SUPABASE_URL + "/rest/v1"
+        # IMPORTANT: Supabase publishable keys are API keys, not JWT user tokens.
+        # Send the publishable key only in the `apikey` header. Sending an
+        # sb_publishable_* key as `Authorization: Bearer ...` can cause
+        # Supabase authentication/JWT handling to reject the REST request.
         self.headers = {
             "apikey": SUPABASE_PUBLISHABLE_KEY,
-            "Authorization": f"Bearer {SUPABASE_PUBLISHABLE_KEY}",
             "Content-Type": "application/json",
             "Accept": "application/json",
         }
