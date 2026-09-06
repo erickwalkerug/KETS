@@ -3,7 +3,7 @@ services:
     name: kets
     runtime: python
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn app:app --workers 1 --threads 4 --timeout 120
+    startCommand: gunicorn bot:app --workers 1 --threads 4 --timeout 120
     healthCheckPath: /api/health
     envVars:
       # Supabase REST uses only the Project URL and Publishable Key.
@@ -14,8 +14,8 @@ services:
       - key: KETS_SESSION_SECRET
         generateValue: true
       - key: KETS_DISABLE_ENGINE
-        value: "1"
-      # Keep the direct bot -> website POST receiver enabled.
+        value: "0"
+      # Keep the direct bot -> website POST receiver available for external signal pushes.
       - key: KETS_DISABLE_SOURCE_BRIDGE
         value: "1"
       # Receiver secret for direct POSTs from the trading bot.

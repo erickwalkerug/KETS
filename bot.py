@@ -9,9 +9,74 @@ from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 # Must be created before any @app.route decorators below.
 app = Flask(__name__)
 
+# Runtime state used by the dashboard and signal engine.
+# These values do not change the trading strategy; they only keep the API state
+# available to the web UI and survive Gunicorn module import correctly.
+API_LOCK = Lock()
+MARKET_STATE = {}
+SIGNAL_HISTORY = []
+SIGNAL_HISTORY_DAYS = 7
+last_signal = {}
+last_scan = None
+next_scan = None
+
+EAT = datetime.timezone(datetime.timedelta(hours=3))
+
+def get_eat_time():
+    return datetime.datetime.now(datetime.timezone.utc).astimezone(EAT)
+
+def _num(value, default=0.0):
+    try:
+        n = float(value)
+        return n if math.isfinite(n) else default
+    except (TypeError, ValueError):
+        return default
+
+def trading_hours_open(now=None):
+    now = now or get_eat_time()
+    return datetime.time(6, 0) <= now.time() < datetime.time(18, 0)
+
+def get_markets(now=None):
+    # Preserve KETS' current market schedule: GOLD on weekdays, BTC on weekends.
+    now = now or get_eat_time()
+    if now.weekday() < 5:
+        return {"GOLD": "XAU/USD"}
+    return {"BTC": "BTC/USD"}
+
+def _source_config():
+    return (
+        os.environ.get("KETS_SIGNAL_SOURCE_URL", "").strip().rstrip("/"),
+        os.environ.get("KETS_SIGNAL_SOURCE_KEY", "").strip()
+        or os.environ.get("KETS_API_KEY", "").strip()
+        or os.environ.get("KETS_SIGNALS_API_KEY", "").strip(),
+    )
+
 @app.route("/api/health", methods=["GET"])
 def api_health():
     return jsonify({"ok": True, "service": "KETS"})
+
+
+# Frontend routes. Render's web service must serve the KETS website itself.
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+@app.route("/", methods=["GET"])
+def index_page():
+    return send_from_directory(BASE_DIR, "index.html")
+
+@app.route("/<path:filename>", methods=["GET"])
+def static_files(filename):
+    # Only serve known frontend assets; never expose Python/source files.
+    allowed = {
+        "styles.css", "app.js", "service-worker.js", "manifest.json",
+        "icon-192.png", "icon-512.png", "kets-android.apk"
+    }
+    if filename not in allowed:
+        return jsonify({"error": "Not found"}), 404
+    return send_from_directory(BASE_DIR, filename)
+
+@app.route("/download/kets-android.apk", methods=["GET"])
+def download_android():
+    return send_from_directory(BASE_DIR, "kets-android.apk", as_attachment=True, download_name="KETS-Android.apk")
 
 
 # Supabase REST storage: uses ONLY the Project URL + Publishable Key.
@@ -443,6 +508,127 @@ def _developer_ok():
         return bool(_auth_serializer().loads(token,max_age=12*3600).get("developer"))
     except Exception:
         return False
+
+@app.route("/api/status", methods=["GET"])
+def api_status():
+    now = get_eat_time()
+    active = trading_hours_open(now)
+    if active:
+        seconds_to_boundary = max(0, int((datetime.datetime.combine(now.date(), datetime.time(18, 0), tzinfo=EAT) - now).total_seconds()))
+    else:
+        start = datetime.datetime.combine(now.date(), datetime.time(6, 0), tzinfo=EAT)
+        if now >= datetime.datetime.combine(now.date(), datetime.time(18, 0), tzinfo=EAT):
+            start += datetime.timedelta(days=1)
+        seconds_to_boundary = max(0, int((start - now).total_seconds()))
+    return jsonify({
+        "ok": True,
+        "engine_running": bool(engine_started) if "engine_started" in globals() else os.environ.get("KETS_DISABLE_ENGINE", "0") != "1",
+        "server_time": now.isoformat(),
+        "time_eat": now.isoformat(),
+        "last_scan": last_scan,
+        "next_scan": next_scan,
+        "next_broadcast_seconds": max(0, int((datetime.datetime.fromisoformat(next_scan) - now).total_seconds())) if next_scan else None,
+        "signal_window": {
+            "active": active,
+            "seconds_to_stop": seconds_to_boundary if active else 0,
+            "seconds_to_start": seconds_to_boundary if not active else 0,
+        },
+        "markets": list(get_markets(now).keys()),
+    })
+
+
+def _latest_signal_map(items):
+    latest = {}
+    for item in items:
+        asset = str(item.get("asset") or item.get("market") or "").upper()
+        if asset:
+            latest[asset] = dict(item)
+    return latest
+
+
+def _history_items():
+    cutoff = get_eat_time() - datetime.timedelta(days=SIGNAL_HISTORY_DAYS)
+    with API_LOCK:
+        memory = [dict(x) for x in SIGNAL_HISTORY]
+    persistent = _load_persistent_signals()
+    merged = {}
+    for item in persistent + memory:
+        ts = item.get("timestamp") or item.get("timestamp_utc") or item.get("created_at")
+        try:
+            dt = datetime.datetime.fromisoformat(str(ts).replace("Z", "+00:00")) if ts else None
+            if dt and dt.tzinfo is None: dt = dt.replace(tzinfo=EAT)
+            if dt and dt < cutoff: continue
+        except Exception:
+            pass
+        key = str(item.get("id") or f"{item.get('asset')}-{item.get('direction')}-{item.get('timestamp')}")
+        merged[key] = item
+    result = list(merged.values())
+    result.sort(key=lambda x: str(x.get("timestamp") or x.get("created_at") or ""))
+    return result[-500:]
+
+
+@app.route("/api/signals", methods=["GET", "POST"])
+def api_signals():
+    if request.method == "POST":
+        require_auth = os.environ.get("KETS_REQUIRE_SIGNAL_AUTH", "0") == "1"
+        if require_auth:
+            supplied = request.headers.get("X-KETS-API-KEY", "").strip()
+            expected = os.environ.get("KETS_SIGNAL_RECEIVER_KEY", "").strip() or _source_config()[1]
+            if not expected or not secrets.compare_digest(supplied, expected):
+                return jsonify({"error": "Signal receiver authentication failed."}), 401
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            return jsonify({"error": "JSON signal payload required."}), 400
+        asset = str(body.get("asset") or body.get("market") or "").strip().upper()
+        direction = str(body.get("direction") or "").strip().upper()
+        if not asset or direction not in {"BUY", "SELL"}:
+            return jsonify({"error": "Signal must include asset and BUY/SELL direction."}), 400
+        now = get_eat_time()
+        item = dict(body)
+        item["asset"] = asset
+        item["market"] = item.get("market") or asset
+        item["direction"] = direction
+        item["score"] = _num(item.get("score", item.get("strength", 0)))
+        item["strength"] = item.get("strength", item["score"])
+        item["timestamp"] = str(item.get("timestamp") or item.get("timestamp_utc") or now.isoformat())
+        item["id"] = str(item.get("id") or f"{asset}-{direction}-{item['timestamp']}")
+        with API_LOCK:
+            existing = {str(x.get("id")) for x in SIGNAL_HISTORY}
+            if item["id"] not in existing:
+                SIGNAL_HISTORY.append(item)
+                cutoff = now - datetime.timedelta(days=SIGNAL_HISTORY_DAYS)
+                kept = []
+                for x in SIGNAL_HISTORY:
+                    try:
+                        dt = datetime.datetime.fromisoformat(str(x.get("timestamp")).replace("Z", "+00:00"))
+                        if dt.tzinfo is None: dt = dt.replace(tzinfo=EAT)
+                        if dt >= cutoff: kept.append(x)
+                    except Exception:
+                        kept.append(x)
+                SIGNAL_HISTORY[:] = kept
+        _persist_signal(item)
+        return jsonify({"ok": True, "accepted": True, "signal": item}), 200
+
+    user = _current_user()
+    if not user:
+        return jsonify({"error": "Sign in required."}), 401
+    history = _history_items()
+    return jsonify({
+        "ok": True,
+        "signals": _latest_signal_map(history),
+        "history": history,
+        "markets": list(get_markets().keys()),
+        "time_eat": get_eat_time().isoformat(),
+    })
+
+
+@app.route("/api/history", methods=["GET"])
+def api_history():
+    user = _current_user()
+    if not user:
+        return jsonify({"error": "Sign in required."}), 401
+    return jsonify({"ok": True, "history": _history_items(), "days": SIGNAL_HISTORY_DAYS})
+
 
 @app.route("/api/developer/signals")
 def developer_signals():

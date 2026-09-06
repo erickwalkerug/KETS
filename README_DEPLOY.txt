@@ -30,7 +30,7 @@ SECURITY
 
 WEBSITE FEATURES
 - 6:00 AM–6:00 PM EAT signal window
-- 2-minute strategy scan/update interval
+- 1-minute strategy scan/update interval
 - Monday-Friday: GOLD (XAU/USD) only
 - Saturday-Sunday: BTC (BTC/USD) only
 - Live BUY/SELL signal display when unlocked
@@ -71,9 +71,9 @@ The IPN URL must be publicly reachable. Pesapal API 3.0 requires an IPN to be re
 PRIVATE SIGNAL SOURCE / DIRECT PUSH
 - The trading bot POSTs each generated signal to: https://kets.onrender.com/api/signals
 - Set KETS_SIGNAL_RECEIVER_KEY on the WEBSITE to exactly the same secret used by the bot's X-KETS-API-KEY header.
-- Set KETS_DISABLE_ENGINE = 1 on the WEBSITE so it never runs a second strategy engine.
+- Keep KETS_DISABLE_ENGINE = 0 for this self-contained KETS deployment so the current strategy engine continues running.
 - Set KETS_DISABLE_SOURCE_BRIDGE = 1 when using direct bot -> website POST delivery as the primary connection (recommended; avoids blocking login with history imports).
-- The KETS_SIGNAL_SOURCE_URL / KETS_SIGNAL_SOURCE_KEY bridge is enabled for automatic history synchronization from the live trading bot; it imports the bot's existing 7-day signal feed into permanent PostgreSQL storage and continues syncing new history.
+- The direct signal receiver is available at /api/signals; the optional source bridge remains disabled unless explicitly enabled.
 
 The browser never receives the receiver/source key. The website backend uses it server-to-server.
 
@@ -125,7 +125,7 @@ SIGNAL ACCESS RULES (UPDATED)
 - Live signal prices and signal targets are always displayed in USD ($).
 - Payment plans can use UGX for Uganda and USD for international users.
 - Payment expiry is enforced server-side and shown as a live countdown.
-- The website refreshes its live data every 10 seconds with a countdown.
+- The website dashboard refreshes its displayed data every 10 seconds; the strategy engine scans every 1 minute.
 - Paid users retain their subscription/payment history in the account dashboard.
 - The website reads the live signal snapshot from KETS_SIGNAL_SOURCE_URL when configured.
 
