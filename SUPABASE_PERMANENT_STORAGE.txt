@@ -3,7 +3,8 @@ KETS — SUPABASE PERMANENT STORAGE
 1. Run the final SQL schema in Supabase SQL Editor.
 2. In Render → KETS → Environment, add:
 
-SUPABASE_DB_URL=<your Supabase PostgreSQL connection string>
+SUPABASE_URL=https://YOUR-PROJECT.supabase.co
+SUPABASE_PUBLISHABLE_KEY=YOUR_SUPABASE_PUBLISHABLE_KEY
 
 3. Keep the database password private. Do NOT put it in the frontend.
 4. Keep these signal bridge variables configured:
@@ -16,6 +17,6 @@ KETS_DISABLE_SOURCE_BRIDGE=0
 
 5. Redeploy KETS.
 
-The website uses Supabase PostgreSQL for users, profiles, payments and signals.
+The website uses Supabase REST API for users, profiles, payments and signals.
 The trading bot remains the strategy engine and sends signals to /api/signals.
 The browser never receives the Supabase database password or the bot API secret.

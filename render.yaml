@@ -6,10 +6,10 @@ services:
     startCommand: gunicorn app:app --workers 1 --threads 4 --timeout 120
     healthCheckPath: /api/health
     envVars:
-      # Supabase PostgreSQL is the permanent cloud store for users,
-      # profiles, payments, subscriptions and signals.
-      # Set SUPABASE_DB_URL in Render to the Supabase PostgreSQL connection string.
-      - key: SUPABASE_DB_URL
+      # Supabase REST uses only the Project URL and Publishable Key.
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_PUBLISHABLE_KEY
         sync: false
       - key: KETS_SESSION_SECRET
         generateValue: true

@@ -5,901 +5,194 @@ import requests
 import secrets
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
 
-# Render Postgres is the production persistent store. SQLite remains as a
-# local/dev fallback when DATABASE_URL is not configured.
-try:
-    import psycopg
-    from psycopg.rows import dict_row
-    POSTGRES_AVAILABLE = True
-except Exception:
-    psycopg = None
-    dict_row = None
-    POSTGRES_AVAILABLE = False
+# Supabase REST storage: uses ONLY the Project URL + Publishable Key.
+# No PostgreSQL connection string, database password, service-role key, or
+# local SQLite database is required for the deployed service.
+SUPABASE_URL = os.environ.get("SUPABASE_URL", "").strip().rstrip("/")
+SUPABASE_PUBLISHABLE_KEY = os.environ.get("SUPABASE_PUBLISHABLE_KEY", "").strip()
 
-app = Flask(__name__)
-try:
-    from flask_cors import CORS
-    CORS(app)
-except Exception:
-    pass
+class SupabaseIntegrityError(Exception):
+    """Raised when Supabase/PostgREST rejects a duplicate/conflicting row."""
 
-# ============================================================
-# KETS STRATEGY ENGINE — PRODUCTION BACKEND
-# 1M analysis / 2M scan / Telegram bot + channel / Web API
-# ============================================================
+class SupabaseResult:
+    def __init__(self, rows=None):
+        self.rows = rows or []
+    def fetchone(self):
+        return self.rows[0] if self.rows else None
+    def fetchall(self):
+        return list(self.rows)
 
-API_LOCK = Lock()
-SIGNAL_HISTORY = []
-MARKET_STATE = {}
-SIGNAL_HISTORY_DAYS = 7
-last_signal = {}
-
-# Private signal-source bridge. The website polls the trading bot directly so
-# signal delivery does not depend on a browser request reaching /api/signals.
-SOURCE_LOCK = Lock()
-SOURCE_CACHE = {"signals": {}, "history": [], "last_ok": None, "last_status": None, "last_error": None, "last_scan": None, "next_scan": None}
-SOURCE_POLL_SECONDS = max(5, int(os.environ.get("KETS_SOURCE_POLL_SECONDS", "10")))
-
-def _source_config():
-    url = (os.environ.get("KETS_SIGNAL_SOURCE_URL") or "").strip().rstrip("/")
-    # Accept the documented website key and common bot-side names so a key
-    # rename cannot silently break the bridge.
-    key = (os.environ.get("KETS_SIGNAL_SOURCE_KEY") or
-           os.environ.get("KETS_API_KEY") or
-           os.environ.get("KETS_SIGNALS_API_KEY") or "").strip()
-    return url, key
-
-def _source_headers(key):
-    return {"X-KETS-API-KEY": key, "Accept": "application/json"}
-
-def _sync_signal_source_once():
-    """Pull and normalize signals from the private trading-bot API.
-
-    The source bot exposes /api/signals (a list), while older deployments
-    may not expose /api/history. The bridge therefore uses /api/signals as
-    the compatible primary feed and optionally consumes /api/history.
-    """
-    url, key = _source_config()
-    if not url:
-        return False
-    if not key:
-        with SOURCE_LOCK:
-            SOURCE_CACHE["last_status"] = "missing_key"
-            SOURCE_CACHE["last_error"] = "KETS signal source URL is set but no source API key is configured."
-        print("⚠️ KETS source bridge: URL configured but API key is missing.")
-        return False
-
-    try:
-        headers = _source_headers(key)
-        history = []
-
+class SupabaseConnection:
+    """Small DB-API-like adapter for the KETS queries using PostgREST."""
+    def __init__(self):
+        if not SUPABASE_URL or not SUPABASE_PUBLISHABLE_KEY:
+            raise RuntimeError("SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY must be configured.")
+        self.base = SUPABASE_URL + "/rest/v1"
+        self.headers = {
+            "apikey": SUPABASE_PUBLISHABLE_KEY,
+            "Authorization": f"Bearer {SUPABASE_PUBLISHABLE_KEY}",
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+        }
+    def _request(self, method, table, params=None, payload=None, prefer=None):
+        headers = dict(self.headers)
+        if prefer:
+            headers["Prefer"] = prefer
+        r = requests.request(method, f"{self.base}/{table}", headers=headers,
+                             params=params, json=payload, timeout=20)
+        if r.status_code >= 400:
+            text = r.text[:800]
+            if r.status_code in (409, 422) or "duplicate" in text.lower() or "unique" in text.lower():
+                raise SupabaseIntegrityError(text)
+            raise RuntimeError(f"Supabase request failed ({r.status_code}): {text}")
+        if not r.content:
+            return []
         try:
-            # Private engine-history endpoint is authenticated only with the
-            # shared server key, so the website can import signals that were
-            # generated before the website database received them.
-            rh = requests.get(url + "/api/engine-history", headers=headers, timeout=15)
-            print(f"📥 KETS source bridge: GET /api/engine-history -> {rh.status_code}")
-            if rh.status_code == 200:
-                dh = rh.json()
-                if isinstance(dh, dict) and isinstance(dh.get("history"), list):
-                    history = [x for x in dh["history"] if isinstance(x, dict)]
-            elif rh.status_code not in (401, 404):
-                print(f"⚠️ KETS source bridge: engine history returned HTTP {rh.status_code}")
-            if not history:
-                # The deployed trading bot exposes its seven-day history via
-                # authenticated GET /api/signals?limit=200. Import that feed
-                # as a compatibility path for existing bot deployments.
-                rh = requests.get(url + "/api/signals?limit=200", headers=headers, timeout=15)
-                print(f"📥 KETS source bridge: fallback GET /api/signals?limit=200 -> {rh.status_code}")
-                if rh.status_code == 200:
-                    dh = rh.json()
-                    if isinstance(dh, dict) and isinstance(dh.get("signals"), list):
-                        history = [x for x in dh["signals"] if isinstance(x, dict)]
-        except Exception as e:
-            print(f"⚠️ KETS source bridge: history unavailable: {str(e)[:180]}")
-
-        # Keep the website countdown synchronized with the actual strategy
-        # engine when the source exposes /api/status. Older source versions
-        # may not have it, so failure here is intentionally non-fatal.
-        source_status = {}
-        try:
-            rs = requests.get(url + "/api/status", headers=headers, timeout=8)
-            if rs.status_code == 200:
-                candidate = rs.json()
-                if isinstance(candidate, dict):
-                    source_status = candidate
-        except Exception as e:
-            print(f"⚠️ KETS source bridge: status unavailable: {str(e)[:120]}")
-
-        r = requests.get(url + "/api/signals", headers=headers, timeout=15)
-        print(f"📥 KETS source bridge: GET /api/signals -> {r.status_code}")
-        if r.status_code != 200:
-            with SOURCE_LOCK:
-                SOURCE_CACHE["last_status"] = r.status_code
-                SOURCE_CACHE["last_error"] = f"Source returned HTTP {r.status_code}"
-            return False
-
-        data = r.json()
-        raw_current = data.get("signals", []) if isinstance(data, dict) else []
-
-        current_items = []
-        if isinstance(raw_current, list):
-            current_items = [x for x in raw_current if isinstance(x, dict)]
-        elif isinstance(raw_current, dict):
-            current_items = [x for x in raw_current.values() if isinstance(x, dict)]
-
-        if not history:
-            history = list(current_items)
-
-        latest = {}
-        for item in current_items + history:
-            asset = item.get("asset", item.get("market", "UNKNOWN"))
-            old_item = latest.get(asset)
-            if old_item is None or str(item.get("timestamp", "")) > str(old_item.get("timestamp", "")):
-                latest[asset] = item
-
-        # Import the source history into the permanent website database.
-        # _persist_signal is idempotent, so repeated bridge polls are safe.
-        imported = 0
-        for item in history:
-            try:
-                normalized = _normalize_received_signal(item)
-                _persist_signal(normalized)
-                imported += 1
-            except Exception:
-                continue
-
-        with SOURCE_LOCK:
-            SOURCE_CACHE["signals"] = latest
-            SOURCE_CACHE["history"] = history[-500:]
-            SOURCE_CACHE["last_ok"] = get_eat_time().isoformat()
-            SOURCE_CACHE["last_status"] = 200
-            SOURCE_CACHE["last_error"] = None
-            SOURCE_CACHE["last_scan"] = source_status.get("last_scan") or source_status.get("last_scan_time")
-            SOURCE_CACHE["next_scan"] = source_status.get("next_scan") or source_status.get("next_broadcast")
-
-
-        print(f"💾 KETS source bridge: imported {imported} history item(s) into permanent storage")
-
-        print(f"✅ KETS source bridge: received {len(latest)} current signal(s), {len(history)} history item(s)")
-        return True
-
-    except Exception as e:
-        with SOURCE_LOCK:
-            SOURCE_CACHE["last_status"] = "error"
-            SOURCE_CACHE["last_error"] = str(e)[:300]
-        print(f"⚠️ KETS source bridge error: {str(e)[:300]}")
-        return False
-
-def run_signal_source_bridge():
-    print("📡 KETS source bridge starting")
-    url, key = _source_config()
-    if url:
-        print(f"🔗 Signal source configured: {url}")
-    else:
-        print("⚠️ Signal source URL not configured; website-local signals only")
-    while True:
-        try:
-            if _source_config()[0]:
-                _sync_signal_source_once()
-        except Exception as e:
-            print(f"⚠️ KETS source bridge loop error: {str(e)[:300]}")
-        time.sleep(SOURCE_POLL_SECONDS)
-
-
-
-def get_eat_time():
-    return datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=3)
-
-
-def trading_hours_open():
-    t = get_eat_time().time()
-    return datetime.time(6, 0) <= t < datetime.time(18, 0)
-
-
-def get_markets():
-    # KETS market schedule: GOLD on weekdays only.
-    if get_eat_time().weekday() < 5:
-        return {"GOLD": "XAU/USD"}
-    return {}
-
-
-def _num(x):
-    try:
-        x = float(x)
-        return x if math.isfinite(x) else None
-    except (TypeError, ValueError):
-        return None
-
-
-def keep_web_server_alive():
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
-
-
-def _source_snapshot():
-    with SOURCE_LOCK:
-        return dict(SOURCE_CACHE)
-
-def signal_window():
-    now = get_eat_time()
-    start = now.replace(hour=6, minute=0, second=0, microsecond=0)
-    stop = now.replace(hour=18, minute=0, second=0, microsecond=0)
-    if now < start:
-        return {"active": False, "seconds_to_start": int((start-now).total_seconds()), "seconds_to_stop": 0}
-    if now >= stop:
-        tomorrow = start + datetime.timedelta(days=1)
-        return {"active": False, "seconds_to_start": int((tomorrow-now).total_seconds()), "seconds_to_stop": 0}
-    return {"active": True, "seconds_to_start": 0, "seconds_to_stop": int((stop-now).total_seconds())}
-
-
-# ------------------------- WEB API ---------------------------
-@app.route("/")
-def home():
-    return send_from_directory(os.path.dirname(os.path.abspath(__file__)), "index.html")
-
-
-@app.route("/download/kets-android.apk")
-def download_kets_android():
-    """Direct download of the official KETS Android APK."""
-    base = os.path.dirname(os.path.abspath(__file__))
-    # Keep the APK in static/ for deployment, with a root-file fallback for
-    # older uploads. This route is public so users can download without signing in.
-    static_dir = os.path.join(base, "static")
-    apk_path = os.path.join(static_dir, "kets-android.apk")
-    if not os.path.isfile(apk_path):
-        apk_path = os.path.join(base, "kets-android.apk")
-        static_dir = base
-    if not os.path.isfile(apk_path):
-        return jsonify({"error": "KETS Android app is temporarily unavailable."}), 404
-    return send_from_directory(static_dir, os.path.basename(apk_path),
-                               as_attachment=True, download_name="KETS-Android.apk",
-                               mimetype="application/vnd.android.package-archive",
-                               max_age=0)
-
-
-@app.route("/app.js")
-def app_js():
-    """Serve the frontend JavaScript."""
-    base = os.path.dirname(os.path.abspath(__file__))
-    path = os.path.join(base, "app.js")
-    with open(path, "r", encoding="utf-8") as fh:
-        js = fh.read()
-    return app.response_class(js, mimetype="application/javascript")
-
-
-@app.route("/styles.css")
-def styles_css():
-    return send_from_directory(os.path.dirname(os.path.abspath(__file__)), "styles.css")
-
-
-@app.route("/manifest.json")
-def manifest():
-    return send_from_directory(os.path.dirname(os.path.abspath(__file__)), "manifest.json")
-
-
-@app.route("/service-worker.js")
-def service_worker():
-    return send_from_directory(os.path.dirname(os.path.abspath(__file__)), "service-worker.js")
-
-
-@app.route("/api/health")
-def api_health():
-    return jsonify({"ok": True, "status": "online", "time_eat": get_eat_time().isoformat()})
-
-
-@app.route("/api/status")
-def api_status():
-    now = get_eat_time()
-    local_next = globals().get("next_scan")
-    local_last = globals().get("last_scan")
-    local_engine = bool(globals().get("engine_started", False))
-    snap = _source_snapshot()
-
-    # When this website is configured as a bridge (the normal Render setup),
-    # use the source engine's real scan timestamps. If an older source does
-    # not publish them, fall back to a deterministic one-minute boundary.
-    next_scan = snap.get("next_scan") or local_next
-    last_scan = snap.get("last_scan") or local_last
-    try:
-        next_dt = datetime.datetime.fromisoformat(str(next_scan)) if next_scan else None
-        if next_dt is None or next_dt <= now:
-            next_dt = (now + datetime.timedelta(minutes=1)).replace(second=0, microsecond=0)
-            if next_dt <= now:
-                next_dt += datetime.timedelta(minutes=1)
-            next_scan = next_dt.isoformat()
-        next_seconds = max(0, int((next_dt - now).total_seconds()))
-    except Exception:
-        next_dt = (now + datetime.timedelta(minutes=1)).replace(second=0, microsecond=0)
-        if next_dt <= now:
-            next_dt += datetime.timedelta(minutes=1)
-        next_scan = next_dt.isoformat()
-        next_seconds = max(0, int((next_dt - now).total_seconds()))
-
-    with API_LOCK:
-        return jsonify({
-            "status": "online",
-            "engine_running": local_engine or bool(os.environ.get("KETS_SIGNAL_SOURCE_URL")),
-            "data_provider_configured": bool(os.environ.get("TWELVE_DATA_API_KEY")),
-            "refresh_interval_seconds": 60,
-            "dashboard_refresh_interval_seconds": 10,
-            "scan_interval_seconds": 60,
-            "history_days": SIGNAL_HISTORY_DAYS,
-            "trading_hours_eat": "06:00-18:00",
-            "signal_window": signal_window(),
-            "next_broadcast_seconds": next_seconds,
-            "server_time": now.isoformat(),
-            "last_scan": last_scan,
-            "next_scan": next_scan,
-            "source_last_ok": snap.get("last_ok"),
-            "source_last_status": snap.get("last_status"),
-            "source_last_error": snap.get("last_error"),
-            "markets": list(get_markets().keys()),
-            "signal_count": len(SIGNAL_HISTORY),
-        })
-
-
-@app.route("/api/market")
-def api_market():
-    with API_LOCK:
-        markets = {}
-        for asset, item in MARKET_STATE.items():
-            safe = dict(item)
-            # Keep raw market price public, but hide strategy-derived fields when locked.
-            if not web_access_paid():
-                safe.pop("signal", None)
-                safe.pop("score", None)
-            markets[asset] = safe
-        return jsonify({"markets": markets, "time_eat": get_eat_time().isoformat()})
-
-
-def _receiver_key():
-    """Secret accepted by the bot -> website POST receiver.
-
-    Keep this server-side only.  By default it uses the same shared secret
-    already documented for the KETS bridge, while allowing a dedicated
-    receiver key when desired.
-    """
-    return (os.environ.get("KETS_SIGNAL_RECEIVER_KEY") or
-            os.environ.get("KETS_SIGNAL_SOURCE_KEY") or
-            os.environ.get("KETS_API_KEY") or
-            os.environ.get("KETS_SIGNALS_API_KEY") or "").strip()
-
-
-def _receiver_authorized():
-    """Allow the trading bot to push signals directly to the dashboard.
-
-    Direct signal delivery is open by default so a mismatched Render secret
-    cannot block otherwise valid bot signals. Set KETS_REQUIRE_SIGNAL_AUTH=1
-    on the KETS service if strict X-KETS-API-KEY validation is desired.
-    """
-    if os.environ.get("KETS_REQUIRE_SIGNAL_AUTH", "0").strip() != "1":
-        return True
-    expected = _receiver_key()
-    supplied = request.headers.get("X-KETS-API-KEY", "").strip()
-    return bool(expected and supplied) and secrets.compare_digest(supplied, expected)
-
-
-def _normalize_received_signal(payload):
-    """Normalize the trading bot's API payload to the website signal shape."""
-    item = dict(payload)
-    asset = str(item.get("asset", item.get("market", ""))).strip().upper()
-    direction = str(item.get("direction", "")).strip().upper()
-
-    if not asset:
-        raise ValueError("asset is required")
-    if direction not in {"BUY", "SELL"}:
-        raise ValueError("direction must be BUY or SELL")
-
-    required = ("id", "score", "market_price", "take_profit", "stop_loss")
-    missing = [key for key in required if item.get(key) is None]
-    if missing:
-        raise ValueError("missing required fields: " + ", ".join(missing))
-
-    try:
-        score = float(item["score"])
-        market_price = float(item["market_price"])
-        take_profit = float(item["take_profit"])
-        stop_loss = float(item["stop_loss"])
-    except (TypeError, ValueError):
-        raise ValueError("score, market_price, take_profit and stop_loss must be numeric")
-
-    if not all(math.isfinite(x) for x in (score, market_price, take_profit, stop_loss)):
-        raise ValueError("numeric signal fields must be finite")
-
-    timestamp_utc = item.get("timestamp_utc")
-    # The source bot historically used "YYYY-MM-DD HH:MM:SS EAT", which
-    # JavaScript Date.parse() treats as invalid. Prefer the ISO UTC timestamp
-    # whenever it exists and retain the original display value separately.
-    timestamp = timestamp_utc or item.get("timestamp") or get_eat_time().isoformat()
-
-    move = item.get("price_move")
-    if move is None:
-        move = item.get("market_move")
-    if move is None:
-        move = item.get("expected_price_move")
-
-    move_pct = item.get("price_move_pct")
-    if move_pct is None:
-        move_pct = item.get("market_move_pct")
-    if move_pct is None:
-        move_pct = item.get("expected_price_move_percent")
-
-    expected_move = item.get("expected_move")
-    if expected_move is None:
-        expected_move = move
-
-    expected_move_pct = item.get("expected_move_pct")
-    if expected_move_pct is None:
-        expected_move_pct = move_pct
-
-    # Preserve the bot's richer fields and add aliases expected by the
-    # existing website frontend/history renderer.
-    item.update({
-        "id": str(item["id"]),
-        "asset": asset,
-        "market": asset,
-        "direction": direction,
-        "score": score,
-        "strength": score,
-        "market_price": market_price,
-        "entry": item.get("entry", market_price),
-        "price": item.get("price", market_price),
-        "current_price": item.get("current_price", market_price),
-        "take_profit": take_profit,
-        "stop_loss": stop_loss,
-        "price_move": move,
-        "price_move_pct": move_pct,
-        "market_move": move,
-        "market_move_pct": move_pct,
-        "expected_price_move": item.get("expected_price_move", move),
-        "expected_price_move_percent": item.get("expected_price_move_percent", move_pct),
-        "expected_move": expected_move,
-        "expected_move_pct": expected_move_pct,
-        "estimated_duration": item.get("estimated_duration", item.get("duration_text")),
-        "timestamp": timestamp,
-        "source_timestamp": item.get("timestamp"),
-        "timestamp_utc": timestamp_utc or timestamp,
-        "status": item.get("status", "ACTIVE"),
-        # Preserve the trading bot's additive entry-quality layer.
-        # These fields remain optional for backward compatibility.
-        "entry_quality_score": item.get("entry_quality_score", item.get("entryQualityScore")),
-        "entry_quality_status": item.get("entry_quality_status", item.get("entryQualityStatus")),
-        "entry_quality_reversal": item.get("entry_quality_reversal", item.get("entryQualityReversal")),
-        "entry_quality_reasons": item.get("entry_quality_reasons", item.get("entryQualityReasons", [])),
-        "entry_quality": item.get("entry_quality"),
-        "received_at": get_eat_time().isoformat(),
-    })
-    return item
-
-
-def _store_received_signal(item):
-    """Idempotently store an authenticated pushed signal for website use."""
-    now = get_eat_time()
-    cutoff = now - datetime.timedelta(days=SIGNAL_HISTORY_DAYS)
-    with API_LOCK:
-        # Retain only recent entries first.
-        kept = []
-        for existing in SIGNAL_HISTORY:
-            try:
-                if datetime.datetime.fromisoformat(existing["timestamp"]) >= cutoff:
-                    kept.append(existing)
-            except Exception:
-                continue
-
-        duplicate = any(existing.get("id") == item.get("id") for existing in kept)
-        if not duplicate:
-            kept.append(item)
-        SIGNAL_HISTORY[:] = kept[-500:]
-
-    # Make the pushed signal immediately visible to the website feed even
-    # when the optional pull bridge is disabled or unavailable.
-    with SOURCE_LOCK:
-        latest = dict(SOURCE_CACHE.get("signals", {}))
-        asset = item.get("asset", item.get("market", "UNKNOWN"))
-        previous = latest.get(asset)
-        if previous is None or str(item.get("timestamp", "")) >= str(previous.get("timestamp", "")):
-            latest[asset] = item
-        source_history = list(SOURCE_CACHE.get("history", []))
-        if not any(x.get("id") == item.get("id") for x in source_history):
-            source_history.append(item)
-        SOURCE_CACHE["signals"] = latest
-        SOURCE_CACHE["history"] = source_history[-500:]
-        SOURCE_CACHE["last_ok"] = now.isoformat()
-        SOURCE_CACHE["last_status"] = 200
-        SOURCE_CACHE["last_error"] = None
-
-    # Permanent database storage is independent of the in-memory API cache.
-    # This survives Render restarts/deploys when SUPABASE_DB_URL points to the
-    # KETS Supabase PostgreSQL database.
-    _persist_signal(item)
-    return duplicate
-
-
-@app.route("/api/signals", methods=["POST"])
-def api_receive_signal():
-    """Receive an authenticated signal pushed directly from the trading bot."""
-    if not _receiver_authorized():
-        print("❌ KETS website rejected signal: unauthorized API key")
-        return jsonify({"error": "Unauthorized"}), 401
-
-    payload = request.get_json(silent=True)
-    if not isinstance(payload, dict):
-        return jsonify({"error": "Invalid JSON payload"}), 400
-
-    try:
-        item = _normalize_received_signal(payload)
-    except ValueError as exc:
-        return jsonify({"error": str(exc)}), 400
-
-    duplicate = _store_received_signal(item)
-    print(
-        f"📥 WEBSITE SIGNAL RECEIVED: {item['asset']} "
-        f"{item['direction']} {item['id']}"
-    )
-    print(
-        f"✅ KETS website received signal: {item['id']} "
-        f"({'duplicate' if duplicate else 'stored'})"
-    )
-    return jsonify({
-        "status": "success",
-        "message": "Signal received",
-        "id": item["id"],
-        "duplicate": duplicate,
-        "asset": item["asset"],
-        "direction": item["direction"],
-    }), 200 if duplicate else 201
-
-
-@app.route("/api/signals")
-def api_signals():
-    """Return the current KETS signal feed to every authenticated user.
-
-    There is no paid/unpaid visibility delay: free and paid accounts receive
-    the same live signal snapshot. Payments can still be used for the
-    account's existing plans, but they no longer gate signal freshness.
-    """
-    user = _current_user()
-    if not user:
-        return jsonify({"error": "Sign in required."}), 401
-    if not user.get("developer") and os.environ.get("KETS_ACCESS", "").lower() != "paid":
-        access = _user_access(user["id"])
-        if not access:
-            return jsonify({
-                "error": "Your KETS payment plan has expired or is not active.",
-                "payment_required": True,
-                "access_expired": True,
-            }), 402
-
-    source_url = os.environ.get("KETS_SIGNAL_SOURCE_URL", "").strip().rstrip("/")
-    source_key = _source_config()[1]
-    now = get_eat_time()
-
-    if source_url and source_key:
-        snap = _source_snapshot()
-        if snap.get("last_ok"):
-            return jsonify({
-                "signals": snap.get("signals", {}),
-                "time_eat": now.isoformat(),
-                "source": "private KETS strategy engine",
-                "mode": "live",
-                "delay_minutes": 0,
-                "source_last_ok": snap.get("last_ok"),
-            })
-        if _sync_signal_source_once():
-            snap = _source_snapshot()
-            return jsonify({
-                "signals": snap.get("signals", {}),
-                "time_eat": now.isoformat(),
-                "source": "private KETS strategy engine",
-                "mode": "live",
-                "delay_minutes": 0,
-                "source_last_ok": snap.get("last_ok"),
-            })
-        return jsonify({"error": "Unable to reach the private signal engine.", "source_status": snap.get("last_status")}), 502
-
-    history_snapshot = _load_persistent_signals()
-    if not history_snapshot:
-        with API_LOCK:
-            history_snapshot = list(SIGNAL_HISTORY)
-    latest = {}
-    for x in history_snapshot:
-        asset = x.get("asset", x.get("market", "UNKNOWN"))
-        previous = latest.get(asset)
-        if previous is None or x.get("timestamp", "") > previous.get("timestamp", ""):
-            latest[asset] = x
-    return jsonify({
-        "signals": latest,
-        "time_eat": now.isoformat(),
-        "source": "website-local engine",
-        "mode": "live",
-        "delay_minutes": 0,
-    })
-
-
-def _fetch_signal_history_from_source(source_url, source_key):
-    if not source_url:
-        return None
-    try:
-        headers = {"Accept": "application/json"}
-        if source_key:
-            headers["X-KETS-API-KEY"] = source_key
-        r = requests.get(source_url.rstrip("/") + "/api/history", headers=headers, timeout=15)
-        if r.status_code != 200:
-            return None
-        data = r.json()
-        return data.get("history", [])
-    except Exception:
-        return None
-
-
-@app.route("/api/engine-history")
-def api_engine_history():
-    """Private source-history endpoint for the KETS website bridge.
-
-    It deliberately uses the server-to-server API key rather than a user
-    session, allowing the website to import the bot's existing in-memory
-    seven-day history after deployment.
-    """
-    if not _receiver_authorized():
-        return jsonify({"error": "Unauthorized"}), 401
-    with API_LOCK:
-        history = list(SIGNAL_HISTORY)[-500:]
-    return jsonify({
-        "history": history,
-        "count": len(history),
-        "time_eat": get_eat_time().isoformat(),
-    })
-
-
-@app.route("/api/history")
-def api_history():
-    user = _current_user()
-    if not user:
-        return jsonify({"error": "Sign in required."}), 401
-    if not user.get("developer") and os.environ.get("KETS_ACCESS", "").lower() != "paid":
-        access = _user_access(user["id"])
-        if not access:
-            return jsonify({
-                "error": "Your KETS payment plan has expired or is not active.",
-                "payment_required": True,
-                "access_expired": True,
-            }), 402
-
-    now = get_eat_time()
-    cutoff_7d = now - datetime.timedelta(days=SIGNAL_HISTORY_DAYS)
-
-    source_url = os.environ.get("KETS_SIGNAL_SOURCE_URL", "").strip().rstrip("/")
-    source_key = _source_config()[1]
-    if source_url and source_key:
-        snap = _source_snapshot()
-        history = list(snap.get("history", [])) if snap.get("last_ok") else _fetch_signal_history_from_source(source_url, source_key)
-    else:
-        history = None
-    if history is None:
-        history = _load_persistent_signals()
-        if not history:
-            with API_LOCK:
-                history = list(SIGNAL_HISTORY)
-
-    items = []
-    for x in history:
-        try:
-            raw_ts = x.get("timestamp_utc") or x.get("timestamp")
-            dt = datetime.datetime.fromisoformat(str(raw_ts).replace("Z", "+00:00"))
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=datetime.timezone.utc)
+            data = r.json()
         except Exception:
-            # Keep a scan visible even if an older source payload contains a
-            # non-ISO EAT timestamp; it can still be displayed safely.
-            dt = now
-        if dt < cutoff_7d:
-            continue
-        # Give old source records a browser-safe timestamp without changing
-        # their original source timestamp.
-        if not x.get("timestamp_utc"):
-            x = dict(x)
-            x["timestamp_utc"] = dt.isoformat()
-        items.append(x)
+            return []
+        return data if isinstance(data, list) else [data] if isinstance(data, dict) else []
 
-    return jsonify({
-        "history": items[-500:],
-        "mode": "live",
-        "delay_minutes": 0,
-        "time_eat": now.isoformat(),
-    })
+    def execute(self, sql, params=()):
+        q = " ".join(str(sql).strip().split())
+        low = q.lower()
+        params = tuple(params or ())
 
+        # SELECT queries used by KETS.
+        if low.startswith("select"):
+            table_m = re.search(r"from\s+(users|payments|signals)\b", low)
+            if not table_m:
+                raise RuntimeError(f"Unsupported Supabase SELECT: {q[:200]}")
+            table = table_m.group(1)
+            if "count(*) n" in low and table == "payments":
+                rows = self._request("GET", "payments", {"select":"plan,status,updated_at", "status":"eq.COMPLETED", "updated_at":"not.is.null"})
+                counts = {}
+                for row in rows:
+                    plan = row.get("plan")
+                    counts[plan] = counts.get(plan, 0) + 1
+                return SupabaseResult([{"plan":k,"n":v} for k,v in counts.items()])
 
-@app.route("/api/source-status")
-def api_source_status():
-    # Operational diagnostics; never expose the secret key.
-    url, key = _source_config()
-    snap = _source_snapshot()
-    return jsonify({
-        "configured": bool(url and key),
-        "source_url": url,
-        "key_configured": bool(key),
-        "last_ok": snap.get("last_ok"),
-        "last_status": snap.get("last_status"),
-        "last_error": snap.get("last_error"),
-        "signal_count": len(snap.get("signals", {})),
-        "history_count": len(snap.get("history", [])),
-        "poll_seconds": SOURCE_POLL_SECONDS,
-    })
+            select_m = re.search(r"select\s+(.*?)\s+from\s+", q, re.I)
+            select_cols = select_m.group(1).strip() if select_m else "*"
+            select_cols = select_cols.replace(" COLLATE NOCASE", "")
+            api_params = {"select": select_cols}
 
+            # WHERE conditions in the known KETS queries.
+            if table == "users":
+                if "where id=" in low:
+                    api_params["id"] = f"eq.{params[0]}"
+                elif "where email=" in low:
+                    api_params["email"] = f"ilike.{params[0]}"
+            elif table == "payments":
+                if "where user_id=" in low:
+                    api_params["user_id"] = f"eq.{params[0]}"
+                    if "status='completed'" in low:
+                        api_params["status"] = "eq.COMPLETED"
+                elif "where tx_ref=" in low:
+                    api_params["tx_ref"] = f"eq.{params[0]}"
+                elif "where status='completed'" in low:
+                    api_params["status"] = "eq.COMPLETED"
+                if "status='completed'" in low and "status" not in api_params:
+                    api_params["status"] = "eq.COMPLETED"
+            elif table == "signals":
+                if "timestamp >=" in low:
+                    api_params["timestamp"] = f"gte.{params[0]}"
 
-# ============================================================
-# KETS ACCOUNTS / PROFILES / SUBSCRIPTIONS
-# ============================================================
-# Production: Render Postgres via DATABASE_URL.
-# Local/dev fallback: SQLite kets.db.
-# Postgres is preferred automatically whenever DATABASE_URL is present.
-def _normalize_database_url(value):
-    """Normalize Supabase pooler URLs for Render's persistent backend.
+            if "order by created_at desc" in low:
+                api_params["order"] = "created_at.desc"
+            elif "order by updated_at desc" in low:
+                api_params["order"] = "updated_at.desc"
+            elif "order by timestamp asc" in low:
+                api_params["order"] = "timestamp.asc"
+            if "limit 100" in low:
+                api_params["limit"] = "100"
+            elif "limit 500" in low:
+                api_params["limit"] = "500"
 
-    Keeps the existing environment-variable setup unchanged. If an older
-    Render variable contains the Supabase transaction-pooler port (6543),
-    automatically switch it to the Session Pooler port (5432), which is the
-    connection mode used by this long-running Flask/Gunicorn service.
-    """
-    value = (value or "").strip()
-    if not value:
-        return value
-    try:
-        parts = urlsplit(value)
-        host = (parts.hostname or "").lower()
-        if host.endswith(".pooler.supabase.com") and parts.port == 6543:
-            hostname = parts.hostname
-            if ":" in hostname and not hostname.startswith("["):
-                hostname = f"[{hostname}]"
-            netloc = hostname
-            if parts.username is not None:
-                from urllib.parse import quote
-                netloc = quote(parts.username, safe="") + ":"
-                if parts.password is not None:
-                    netloc += quote(parts.password, safe="")
-                netloc += "@" + hostname
-            netloc += ":5432"
-            return urlunsplit((parts.scheme, netloc, parts.path, parts.query, parts.fragment))
-    except Exception as exc:
-        print(f"⚠️ Database URL normalization skipped: {str(exc)[:160]}")
-    return value
+            rows = self._request("GET", table, api_params)
+            return SupabaseResult(rows)
 
-DATABASE_URL = _normalize_database_url(
-    os.environ.get("SUPABASE_DB_URL", "").strip()
-    or os.environ.get("DATABASE_URL", "").strip()
-)
-DB_PATH = os.environ.get("KETS_DB_PATH", os.path.join(os.path.dirname(os.path.abspath(__file__)), "kets.db"))
-# SQLite needs a process lock because the fallback database is file-based.
-# PostgreSQL does not: allowing concurrent connections prevents the background
-# signal-history importer from blocking interactive login requests.
+        # INSERT/UPSERT queries.
+        if low.startswith("insert"):
+            table_m = re.search(r"into\s+(users|payments|signals)\s*\((.*?)\)\s+values", q, re.I)
+            if not table_m:
+                raise RuntimeError(f"Unsupported Supabase INSERT: {q[:240]}")
+            table = table_m.group(1)
+            columns = [c.strip() for c in table_m.group(2).split(",")]
+            row = dict(zip(columns, params))
+            if table == "users":
+                self._request("POST", table, payload=row, prefer="return=minimal")
+            elif table == "payments":
+                self._request("POST", table, payload=row,
+                              prefer="resolution=merge-duplicates,return=minimal")
+            elif table == "signals":
+                self._request("POST", table, payload=row,
+                              prefer="resolution=merge-duplicates,return=minimal")
+            return SupabaseResult([])
+
+        # UPDATE queries.
+        if low.startswith("update users set"):
+            values = {
+                "name": params[0], "country_name": params[1], "country_code": params[2],
+                "profile_picture": params[3], "updated_at": params[4]
+            }
+            self._request("PATCH", "users", {"id": f"eq.{params[5]}"}, values,
+                          prefer="return=minimal")
+            return SupabaseResult([])
+
+        if low.startswith("update payments set"):
+            # KETS uses two forms: completed update and non-completed status update.
+            if "updated_at=? where tx_ref=?" in low:
+                values = {"tracking_id": params[0], "status": "COMPLETED",
+                          "amount": params[1], "updated_at": params[2]}
+                tx_ref = params[3]
+            else:
+                values = {"tracking_id": params[0], "status": params[1], "amount": params[2]}
+                tx_ref = params[3]
+            self._request("PATCH", "payments", {"tx_ref": f"eq.{tx_ref}"}, values,
+                          prefer="return=minimal")
+            return SupabaseResult([])
+
+        raise RuntimeError(f"Unsupported Supabase query: {q[:300]}")
+
+    def commit(self):
+        pass
+    def close(self):
+        pass
+
+# Compatibility names retained so the rest of KETS keeps its existing logic.
+POSTGRES_AVAILABLE = False
+DB_PATH = ""
 _SQLITE_DB_LOCK = Lock()
 class _ConditionalDbLock:
     def __enter__(self):
-        self._sqlite = not bool(globals().get("DATABASE_URL", "").strip())
-        if self._sqlite:
-            _SQLITE_DB_LOCK.acquire()
         return self
     def __exit__(self, exc_type, exc, tb):
-        if self._sqlite:
-            _SQLITE_DB_LOCK.release()
         return False
 DB_LOCK = _ConditionalDbLock()
 COUNTRY_REQUIRED = True
 
 def using_postgres():
-    return bool(DATABASE_URL)
+    # Existing KETS code uses this only to select SQL syntax. The adapter above
+    # accepts both forms and always sends the operation through Supabase REST.
+    return bool(SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY)
 
 def db_conn():
-    if using_postgres():
-        if not POSTGRES_AVAILABLE:
-            raise RuntimeError("DATABASE_URL is configured but psycopg is not installed.")
-        return psycopg.connect(DATABASE_URL, row_factory=dict_row, connect_timeout=5, options="-c statement_timeout=8000")
-    conn = sqlite3.connect(DB_PATH, timeout=20, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    return conn
+    return SupabaseConnection()
 
 def _db_sql(sql):
-    # Existing KETS queries use SQLite-style ? placeholders. Translate them
-    # centrally for PostgreSQL so the application logic stays unchanged.
-    if using_postgres():
-        sql = sql.replace(" COLLATE NOCASE", "")
-        sql = sql.replace("?", "%s")
     return sql
 
 def db_execute(conn, sql, params=()):
-    return conn.execute(_db_sql(sql), params)
+    return conn.execute(sql, params)
 
 def init_db():
-    with DB_LOCK:
-        conn = db_conn()
-        if using_postgres():
-            statements = [
-                """CREATE TABLE IF NOT EXISTS users (
-                    id TEXT PRIMARY KEY,
-                    email TEXT NOT NULL UNIQUE,
-                    password_hash TEXT,
-                    name TEXT NOT NULL DEFAULT '',
-                    country_name TEXT NOT NULL DEFAULT '',
-                    country_code TEXT NOT NULL DEFAULT '',
-                    profile_picture TEXT NOT NULL DEFAULT '',
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                )""",
-                """CREATE TABLE IF NOT EXISTS payments (
-                    id TEXT PRIMARY KEY,
-                    user_id TEXT NOT NULL,
-                    tx_ref TEXT NOT NULL UNIQUE,
-                    tracking_id TEXT,
-                    plan TEXT NOT NULL,
-                    amount DOUBLE PRECISION NOT NULL,
-                    currency TEXT NOT NULL DEFAULT 'UGX',
-                    status TEXT NOT NULL DEFAULT 'PENDING',
-                    network TEXT NOT NULL DEFAULT '',
-                    email TEXT NOT NULL,
-                    phone TEXT NOT NULL,
-                    created_at TEXT NOT NULL,
-                    updated_at TEXT NOT NULL
-                )""",
-                "CREATE INDEX IF NOT EXISTS idx_payments_user ON payments(user_id)",
-                "CREATE INDEX IF NOT EXISTS idx_payments_status ON payments(status)",
-                """CREATE TABLE IF NOT EXISTS signals (
-                    id TEXT PRIMARY KEY,
-                    asset TEXT NOT NULL,
-                    direction TEXT NOT NULL,
-                    score DOUBLE PRECISION NOT NULL,
-                    timestamp TEXT NOT NULL,
-                    payload TEXT NOT NULL,
-                    created_at TEXT NOT NULL
-                )""",
-                "CREATE INDEX IF NOT EXISTS idx_signals_asset_time ON signals(asset, timestamp)",
-                "CREATE INDEX IF NOT EXISTS idx_signals_time ON signals(timestamp)",
-            ]
-            for statement in statements:
-                conn.execute(statement)
-        else:
-            conn.executescript("""
-            CREATE TABLE IF NOT EXISTS users (
-                id TEXT PRIMARY KEY,
-                email TEXT NOT NULL UNIQUE COLLATE NOCASE,
-                password_hash TEXT,
-                name TEXT NOT NULL DEFAULT '',
-                country_name TEXT NOT NULL DEFAULT '',
-                country_code TEXT NOT NULL DEFAULT '',
-                profile_picture TEXT NOT NULL DEFAULT '',
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            );
-            CREATE TABLE IF NOT EXISTS payments (
-                id TEXT PRIMARY KEY,
-                user_id TEXT NOT NULL,
-                tx_ref TEXT NOT NULL UNIQUE,
-                tracking_id TEXT,
-                plan TEXT NOT NULL,
-                amount REAL NOT NULL,
-                currency TEXT NOT NULL DEFAULT 'UGX',
-                status TEXT NOT NULL DEFAULT 'PENDING',
-                network TEXT NOT NULL DEFAULT '',
-                email TEXT NOT NULL,
-                phone TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_payments_user ON payments(user_id);
-            CREATE INDEX IF NOT EXISTS idx_payments_status ON payments(status);
-            CREATE TABLE IF NOT EXISTS signals (
-                id TEXT PRIMARY KEY,
-                asset TEXT NOT NULL,
-                direction TEXT NOT NULL,
-                score REAL NOT NULL,
-                timestamp TEXT NOT NULL,
-                payload TEXT NOT NULL,
-                created_at TEXT NOT NULL
-            );
-            CREATE INDEX IF NOT EXISTS idx_signals_asset_time ON signals(asset, timestamp);
-            CREATE INDEX IF NOT EXISTS idx_signals_time ON signals(timestamp);
-            """)
-        conn.commit()
-        conn.close()
+    # Schema is managed in Supabase SQL Editor. Runtime does not open a
+    # PostgreSQL connection and never needs a database password.
+    if not SUPABASE_URL or not SUPABASE_PUBLISHABLE_KEY:
+        print("⚠️ SUPABASE_URL / SUPABASE_PUBLISHABLE_KEY not configured yet")
+    else:
+        print("✅ KETS Supabase REST storage configured (Project URL + Publishable Key only)")
 
 init_db()
 
@@ -1006,7 +299,7 @@ def api_register():
             )
             conn.commit()
         except Exception as exc:
-            if not isinstance(exc, sqlite3.IntegrityError) and not (POSTGRES_AVAILABLE and isinstance(exc, psycopg.IntegrityError)):
+            if not isinstance(exc, (sqlite3.IntegrityError, SupabaseIntegrityError)):
                 raise
             conn.close()
             return jsonify({"error": "That email already has an account. Please sign in."}), 409

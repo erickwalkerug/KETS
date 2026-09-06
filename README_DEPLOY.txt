@@ -19,7 +19,8 @@ IMPORTANT ENVIRONMENT VARIABLES
 - KETS_PUBLIC_URL = https://kets.onrender.com unless you use a custom domain
 - KETS_SESSION_SECRET = long random secret used to sign KETS access tokens
 - KETS_ACCESS = leave locked in production; set paid only for temporary owner/admin override
-- SUPABASE_DB_URL = Supabase PostgreSQL connection string (recommended permanent storage)
+- SUPABASE_URL = Supabase Project URL
+- SUPABASE_PUBLISHABLE_KEY = Supabase Publishable Key
 
 SECURITY
 - bot.py contains the strategy and remains server-side.
@@ -100,16 +101,16 @@ PLANS
 
 
 RENDER CLOUD PERSISTENCE
-The production account store is now Render Postgres. The Blueprint provisions a managed Postgres database named kets-db and injects its internal connection string into DATABASE_URL. Registered users, password hashes, profiles, payments, payment history, and subscription records are stored in Postgres instead of the web service's ephemeral filesystem. Render documents that Blueprint `fromDatabase` injects the database connection string into the service, and Render Postgres provides durable managed storage and recovery features.
+The production account store uses Supabase through its REST API. Registered users, password hashes, profiles, payments, payment history, and subscription records are stored in Supabase. KETS requires only the Supabase Project URL and Publishable Key; no database connection string or database password is used.
 
 IMPORTANT: the KETS web service and Supabase database must be in the same Render region when using the Blueprint's internal connection string. If the existing KETS web service is already in another region, create/move the Postgres database to that same region before syncing the Blueprint.
 
 LOCAL FALLBACK
-If DATABASE_URL is not set, KETS continues to use the local kets.db SQLite file for development/testing. Production should use DATABASE_URL.
+KETS uses Supabase REST storage in production and does not require DATABASE_URL, SUPABASE_DB_URL, PostgreSQL, or SQLite.
 
 EXISTING USER MIGRATION
-If you have an older KETS kets.db containing registered users/payments, copy that database to a safe machine and run:
-  KETS_DB_PATH=/path/to/kets.db DATABASE_URL='YOUR_RENDER_POSTGRES_URL' python migrate_sqlite_to_postgres.py
+If you have an older KETS kets.db containing registered users/payments, it must be migrated into the Supabase tables before those records can be used:
+  No database migration command is required. Create/configure the Supabase tables using the supplied SQL files.
 The migration is manual by design so old records are not silently duplicated or overwritten during deployment.
 
 DEVELOPER SECURITY

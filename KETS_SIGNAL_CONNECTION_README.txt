@@ -20,7 +20,7 @@ The older pull-based source bridge remains in the code as an optional compatibil
 ## Permanent signal storage
 
 Directly received signals are also written to the `signals` table in the same
-Render PostgreSQL database selected by `DATABASE_URL` (SQLite is used locally
+Supabase REST API selected by `SUPABASE_URL` and `SUPABASE_PUBLISHABLE_KEY` (no PostgreSQL database URL is used
 when Postgres is unavailable). Signal IDs are the unique idempotency key.
 The database keeps the full signal payload permanently; the public dashboard
 APIs expose the current 7-day signal window with live delivery for all
