@@ -1,0 +1,17 @@
+KETS SUPABASE CONNECTION
+
+Project URL:
+https://gtkfwufuenxzzivrpcrj.supabase.co
+
+Authentication:
+Publishable Key is configured in supabase.config.js.
+
+This setup intentionally does NOT use:
+- PostgreSQL connection strings
+- database passwords
+- service-role keys
+
+IMPORTANT:
+If the website uses a build system such as Vite, the app's actual Supabase client
+must import/use supabase.config.js (or equivalent environment variables). This file
+contains the supplied public connection values.
