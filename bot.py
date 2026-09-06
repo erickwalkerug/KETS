@@ -388,10 +388,11 @@ def api_login():
     body = request.get_json(silent=True) or {}
     email = str(body.get("email", "")).strip().lower()
     password = str(body.get("password", ""))
-    with DB_LOCK:
-        conn = db_conn()
-        row = db_execute(conn, "SELECT * FROM users WHERE email=? COLLATE NOCASE", (email,)).fetchone()
-        conn.close()
+
+    # Developer accounts are deployment credentials, not rows in the public
+    # users table.  Check them BEFORE touching Supabase.  This is important:
+    # a developer must still be able to sign in when Supabase/RLS is unavailable
+    # or when the users table is protected by a policy that blocks public reads.
     eu = os.environ.get("KETS_DEVELOPER_USERNAME", "").strip()
     ep = os.environ.get("KETS_DEVELOPER_PASSWORD", "")
     if eu and ep and secrets.compare_digest(email, eu.lower()) and secrets.compare_digest(password, ep):
@@ -407,6 +408,17 @@ def api_login():
             "developer": True,
         }
         return jsonify({"ok": True, "token": token, "user": developer, "access": {"plan": "developer", "expires": None, "developer": True}})
+
+    # Normal users are stored in Supabase.  Return a controlled 503 instead of
+    # leaking a traceback/HTTP 500 if the database/API is temporarily down.
+    try:
+        with DB_LOCK:
+            conn = db_conn()
+            row = db_execute(conn, "SELECT * FROM users WHERE email=? COLLATE NOCASE", (email,)).fetchone()
+            conn.close()
+    except Exception as exc:
+        app.logger.exception("Normal user sign-in database lookup failed")
+        return jsonify({"error": "Sign-in service is temporarily unavailable. Please try again shortly."}), 503
 
     if not row:
         return jsonify({"error": "Account not found. Create a KETS account first."}), 401
@@ -612,9 +624,9 @@ def api_signals():
         _persist_signal(item)
         return jsonify({"ok": True, "accepted": True, "signal": item}), 200
 
-    user = _current_user()
-    if not user:
-        return jsonify({"error": "Sign in required."}), 401
+    user, error = _require_active_access()
+    if error:
+        return error
     history = _history_items()
     return jsonify({
         "ok": True,
@@ -627,9 +639,9 @@ def api_signals():
 
 @app.route("/api/history", methods=["GET"])
 def api_history():
-    user = _current_user()
-    if not user:
-        return jsonify({"error": "Sign in required."}), 401
+    user, error = _require_active_access()
+    if error:
+        return error
     return jsonify({"ok": True, "history": _history_items(), "days": SIGNAL_HISTORY_DAYS})
 
 
@@ -786,12 +798,31 @@ def _token_access():
 
 
 def web_access_paid():
-    if os.environ.get("KETS_ACCESS", "").lower() == "paid":
-        return True
     user = _current_user()
     if not user:
         return False
     return _user_access(user["id"]) is not None
+
+def _require_active_access(user=None):
+    """Require authentication and a currently active entitlement.
+
+    Developer access is permanent/free. Normal-user access is checked against
+    the server-side completed-payment records on every protected data request,
+    so an old session token cannot keep reading live signals after expiry.
+    """
+    user = user or _current_user()
+    if not user:
+        return None, (jsonify({"error": "Sign in required."}), 401)
+    if user.get("developer"):
+        return user, None
+    access = _user_access(user["id"])
+    if not access:
+        return user, (jsonify({
+            "error": "An active payment plan is required to access live KETS signals.",
+            "payment_required": True,
+            "plans_url": "/api/plans",
+        }), 402)
+    return user, None
 
 
 def _pesapal_credentials():
@@ -948,13 +979,12 @@ def _grant_payment_if_valid(tx_ref, tracking_id):
 @app.route("/api/access")
 def api_access():
     user=_current_user()
-    paid_override=os.environ.get("KETS_ACCESS","").lower()=="paid"
     access=_user_access(user["id"]) if user else None
     return jsonify({
         "authenticated":bool(user),
-        "paid":bool(access or paid_override),
-        "mode":"paid" if (access or paid_override) else "locked",
-        "plan":access.get("plan") if access else ("admin" if paid_override else None),
+        "paid":bool(access),
+        "mode":"paid" if access else "locked",
+        "plan":access.get("plan") if access else None,
         "expires":access.get("expires") if access else None,
         "user":_safe_user(user),
         "trading_hours_eat":"06:00-18:00",

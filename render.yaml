@@ -13,6 +13,13 @@ services:
         sync: false
       - key: KETS_SESSION_SECRET
         generateValue: true
+      # Developer credentials are checked before the Supabase user lookup.
+      # Set these two values in Render's Environment dashboard; never commit
+      # the real password to source control.
+      - key: KETS_DEVELOPER_USERNAME
+        sync: false
+      - key: KETS_DEVELOPER_PASSWORD
+        sync: false
       - key: KETS_DISABLE_ENGINE
         value: "0"
       # Keep the direct bot -> website POST receiver available for external signal pushes.

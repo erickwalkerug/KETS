@@ -4,7 +4,7 @@ This package removes the Android/PWA installation dependency. KETS is now a norm
 
 DEPLOYMENT
 1. Upload these files to the GitHub repository connected to your Render Web Service.
-2. Render will use render.yaml and start: gunicorn app:app --workers 1 --threads 4 --timeout 120
+2. Render will use render.yaml and start: gunicorn bot:app --workers 1 --threads 4 --timeout 120
 3. Open the Render URL in Chrome.
 
 IMPORTANT ENVIRONMENT VARIABLES
@@ -21,6 +21,8 @@ IMPORTANT ENVIRONMENT VARIABLES
 - KETS_ACCESS = leave locked in production; set paid only for temporary owner/admin override
 - SUPABASE_URL = Supabase Project URL
 - SUPABASE_PUBLISHABLE_KEY = Supabase Publishable Key
+- KETS_DEVELOPER_USERNAME = the developer login email/username (set privately in Render)
+- KETS_DEVELOPER_PASSWORD = the developer login password (set privately in Render)
 
 SECURITY
 - bot.py contains the strategy and remains server-side.

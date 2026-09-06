@@ -1,0 +1,75 @@
+KETS FINAL DEPLOYMENT PACKAGE
+=============================
+
+This package includes the developer HTTP-500 sign-in fix and the final paid-user
+access hardening.
+
+AUTHENTICATION
+--------------
+- Developer credentials are checked before any Supabase users-table lookup.
+- Developer access is free and does not depend on Supabase.
+- Normal users must have a valid account and an active COMPLETED Pesapal payment.
+- Database outages during normal-user login return a controlled 503, not HTTP 500.
+
+PAID ACCESS HARDENING
+---------------------
+- Pesapal payment completion is verified server-side before access is granted.
+- KETS verifies the Pesapal merchant reference, amount, and currency against the
+  locally-created payment order.
+- A completed payment is terminal: repeated callbacks/IPNs cannot reset its
+  timestamp or extend the same transaction.
+- Developer access remains free.
+- Live signals and signal history now require an active entitlement on every
+  protected request, so an expired session token cannot keep reading live data.
+- Expired users can return to the Sign In screen and purchase another plan.
+
+RENDER ENVIRONMENT VARIABLES
+----------------------------
+Required:
+SUPABASE_URL
+SUPABASE_PUBLISHABLE_KEY
+KETS_DEVELOPER_USERNAME
+KETS_DEVELOPER_PASSWORD
+PESAPAL_CONSUMER_KEY
+PESAPAL_CONSUMER_SECRET
+PESAPAL_IPN_ID
+KETS_PUBLIC_URL
+
+Recommended/automatic:
+KETS_SESSION_SECRET (Render can generate this from render.yaml)
+PESAPAL_ENVIRONMENT=live
+
+IMPORTANT
+---------
+Do not put developer credentials or Pesapal secrets in HTML, JavaScript,
+GitHub source, screenshots, or SQL files. Rotate any credential that has been
+publicly exposed.
+
+PESAPAL IPN
+-----------
+Register the production IPN endpoint with Pesapal using:
+https://YOUR-KETS-DOMAIN/api/payments/ipn
+Then set the returned IPN ID as PESAPAL_IPN_ID.
+The bundled register_pesapal_ipn.py script can register it when run with the
+Pesapal credentials and KETS_PUBLIC_URL environment variables.
+
+SUPABASE
+--------
+Run the supplied Supabase SQL setup/repair scripts in the Supabase SQL Editor
+for the users, payments, and signals tables and the required RLS policies.
+The deployed application uses the Supabase Project URL and Publishable Key;
+it does not require a database password or service-role key.
+
+DEPLOY CHECK
+------------
+1. Deploy the KETS-main project to the Render service.
+2. Set all required environment variables above.
+3. Confirm GET /api/health returns {"ok":true}.
+4. Test developer login with the Render developer credentials.
+5. Create a normal test account.
+6. Start a Pesapal test/live payment as appropriate for the configured
+   environment.
+7. Confirm the Pesapal callback/IPN changes the payment to COMPLETED.
+8. Confirm the user can sign in only while the entitlement is active.
+
+No credentials are included in this archive.
