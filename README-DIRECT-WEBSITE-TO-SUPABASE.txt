@@ -20,7 +20,7 @@ IMPORTANT RENDER VARIABLES
 KETS_DISABLE_ENGINE=1
 KETS_DISABLE_SOURCE_BRIDGE=1
 KETS_SIGNAL_RECEIVER_KEY=<same secret as the bot's KETS_API_KEY>
-SUPABASE_DB_URL=<Supabase PostgreSQL connection string>
+SUPABASE_URL + SUPABASE_PUBLISHABLE_KEY=<Supabase REST API connection string>
 
 Do not put the Supabase password or service key in frontend JavaScript.
 
