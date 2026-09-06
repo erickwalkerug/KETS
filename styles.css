@@ -180,3 +180,62 @@
 
 /* Prevent double-submit and make sign-in progress visible. */
 .primary-btn:disabled{opacity:.65;cursor:wait;}
+
+
+/* ============================================================
+   PROP FIRM TRADER BRANDING
+   Added without changing KETS trading, payment, login,
+   signal, timer, or database rules.
+   ============================================================ */
+
+.prop-firm-banner {
+  position: relative;
+  z-index: 5;
+  width: 100%;
+  text-align: center;
+  font-weight: 1000;
+  letter-spacing: 1.5px;
+  line-height: 1.05;
+  text-transform: uppercase;
+  color: #ffffff;
+  text-shadow: 0 4px 22px #000b;
+}
+
+.auth-prop-firm-banner {
+  margin: -4px 0 26px;
+  padding: 4px 0 12px;
+  font-size: clamp(24px, 7vw, 42px);
+}
+
+.dashboard-prop-firm-banner {
+  position: absolute;
+  left: 24px;
+  right: 24px;
+  top: 14px;
+  padding: 8px 12px;
+  font-size: clamp(25px, 4.5vw, 52px);
+  line-height: 1.02;
+  pointer-events: none;
+}
+
+.hero-card > .dashboard-prop-firm-banner ~ * {
+  /* Keep existing hero content layered normally beneath the banner. */
+}
+
+@media (max-width: 640px) {
+  .auth-prop-firm-banner {
+    font-size: clamp(22px, 7.5vw, 34px);
+    letter-spacing: 1px;
+  }
+
+  .dashboard-prop-firm-banner {
+    left: 14px;
+    right: 14px;
+    top: 12px;
+    font-size: clamp(22px, 7vw, 34px);
+  }
+
+  .hero-card {
+    padding-top: 92px;
+  }
+}
