@@ -6,9 +6,9 @@ SUPABASE_SECRET_KEY=YOUR_SERVER_ONLY_SUPABASE_SECRET_KEY
 
 If your Supabase project still uses the older service-role JWT instead of a modern
 secret key, use this variable instead:
-SUPABASE_SERVICE_ROLE_KEY=YOUR_SERVICE_ROLE_KEY
+LEGACY_SERVICE_ROLE_KEY_NOT_USED=YOUR_SERVICE_ROLE_KEY
 
-SUPABASE_PUBLISHABLE_KEY is optional and is NOT sufficient for reliable backend
+SUPABASE_PUBLISHABLE_KEY is the client-side key; SUPABASE_SECRET_KEY is required for backend operations
 writes when Row Level Security protects the public tables.
 
 SECURITY:
