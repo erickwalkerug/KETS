@@ -37,7 +37,7 @@ def trading_hours_open(now=None):
     return datetime.time(6, 0) <= now.time() < datetime.time(18, 0)
 
 def get_markets(now=None):
-    # Preserve KETS' current market schedule: GOLD on weekdays, BTC on weekends.
+    # KETS schedule: weekdays = GOLD only; weekends = BTC only.
     now = now or get_eat_time()
     if now.weekday() < 5:
         return {"GOLD": "XAU/USD"}
@@ -51,38 +51,25 @@ def _source_config():
         or os.environ.get("KETS_SIGNALS_API_KEY", "").strip(),
     )
 
-def _probe_supabase():
-    """Perform a real, read-only Supabase/PostgREST probe."""
-    return supabase_diagnostics()
-
-
 @app.route("/api/health", methods=["GET"])
 def api_health():
-    probe = _probe_supabase()
-    return jsonify({
-        "ok": probe["ok"],
-        "service": "KETS",
-        "database_configured": bool(SUPABASE_URL and SUPABASE_SERVER_KEY),
-        "database_mode": "server-key" if SUPABASE_SERVER_KEY else ("publishable-key" if SUPABASE_PUBLISHABLE_KEY else "missing"),
-        "database": probe,
-    }), (200 if probe["ok"] else 503)
-
+    try:
+        with DB_LOCK:
+            conn=db_conn()
+            conn.execute("SELECT 1").fetchone()
+            conn.close()
+        return jsonify({"ok":True,"service":"KETS","database_configured":True,"database_mode":"render_sqlite","storage":"render_persistent_disk","storage_path":DB_PATH})
+    except Exception:
+        return jsonify({"ok":False,"service":"KETS","database_configured":False,"database_mode":"render_sqlite","storage":"render_persistent_disk","storage_path":DB_PATH}),503
 
 @app.route("/api/diagnostics", methods=["GET"])
 def api_diagnostics():
-    # Safe operational diagnostics; never return keys, secrets, or raw DB errors.
-    probe = _probe_supabase()
-    return jsonify({
-        "ok": probe["ok"],
-        "service": "KETS",
-        "database": probe,
-        "message": (
-            "Supabase REST/database access is working."
-            if probe["ok"] else
-            "Supabase REST/database access is not working. Check the database diagnostic code and Render logs."
-        ),
-    }), (200 if probe["ok"] else 503)
-
+    try:
+        with DB_LOCK:
+            conn=db_conn(); conn.execute("SELECT 1").fetchone(); conn.close()
+        return jsonify({"ok":True,"service":"KETS","database":{"ok":True,"stage":"render_persistent_disk","code":"DB_OK"},"storage_path":DB_PATH})
+    except Exception:
+        return jsonify({"ok":False,"service":"KETS","database":{"ok":False,"stage":"render_persistent_disk","code":"DB_UNAVAILABLE"}}),503
 
 # Frontend routes. Render's web service must serve the KETS website itself.
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -107,38 +94,29 @@ def download_android():
     return send_from_directory(BASE_DIR, "kets-android.apk", as_attachment=True, download_name="KETS-Android.apk")
 
 
-# Supabase REST storage is isolated in supabase_client.py.
-# The backend requires a server-only secret/service-role key; the browser
-# publishable key is never accepted for trusted database writes.
-from supabase_client import (
-    SUPABASE_URL,
-    SUPABASE_PUBLISHABLE_KEY,
-    SUPABASE_SERVER_KEY,
-    SupabaseConnection,
-    SupabaseIntegrityError,
-    SupabaseResult,
-    supabase_diagnostics,
-)
-
-# Compatibility names retained so the rest of KETS keeps its existing logic.
+# ============================================================
+# RENDER PERSISTENT STORAGE
+# All website accounts, payments and received signals are stored
+# in SQLite on the Render Persistent Disk. No Supabase database
+# is used by the website.
+# ============================================================
 POSTGRES_AVAILABLE = False
-DB_PATH = ""
-_SQLITE_DB_LOCK = Lock()
-class _ConditionalDbLock:
-    def __enter__(self):
-        return self
-    def __exit__(self, exc_type, exc, tb):
-        return False
-DB_LOCK = _ConditionalDbLock()
+RENDER_DATA_DIR = os.environ.get("KETS_DATA_DIR", "/var/data")
+try:
+    os.makedirs(RENDER_DATA_DIR, exist_ok=True)
+except OSError:
+    pass
+DB_PATH = os.environ.get("KETS_DB_PATH", os.path.join(RENDER_DATA_DIR, "kets_website.db"))
+DB_LOCK = Lock()
 COUNTRY_REQUIRED = True
 
 def using_postgres():
-    # Existing KETS code uses this only to select SQL syntax. The adapter above
-    # accepts both forms and always sends the operation through Supabase REST.
-    return bool(SUPABASE_URL and (SUPABASE_SERVER_KEY or SUPABASE_PUBLISHABLE_KEY))
+    return False
 
 def db_conn():
-    return SupabaseConnection()
+    conn = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    return conn
 
 def _db_sql(sql):
     return sql
@@ -147,14 +125,50 @@ def db_execute(conn, sql, params=()):
     return conn.execute(sql, params)
 
 def init_db():
-    # Schema is managed in Supabase SQL Editor. Runtime does not open a
-    # PostgreSQL connection and never needs a database password.
-    if not SUPABASE_URL or not (SUPABASE_SERVER_KEY or SUPABASE_PUBLISHABLE_KEY):
-        print("⚠️ SUPABASE_URL and a Supabase API key are not configured yet")
-    elif not SUPABASE_SERVER_KEY:
-        print("⚠️ SUPABASE_SECRET_KEY is missing; server-side account operations cannot run.")
-    else:
-        print("✅ KETS Supabase REST storage configured with a server-only key")
+    os.makedirs(os.path.dirname(DB_PATH) or ".", exist_ok=True)
+    with db_conn() as conn:
+        conn.executescript("""
+        CREATE TABLE IF NOT EXISTS users (
+            id TEXT PRIMARY KEY,
+            email TEXT NOT NULL UNIQUE COLLATE NOCASE,
+            password_hash TEXT NOT NULL,
+            name TEXT NOT NULL,
+            country_name TEXT,
+            country_code TEXT NOT NULL,
+            profile_picture TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS payments (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            tx_ref TEXT NOT NULL UNIQUE,
+            tracking_id TEXT,
+            plan TEXT NOT NULL,
+            amount REAL NOT NULL,
+            currency TEXT NOT NULL,
+            status TEXT NOT NULL,
+            network TEXT,
+            email TEXT,
+            phone TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_payments_user_status ON payments(user_id, status, updated_at);
+        CREATE TABLE IF NOT EXISTS signals (
+            id TEXT PRIMARY KEY,
+            asset TEXT NOT NULL,
+            direction TEXT,
+            score REAL,
+            timestamp TEXT,
+            payload TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_signals_timestamp ON signals(timestamp);
+        CREATE TABLE IF NOT EXISTS app_meta (key TEXT PRIMARY KEY, value TEXT);
+        """)
+        conn.commit()
+    print(f"✅ KETS Render persistent storage: {DB_PATH}")
 
 init_db()
 
@@ -262,28 +276,23 @@ def api_register():
                 )
                 conn.commit()
             except Exception as exc:
-                if isinstance(exc, (sqlite3.IntegrityError, SupabaseIntegrityError)):
+                if isinstance(exc, sqlite3.IntegrityError):
                     return jsonify({"error": "That email already has an account. Please sign in."}), 409
                 raise
             finally:
                 conn.close()
     except Exception as exc:
         app.logger.exception("KETS account creation failed")
-        # Never expose Supabase credentials or a traceback to the browser, but
-        # return a stable diagnostic code so the UI can distinguish database
-        # configuration failures from ordinary validation/duplicate errors.
+        # Never expose database internals or a traceback to the browser.
         message = str(exc).lower()
-        if "supabase_url" in message or "api key" in message or "configured" in message or "server key" in message or "wrong key type" in message:
-            safe = "KETS database is not configured on the server. Set SUPABASE_URL plus SUPABASE_SECRET_KEY (or SUPABASE_SERVICE_ROLE_KEY) in Render."
-            code = "DB_NOT_CONFIGURED"
-        elif "row-level security" in message or "permission denied" in message or "42501" in message or "403" in message:
-            safe = "KETS database rejected the account write. Check the Supabase Secret Key and database permissions in Render."
-            code = "DB_WRITE_FORBIDDEN"
-        elif "column" in message or "relation" in message or "schema cache" in message or "23502" in message:
-            safe = "KETS database schema is missing a required account field. Run KETS_SUPABASE_REPAIR_ALL.sql in the Supabase SQL Editor."
+        if "database is locked" in message:
+            safe = "KETS account creation is temporarily busy. Please try again."
+            code = "DB_LOCKED"
+        elif "no such table" in message or "no such column" in message:
+            safe = "KETS account storage is not initialized correctly on the Render persistent disk."
             code = "DB_SCHEMA_MISMATCH"
         else:
-            safe = "KETS account creation is temporarily unavailable. Check the Render logs for the Supabase error."
+            safe = "KETS account creation is temporarily unavailable. Please try again shortly."
             code = "DB_UNAVAILABLE"
         return jsonify({"error": safe, "code": code}), 503
     return jsonify({"ok": True, "token": _user_token(user_id), "user": _safe_user({"id":user_id,"email":email,"name":name,"country_name":country_name,"country_code":country_code,"profile_picture":"","created_at":now,"updated_at":now})})
@@ -295,9 +304,7 @@ def api_login():
     password = str(body.get("password", ""))
 
     # Developer accounts are deployment credentials, not rows in the public
-    # users table.  Check them BEFORE touching Supabase.  This is important:
-    # a developer must still be able to sign in when Supabase/RLS is unavailable
-    # or when the users table is protected by a policy that blocks public reads.
+    # users table. Check them before normal account lookup.
     eu = os.environ.get("KETS_DEVELOPER_USERNAME", "").strip()
     ep = os.environ.get("KETS_DEVELOPER_PASSWORD", "")
     if eu and ep and secrets.compare_digest(email, eu.lower()) and secrets.compare_digest(password, ep):
@@ -314,8 +321,7 @@ def api_login():
         }
         return jsonify({"ok": True, "token": token, "user": developer, "access": {"plan": "developer", "expires": None, "developer": True}})
 
-    # Normal users are stored in Supabase.  Return a controlled 503 instead of
-    # leaking a traceback/HTTP 500 if the database/API is temporarily down.
+    # Normal users are stored in SQLite on the Render Persistent Disk.
     try:
         with DB_LOCK:
             conn = db_conn()
@@ -323,10 +329,9 @@ def api_login():
             conn.close()
     except Exception as exc:
         app.logger.exception("Normal user sign-in database lookup failed")
-        probe = _probe_supabase()
         return jsonify({
             "error": "Sign-in service is temporarily unavailable. Please try again shortly.",
-            "code": probe.get("code", "DB_UNAVAILABLE"),
+            "code": "DB_UNAVAILABLE",
         }), 503
 
     if not row:
@@ -623,13 +628,11 @@ def developer_data():
 
 
 PAYMENT_PLANS = {
-    "30_min": {"name": "30 Minutes", "ugx": 500, "seconds": 30*60},
-    "1_hour": {"name": "1 Hour", "ugx": 1000, "seconds": 60*60},
-    "4_hour": {"name": "4 Hours", "ugx": 3000, "seconds": 4*60*60},
-    "1_day": {"name": "1 Day", "ugx": 5000, "usd": 1, "seconds": 24*60*60},
-    "1_week": {"name": "1 Week", "ugx": 30000, "usd": 5, "seconds": 7*24*60*60},
-    "1_month": {"name": "1 Month", "ugx": 50000, "usd": 15, "seconds": 30*24*60*60},
-    "1_year": {"name": "1 Year", "ugx": 1000000, "seconds": 365*24*60*60},
+    "30_min": {"name": "30 Minutes", "ugx": 10000, "seconds": 30*60},
+    "1_hour": {"name": "1 Hour", "ugx": 30000, "usd": 10, "seconds": 60*60},
+    "1_day": {"name": "1 Day", "ugx": 50000, "usd": 50, "seconds": 24*60*60},
+    "1_week": {"name": "1 Week", "ugx": 400000, "usd": 200, "seconds": 7*24*60*60},
+    "1_month": {"name": "1 Month", "ugx": 2000000, "usd": 500, "seconds": 30*24*60*60},
 }
 def _subscription_expiry(plan_id, start_iso):
     try:
@@ -1244,10 +1247,10 @@ def update_market_state(asset, symbol, candles, signal=None):
 
 
 def _persist_signal(item):
-    """FINAL STEP: persist the signal received by the website into Supabase.
+    """Persist a signal received by the website into SQLite on Render storage.
 
-    Flow: trading bot -> /api/signals -> KETS website -> this function -> Supabase.
-    The browser never writes signals directly to Supabase. The complete
+    Flow: trading bot -> /api/signals -> KETS website -> Render persistent disk.
+    The browser never writes signals directly to the database. The complete
     normalized signal is retained in payload JSON and signal IDs are idempotent.
     """
     try:
@@ -1885,19 +1888,10 @@ def analyze_market(asset, symbol, candles):
     if regime.startswith("TRENDING"):bonus+=3; adv.append("Trend-friendly regime")
     if extended:bonus-=6; adv.append("Price overextended from EMA9")
     score=max(0,min(100,int(core+bonus)))
-    # Hard entry-quality veto. A high strategy-alignment score must never
-    # override poor entry location, reversal risk, or a stretched market.
-    opposite_5m = (direction == "BUY" and d5 == "BEARISH") or (direction == "SELL" and d5 == "BULLISH")
-    opposite_15m = (direction == "BUY" and d15 == "BEARISH") or (direction == "SELL" and d15 == "BULLISH")
-    if (
-        entry_quality_score < 72
-        or entry_quality["clear_reversal"]
-        or entry_quality.get("hard_fail")
-        or extended
-        or ad["adx"] < 20
-        or (opposite_5m and opposite_15m)
-    ):
-        return None
+    # Entry Quality is informational, not a 90+ gate.
+    # Keep the original KETS core/advanced strategy selection intact while
+    # allowing the dashboard to show every calculated entry-quality score,
+    # including 40/100, 50/100 and other lower readings.
 
     recent_lows=[c["low"] for c in candles[-6:-1]]; recent_highs=[c["high"] for c in candles[-6:-1]]
     entry=price
@@ -1927,7 +1921,7 @@ def analyze_market(asset, symbol, candles):
 
 # ------------------------- ENGINE ----------------------------
 def build_startup_messages():
-    b="🤖 *KETS STRATEGY ENGINE ONLINE*\n━━━━━━━━━━━━━━━━━━\n✅ Backend connected\n📊 Timeframe: 1 minute\n🔄 Scan interval: 2 minutes\n⏰ Trading hours: 06:00-18:00 EAT\n💰 Monday-Friday: GOLD only\n₿ Weekend: BTC ONLY\n🧠 Advanced intelligence ON\n━━━━━━━━━━━━━━━━━━\nℹ️ Strength is strategy alignment, not guaranteed win probability."
+    b="🤖 *KETS STRATEGY ENGINE ONLINE*\n━━━━━━━━━━━━━━━━━━\n✅ Backend connected\n📊 Timeframe: 1 minute\n🔄 Scan interval: 1 minute\n⏰ Trading hours: 06:00-18:00 EAT\n💰 Monday-Friday: GOLD ONLY\n₿ Weekend: BTC ONLY\n🧠 Advanced intelligence ON\n━━━━━━━━━━━━━━━━━━\nℹ️ Strength is strategy alignment, not guaranteed win probability."
     c="🤖 *KETS STRATEGY ENGINE ONLINE*\n━━━━━━━━━━━━━━━━━━\n✅ Signal system online\n📊 1-minute monitoring\n🔄 Analysis every 1 minute\n⏰ Active: 06:00-18:00 EAT\n⚡ Early-entry detection ON\n━━━━━━━━━━━━━━━━━━\n📡 KETS is monitoring the market."
     return b,c
 
@@ -1968,7 +1962,7 @@ def run_strategy():
 # Gunicorn imports this module and does not execute __main__. Start the engine
 # during module import, exactly once per worker.
 engine_started = False
-if os.environ.get("KETS_DISABLE_ENGINE", "0") != "1":
+if os.environ.get("KETS_DISABLE_ENGINE", "1") != "1":
     engine_started = True
     Thread(target=run_strategy, daemon=True, name="kets-strategy-engine").start()
 

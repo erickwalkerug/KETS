@@ -3,36 +3,34 @@ services:
     name: kets
     runtime: python
     buildCommand: pip install -r requirements.txt
-    startCommand: gunicorn bot:app --workers 1 --threads 4 --timeout 120
+    startCommand: gunicorn app:app --workers 1 --threads 4 --timeout 120
     healthCheckPath: /api/health
+    disk:
+      name: kets-website-data
+      mountPath: /var/data
+      sizeGB: 1
     envVars:
-      # KETS Supabase configuration: exactly three Supabase values.
-      # SUPABASE_PUBLISHABLE_KEY is safe for client-side use.
-      # SUPABASE_SECRET_KEY is server-only and must never be exposed to the browser.
-      - key: SUPABASE_URL
-        sync: false
-      - key: SUPABASE_PUBLISHABLE_KEY
-        sync: false
-      - key: SUPABASE_SECRET_KEY
-        sync: false
-      # Optional legacy Supabase service-role JWT; use this only if your project has not migrated to sb_secret_.
-      - key: SUPABASE_SERVICE_ROLE_KEY
-        sync: false
+      - key: KETS_DATA_DIR
+        value: /var/data
+      - key: KETS_DB_PATH
+        value: /var/data/kets_website.db
       - key: KETS_SESSION_SECRET
         generateValue: true
-      # Developer credentials are checked before the Supabase user lookup.
-      # Set these two values in Render's Environment dashboard; never commit
-      # the real password to source control.
       - key: KETS_DEVELOPER_USERNAME
         sync: false
       - key: KETS_DEVELOPER_PASSWORD
         sync: false
       - key: KETS_DISABLE_ENGINE
-        value: "0"
-      # Keep the direct bot -> website POST receiver available for external signal pushes.
+        value: "1"
       - key: KETS_DISABLE_SOURCE_BRIDGE
         value: "1"
-      # Receiver secret for direct POSTs from the trading bot.
-      # Use the same secret as the bot's KETS_API_KEY.
       - key: KETS_SIGNAL_RECEIVER_KEY
+        sync: false
+      - key: PESAPAL_CONSUMER_KEY
+        sync: false
+      - key: PESAPAL_CONSUMER_SECRET
+        sync: false
+      - key: PESAPAL_ENVIRONMENT
+        value: "live"
+      - key: KETS_PUBLIC_BASE_URL
         sync: false

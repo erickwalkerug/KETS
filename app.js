@@ -120,13 +120,11 @@ function warmBackend(){
  fetch(API_BASE+"/api/health",{cache:"no-store"}).catch(()=>{});
 }
 const BUILTIN_PLANS={
- "30_min":{name:"30 Minutes",ugx:500,seconds:1800},
- "1_hour":{name:"1 Hour",ugx:1000,seconds:3600},
- "4_hour":{name:"4 Hours",ugx:3000,seconds:14400},
- "1_day":{name:"1 Day",ugx:5000,usd:1,seconds:86400},
- "1_week":{name:"1 Week",ugx:30000,usd:5,seconds:604800},
- "1_month":{name:"1 Month",ugx:50000,usd:15,seconds:2592000},
- "1_year":{name:"1 Year",ugx:1000000,seconds:31536000}
+ "30_min":{name:"30 Minutes",ugx:10000,seconds:1800},
+ "1_hour":{name:"1 Hour",ugx:30000,usd:10,seconds:3600},
+ "1_day":{name:"1 Day",ugx:50000,usd:50,seconds:86400},
+ "1_week":{name:"1 Week",ugx:400000,usd:200,seconds:604800},
+ "1_month":{name:"1 Month",ugx:2000000,usd:500,seconds:2592000}
 };
 function renderAuthPlans(plans){
  const targets=["loginPlansGrid","registerPlansGrid"];
@@ -135,7 +133,7 @@ function renderAuthPlans(plans){
    const entries=Object.entries(plans||{}).filter(([_,p])=>authIsUganda()||p.usd!=null);
    el.innerHTML=entries.length?entries.map(([key,p])=>{
      const cur=authIsUganda()?"UGX":"USD", amount=authIsUganda()?p.ugx:p.usd;
-     return `<div class="plan"><span class="plan-tag">${p.seconds<=3600?"SHORT ACCESS":"SUBSCRIPTION"}</span><h3>${esc(p.name)}</h3><strong>${money(amount,cur)}</strong><span>${cur}</span><button class="primary-btn full" onclick="openAuthPayment('${esc(key)}')">Pay & activate</button></div>`;
+     return `<div class="plan"><span class="plan-tag">${p.seconds<=3600?"SHORT ACCESS":"SUBSCRIPTION"}</span><h3>${esc(p.name)}</h3><strong>${money(amount,cur)}</strong><span class="payment-maintenance-note">Payments are required for service maintanace</span><span>${cur}</span><button class="primary-btn full" onclick="openAuthPayment('${esc(key)}')">Pay & activate</button></div>`;
    }).join(""):`<div class="empty">No payment plans are currently available.</div>`;
  });
 }
@@ -280,6 +278,22 @@ function goldConfidenceDescription(label, score){
 function goldUsd(n){return Number.isFinite(Number(n))?`$${Number(n).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2})}`:"--";}
 function goldPrice(n){return Number.isFinite(Number(n))?Number(n).toLocaleString("en-US",{minimumFractionDigits:2,maximumFractionDigits:2}):"--";}
 function goldNum(n, decimals=0){return Number.isFinite(Number(n))?Number(n).toLocaleString("en-US",{minimumFractionDigits:decimals,maximumFractionDigits:decimals}):"--";}
+function renderEntryQualityFigures(s){
+ const d=s?.entry_quality_details||s?.entry_quality?.details||{};
+ const e=d.ema||{}, t=d.trend||{}, v=d.volume||{}, c=d.candle||{}, m=d.momentum||{}, vw=d.vwap||{}, x=d.extension||{}, ht=d.higher_timeframes||{}, br=d.breakout_retest||{}, rv=d.reversal||{};
+ const n=(v,dec=2)=>v===null||v===undefined||v===""||!Number.isFinite(Number(v))?"--":Number(v).toLocaleString("en-US",{minimumFractionDigits:dec,maximumFractionDigits:dec});
+ const val=v=>v===null||v===undefined||v===""?"--":esc(v);
+ return `<div class="entry-quality-figures"><div class="eq-fig-title">ENTRY QUALITY FIGURES</div><div class="eq-fig-grid">
+ <div><span>SCORE</span><b>${n(d.score)}</b></div><div><span>STATUS</span><b>${val(d.status)}</b></div>
+ <div><span>5M DIRECTION</span><b>${val(ht["5m"])}</b></div><div><span>15M DIRECTION</span><b>${val(ht["15m"])}</b></div>
+ <div><span>EMA 9</span><b>${n(e.ema9)}</b></div><div><span>EMA 20</span><b>${n(e.ema20)}</b></div><div><span>EMA 50</span><b>${n(e.ema50)}</b></div><div><span>PRICE</span><b>${n(e.price)}</b></div>
+ <div><span>ADX</span><b>${n(t.adx)}</b></div><div><span>PREVIOUS ADX</span><b>${n(t.previous_adx)}</b></div><div><span>+DI</span><b>${n(t.plus_di)}</b></div><div><span>-DI</span><b>${n(t.minus_di)}</b></div><div><span>ADX RISING</span><b>${val(t.adx_rising===true?"YES":t.adx_rising===false?"NO":"--")}</b></div><div><span>DI ALIGNED</span><b>${val(t.di_aligned===true?"YES":t.di_aligned===false?"NO":"--")}</b></div>
+ <div><span>VOLUME</span><b>${n(v.current)}</b></div><div><span>AVG VOLUME (20)</span><b>${n(v.average_20)}</b></div><div><span>VOLUME RATIO</span><b>${v.ratio==null?"--":n(v.ratio)+"x"}</b></div><div><span>VOLUME AVAILABLE</span><b>${val(v.available===true?"YES":v.available===false?"NO":"--")}</b></div>
+ <div><span>CANDLE OPEN</span><b>${n(c.open)}</b></div><div><span>CANDLE HIGH</span><b>${n(c.high)}</b></div><div><span>CANDLE LOW</span><b>${n(c.low)}</b></div><div><span>CANDLE CLOSE</span><b>${n(c.close)}</b></div><div><span>CANDLE RANGE</span><b>${n(c.range)}</b></div><div><span>CLOSE POSITION</span><b>${c.close_position==null?"--":n(c.close_position*100)+"%"}</b></div><div><span>CANDLE DIRECTION</span><b>${val(c.direction)}</b></div><div><span>CANDLE STRENGTH</span><b>${n(c.strength)}</b></div><div><span>BREAKOUT</span><b>${val(c.breakout===true?"YES":c.breakout===false?"NO":"--")}</b></div>
+ <div><span>MOMENTUM</span><b>${val(m.direction)}</b></div><div><span>MOMENTUM STATE</span><b>${val(m.state)}</b></div><div><span>MOMENTUM ALIGNED</span><b>${val(m.aligned===true?"YES":m.aligned===false?"NO":"--")}</b></div>
+ <div><span>VWAP</span><b>${n(vw.value)}</b></div><div><span>VWAP ALIGNED</span><b>${val(vw.aligned===true?"YES":vw.aligned===false?"NO":vw.available===false?"N/A":"--")}</b></div><div><span>EXTENDED</span><b>${val(x.extended===true?"YES":x.extended===false?"NO":"--")}</b></div><div><span>BREAKOUT RETEST</span><b>${val(br.held===true?"HELD":br.held===false?"NO":"--")}</b></div><div><span>REVERSAL</span><b>${val(rv.clear_reversal===true?"YES":rv.clear_reversal===false?"NO":"--")}</b></div>
+ </div></div>`;
+}
 function renderRichDashboard(s, asset){
  const isGold=asset==='GOLD';
  const direction=String(s?.direction||s?.signal||"WAIT").toUpperCase();
@@ -292,10 +306,9 @@ function renderRichDashboard(s, asset){
  const eqStatus=String((s?.entry_quality_status??s?.entryQualityStatus??s?.entry_quality?.status)||"").trim();
  const eqReversal=Boolean(s?.entry_quality_reversal??s?.entryQualityReversal??s?.entry_quality?.clear_reversal);
  const eqReasons=Array.isArray(s?.entry_quality_reasons)?s.entry_quality_reasons:(Array.isArray(s?.entry_quality?.reasons)?s.entry_quality.reasons:[]);
- const entry_quality_required=s?.entry_quality_required!==false;
- const eqExtended=/EXTENDED/i.test(eqStatus)||eqReasons.some(x=>/excessively extended/i.test(String(x)));
+  const eqExtended=/EXTENDED/i.test(eqStatus)||eqReasons.some(x=>/excessively extended/i.test(String(x)));
  const gateAvailable=eqScore!==null;
- const gatePass=gateAvailable && score>=90 && eqScore>=80 && !eqReversal && !eqExtended;
+ const gatePass=gateAvailable;
  const eqClass=eqReversal?"reject":eqExtended||(eqScore!==null&&eqScore<65)?"caution":"pass";
  const eqLabel=eqStatus||"ENTRY QUALITY DATA PENDING";
  const symbol=isGold?"XAUUSD":"BTC/USD";
@@ -340,12 +353,13 @@ function renderRichDashboard(s, asset){
     <div class="entry-quality-status">${esc(eqLabel)}</div>
    </div>
    <div class="entry-quality-gate">
-    <span>90+ ENTRY GATE</span>
-    <b>${(entry_quality_required === false ? "NOT REQUIRED":!gateAvailable?"SOURCE DATA PENDING":gatePass?"PASS — QUALITY CONFIRMED":"WAIT — ENTRY QUALITY FILTER")}</b>
+    <span>ENTRY QUALITY DISPLAY</span>
+    <b>${!gateAvailable?"SOURCE DATA PENDING":"DISPLAYED — ALL SCORES"}</b>
    </div>
    <div class="entry-quality-reasons">
     ${eqReasons.length?eqReasons.map(reason=>`<span class="eq-check ${/CLEAR REVERSAL|excessively extended|not aligned|incomplete|conflict|weak/i.test(String(reason))?"warn":"ok"}">${/CLEAR REVERSAL/i.test(String(reason))?"⛔":"•"} ${esc(reason)}</span>`).join(""):`<span class="eq-check pending">• Entry-quality details will appear when supplied by the trading engine.</span>`}
    </div>
+   ${renderEntryQualityFigures(s)}
   </div>
   <div class="gold-header">
    <div class="gold-symbol"><strong>${displayName}</strong> <span>(${symbol})</span><div class="gold-direction ${cls}">${direction==="SELL"?"SELL ↘":"BUY ↗"}</div></div>
@@ -379,7 +393,7 @@ function renderWaitingDashboard(asset){
    <div class="gold-header waiting-header"><div class="gold-symbol"><strong>${isGold?'GOLD':'BITCOIN'}</strong> <span>(${isGold?'XAUUSD':'BTC/USD'})</span><div class="gold-direction wait">WAIT</div></div><div class="gold-metric"><span>ENTRY PRICE</span><strong>--</strong></div><div class="gold-metric"><span>TARGET PRICE</span><strong>--</strong></div><div class="gold-metric"><span>STOP LOSS</span><strong class="red">--</strong></div><div class="gold-metric"><span>PRICE MOVE</span><strong class="green">--</strong></div></div>
    <div class="entry-quality-panel pending">
    <div class="entry-quality-head"><div><span class="entry-quality-kicker">ENTRY QUALITY</span><strong>--</strong></div><div class="entry-quality-status">WAITING FOR SIGNAL</div></div>
-   <div class="entry-quality-gate"><span>90+ ENTRY GATE</span><b>NOT ACTIVE</b></div>
+   <div class="entry-quality-gate"><span>ENTRY QUALITY DISPLAY</span><b>ALL SCORES SHOWN</b></div>
    <div class="entry-quality-reasons"><span class="eq-check pending">• KETS will evaluate entry quality when a qualifying setup appears.</span></div>
   </div>
   <div class="gold-live-grid"><div><span>STATUS</span><b>Monitoring</b></div><div><span>SIGNAL TIME</span><b>--</b></div><div><span>EXPECTED MOVE</span><b>--</b></div><div><span>ESTIMATED DURATION</span><b>--</b></div></div>
@@ -442,7 +456,7 @@ function renderStatus(){
 function renderPlans(){
  const abroad=!isUganda();
  const entries=Object.entries(state.plans).filter(([id,p])=>!abroad || p.usd!=null);if($("plansCurrencyLabel"))$("plansCurrencyLabel").textContent=planCurrency();
- $("plansGrid").innerHTML=entries.map(([id,p])=>{const cur=planCurrency(),amt=planAmount(p);return `<div class="plan"><span class="plan-tag">${p.seconds<=3600?"SHORT ACCESS":"SUBSCRIPTION"}</span><h3>${esc(p.name)}</h3><strong>${money(amt,cur)}</strong><span>Pesapal · ${cur}${isUganda()?" · MTN/Airtel where available":" · International payment methods"}</span><button class="primary-btn" onclick="openPayment('${esc(id)}')">Choose plan</button></div>`}).join("");
+ $("plansGrid").innerHTML=entries.map(([id,p])=>{const cur=planCurrency(),amt=planAmount(p);return `<div class="plan"><span class="plan-tag">${p.seconds<=3600?"SHORT ACCESS":"SUBSCRIPTION"}</span><h3>${esc(p.name)}</h3><strong>${money(amt,cur)}</strong><span class="payment-maintenance-note">Payments are required for service maintanace</span><span>Pesapal · ${cur}${isUganda()?" · MTN/Airtel where available":" · International payment methods"}</span><button class="primary-btn" onclick="openPayment('${esc(id)}')">Choose plan</button></div>`}).join("");
 }
 window.openPayment=plan=>{
  const p=state.plans[plan], abroad=!isUganda(), cur=planCurrency(), amt=planAmount(p),m=document.createElement("div");m.className="modal";m.innerHTML=`<div class="modal-box"><button class="close-btn" onclick="this.closest('.modal').remove()">×</button><span class="eyebrow">SECURE PAYMENT</span><h2>${esc(p.name)} · ${money(amt,cur)}</h2><p class="muted">Payment email is fixed to your signed-in account.</p><label>Email<input value="${esc(state.user.email)}" disabled></label>${abroad?`<label>Phone (optional)<input id="payPhone" type="tel" placeholder="International phone number"></label><input id="payNetwork" type="hidden" value="INTERNATIONAL">`:`<label>Mobile-money phone<input id="payPhone" type="tel" placeholder="07XXXXXXXX"></label><label>Network<select id="payNetwork"><option value="MTN">MTN</option><option value="AIRTEL">Airtel</option></select></label>`}<button class="primary-btn full" onclick="startPayment('${esc(plan)}')">Continue to Pesapal</button><div id="payResult" class="payment-result"></div></div>`;document.body.appendChild(m);
