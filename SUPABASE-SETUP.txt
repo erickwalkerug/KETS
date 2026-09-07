@@ -3,15 +3,15 @@ KETS SUPABASE CONNECTION
 Project URL:
 https://gtkfwufuenxzzivrpcrj.supabase.co
 
-Authentication:
-Publishable Key is configured in supabase.config.js.
+Browser/public key:
+Keep SUPABASE_PUBLISHABLE_KEY only in browser-visible configuration.
 
-This setup intentionally does NOT use:
-- PostgreSQL connection strings
-- database passwords
-- service-role keys
+Server key:
+Render must have SUPABASE_SECRET_KEY (preferred modern sb_secret_* key)
+or SUPABASE_SERVICE_ROLE_KEY (legacy JWT).
 
-IMPORTANT:
-If the website uses a build system such as Vite, the app's actual Supabase client
-must import/use supabase.config.js (or equivalent environment variables). This file
-contains the supplied public connection values.
+Never put the server key in supabase.config.js, index.html, app.js, or any
+other browser-visible file.
+
+Run KETS-main/SUPABASE_REPAIR_V2.sql in Supabase SQL Editor before deployment.
+Then deploy the package and check /api/health.

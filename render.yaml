@@ -15,6 +15,9 @@ services:
         sync: false
       - key: SUPABASE_SECRET_KEY
         sync: false
+      # Optional legacy Supabase service-role JWT; use this only if your project has not migrated to sb_secret_.
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
       - key: KETS_SESSION_SECRET
         generateValue: true
       # Developer credentials are checked before the Supabase user lookup.
