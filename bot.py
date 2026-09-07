@@ -53,7 +53,28 @@ def _source_config():
 
 @app.route("/api/health", methods=["GET"])
 def api_health():
-    return jsonify({"ok": True, "service": "KETS"})
+    return jsonify({
+        "ok": True,
+        "service": "KETS",
+        "database_configured": bool(SUPABASE_URL and SUPABASE_SERVER_KEY),
+        "database_mode": "server-key" if SUPABASE_SERVER_KEY else ("publishable-key" if SUPABASE_PUBLISHABLE_KEY else "missing"),
+    })
+
+
+@app.route("/api/diagnostics", methods=["GET"])
+def api_diagnostics():
+    # Safe operational diagnostics; never return keys or secrets.
+    configured = bool(SUPABASE_URL and SUPABASE_SERVER_KEY)
+    return jsonify({
+        "ok": configured,
+        "service": "KETS",
+        "database": "configured" if configured else "missing-server-key",
+        "message": (
+            "Supabase server access is configured."
+            if configured else
+            "Set SUPABASE_URL plus SUPABASE_SECRET_KEY or SUPABASE_SERVICE_ROLE_KEY in Render."
+        ),
+    }), (200 if configured else 503)
 
 
 # Frontend routes. Render's web service must serve the KETS website itself.
@@ -84,6 +105,15 @@ def download_android():
 # local SQLite database is required for the deployed service.
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "").strip().rstrip("/")
 SUPABASE_PUBLISHABLE_KEY = os.environ.get("SUPABASE_PUBLISHABLE_KEY", "").strip()
+# Server-side key for database operations. Prefer the modern SUPABASE_SECRET_KEY;
+# the legacy SUPABASE_SERVICE_ROLE_KEY is also accepted. This key is never sent
+# to the browser and is required when RLS protects the public tables.
+SUPABASE_SERVER_KEY = (
+    os.environ.get("SUPABASE_SECRET_KEY", "").strip()
+    or os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip()
+    or os.environ.get("SUPABASE_SERVER_KEY", "").strip()
+)
+
 
 class SupabaseIntegrityError(Exception):
     """Raised when Supabase/PostgREST rejects a duplicate/conflicting row."""
@@ -99,24 +129,30 @@ class SupabaseResult:
 class SupabaseConnection:
     """Small DB-API-like adapter for the KETS queries using PostgREST."""
     def __init__(self):
-        if not SUPABASE_URL or not SUPABASE_PUBLISHABLE_KEY:
-            raise RuntimeError("SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY must be configured.")
+        if not SUPABASE_URL or not (SUPABASE_SERVER_KEY or SUPABASE_PUBLISHABLE_KEY):
+            raise RuntimeError("SUPABASE_URL and SUPABASE_SECRET_KEY (or SUPABASE_SERVICE_ROLE_KEY) must be configured.")
         self.base = SUPABASE_URL + "/rest/v1"
-        # IMPORTANT: Supabase publishable keys are API keys, not JWT user tokens.
-        # Send the publishable key only in the `apikey` header. Sending an
-        # sb_publishable_* key as `Authorization: Bearer ...` can cause
-        # Supabase authentication/JWT handling to reject the REST request.
+        # Backend database operations use a server-only Supabase key so they can
+        # work with RLS enabled. Never expose this key in index.html/app.js.
+        api_key = SUPABASE_SERVER_KEY or SUPABASE_PUBLISHABLE_KEY
         self.headers = {
-            "apikey": SUPABASE_PUBLISHABLE_KEY,
+            "apikey": api_key,
             "Content-Type": "application/json",
             "Accept": "application/json",
         }
+        # Legacy service-role keys are JWTs and are safest with an Authorization
+        # header as well. Modern sb_secret_* keys are intentionally API-key only.
+        if SUPABASE_SERVER_KEY and SUPABASE_SERVER_KEY.count(".") == 2:
+            self.headers["Authorization"] = f"Bearer {SUPABASE_SERVER_KEY}"
     def _request(self, method, table, params=None, payload=None, prefer=None):
         headers = dict(self.headers)
         if prefer:
             headers["Prefer"] = prefer
-        r = requests.request(method, f"{self.base}/{table}", headers=headers,
-                             params=params, json=payload, timeout=20)
+        try:
+            r = requests.request(method, f"{self.base}/{table}", headers=headers,
+                                 params=params, json=payload, timeout=20)
+        except requests.RequestException as exc:
+            raise RuntimeError(f"Supabase network error: {exc}") from exc
         if r.status_code >= 400:
             text = r.text[:800]
             if r.status_code in (409, 422) or "duplicate" in text.lower() or "unique" in text.lower():
@@ -252,7 +288,7 @@ COUNTRY_REQUIRED = True
 def using_postgres():
     # Existing KETS code uses this only to select SQL syntax. The adapter above
     # accepts both forms and always sends the operation through Supabase REST.
-    return bool(SUPABASE_URL and SUPABASE_PUBLISHABLE_KEY)
+    return bool(SUPABASE_URL and (SUPABASE_SERVER_KEY or SUPABASE_PUBLISHABLE_KEY))
 
 def db_conn():
     return SupabaseConnection()
@@ -266,10 +302,12 @@ def db_execute(conn, sql, params=()):
 def init_db():
     # Schema is managed in Supabase SQL Editor. Runtime does not open a
     # PostgreSQL connection and never needs a database password.
-    if not SUPABASE_URL or not SUPABASE_PUBLISHABLE_KEY:
-        print("⚠️ SUPABASE_URL / SUPABASE_PUBLISHABLE_KEY not configured yet")
+    if not SUPABASE_URL or not (SUPABASE_SERVER_KEY or SUPABASE_PUBLISHABLE_KEY):
+        print("⚠️ SUPABASE_URL and a Supabase API key are not configured yet")
+    elif not SUPABASE_SERVER_KEY:
+        print("⚠️ KETS is using SUPABASE_PUBLISHABLE_KEY only; protected RLS writes may fail. Configure SUPABASE_SECRET_KEY on Render.")
     else:
-        print("✅ KETS Supabase REST storage configured (Project URL + Publishable Key only)")
+        print("✅ KETS Supabase REST storage configured with a server-only key")
 
 init_db()
 
@@ -367,20 +405,40 @@ def api_register():
         return jsonify({"error": "Select your country and country code."}), 400
     now = _now_iso()
     user_id = str(uuid.uuid4())
-    with DB_LOCK:
-        conn = db_conn()
-        try:
-            db_execute(conn, 
-                "INSERT INTO users(id,email,password_hash,name,country_name,country_code,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
-                (user_id,email,_hash_password(password),name,country_name,country_code,now,now)
-            )
-            conn.commit()
-        except Exception as exc:
-            if not isinstance(exc, (sqlite3.IntegrityError, SupabaseIntegrityError)):
+    try:
+        with DB_LOCK:
+            conn = db_conn()
+            try:
+                db_execute(conn,
+                    "INSERT INTO users(id,email,password_hash,name,country_name,country_code,created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
+                    (user_id,email,_hash_password(password),name,country_name,country_code,now,now)
+                )
+                conn.commit()
+            except Exception as exc:
+                if isinstance(exc, (sqlite3.IntegrityError, SupabaseIntegrityError)):
+                    return jsonify({"error": "That email already has an account. Please sign in."}), 409
                 raise
-            conn.close()
-            return jsonify({"error": "That email already has an account. Please sign in."}), 409
-        conn.close()
+            finally:
+                conn.close()
+    except Exception as exc:
+        app.logger.exception("KETS account creation failed")
+        # Never expose Supabase credentials or a traceback to the browser, but
+        # return a stable diagnostic code so the UI can distinguish database
+        # configuration failures from ordinary validation/duplicate errors.
+        message = str(exc).lower()
+        if "supabase_url" in message or "api key" in message or "configured" in message:
+            safe = "KETS database is not configured on the server. Set SUPABASE_URL and a server-only SUPABASE_SECRET_KEY or SUPABASE_SERVICE_ROLE_KEY in Render."
+            code = "DB_NOT_CONFIGURED"
+        elif "row-level security" in message or "permission denied" in message or "42501" in message or "403" in message:
+            safe = "KETS database rejected the account write. Use a server-only Supabase secret/service-role key on Render; do not use the publishable key for backend writes."
+            code = "DB_WRITE_FORBIDDEN"
+        elif "column" in message or "relation" in message or "schema cache" in message or "23502" in message:
+            safe = "KETS database schema is missing a required account field. Run KETS_SUPABASE_REPAIR_ALL.sql in the Supabase SQL Editor."
+            code = "DB_SCHEMA_MISMATCH"
+        else:
+            safe = "KETS account creation is temporarily unavailable. Check the Render logs for the Supabase error."
+            code = "DB_UNAVAILABLE"
+        return jsonify({"error": safe, "code": code}), 503
     return jsonify({"ok": True, "token": _user_token(user_id), "user": _safe_user({"id":user_id,"email":email,"name":name,"country_name":country_name,"country_code":country_code,"profile_picture":"","created_at":now,"updated_at":now})})
 
 @app.route("/api/auth/login", methods=["POST"])
@@ -766,7 +824,11 @@ PAYMENT_ORDERS_LOCK = Lock()
 
 
 def _payment_secret():
-    return os.environ.get("KETS_SESSION_SECRET") or os.environ.get("PESAPAL_CONSUMER_SECRET") or "CHANGE_ME"
+    secret = os.environ.get("KETS_SESSION_SECRET") or os.environ.get("PESAPAL_CONSUMER_SECRET")
+    # A deterministic fallback is intentionally not used. Render should provide
+    # KETS_SESSION_SECRET; otherwise tokens could be forged or invalidated after
+    # a restart. The fallback only keeps local development bootable.
+    return secret or "LOCAL-DEV-ONLY-CHANGE-ME"
 
 
 def _serializer():

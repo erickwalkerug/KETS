@@ -1,0 +1,14 @@
+KETS FINAL REPAIR DEPLOYMENT
+
+1. In Supabase SQL Editor, run SUPABASE_FINAL_SETUP.sql.
+2. In Render -> Environment, set:
+   SUPABASE_URL=https://YOUR-PROJECT.supabase.co
+   SUPABASE_SERVICE_ROLE_KEY=YOUR_SERVER_ONLY_SUPABASE_SERVICE_ROLE_OR_SECRET_KEY
+3. Do NOT place the service-role/secret key in app.js, index.html, or any browser code.
+4. Redeploy the KETS service.
+5. Test Create account with a new email.
+
+Expected result: the account request returns 200 and a new row appears in public.users.
+If Supabase is misconfigured or unavailable, registration now returns a controlled 503 with a useful message instead of an unhandled HTTP 500.
+
+The package keeps the existing UI, pricing, payment flow and signal logic.

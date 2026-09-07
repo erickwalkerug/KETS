@@ -20,6 +20,7 @@ async function api(path,opts={}){
   return d;
  }catch(e){
   if(e.name==="AbortError") throw Error("KETS server is waking up or taking too long. Please wait a moment and try again.");
+  if(e instanceof TypeError && /fetch/i.test(e.message||"")) throw Error("Cannot reach the KETS server. Check that the deployed Render service is running, then try again.");
   throw e;
  }finally{clearTimeout(timeout);}
 }

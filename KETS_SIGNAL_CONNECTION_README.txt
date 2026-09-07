@@ -1,3 +1,9 @@
+IMPORTANT DEPLOYMENT NOTE (ACCOUNT CREATION FIX):
+The browser publishable key is NOT sufficient for KETS backend registration/payment writes when
+Supabase Row Level Security is enabled. Render must have SUPABASE_URL plus either
+SUPABASE_SECRET_KEY (preferred) or SUPABASE_SERVICE_ROLE_KEY. Keep that key server-side only.
+Run KETS_SUPABASE_REPAIR_ALL.sql once in Supabase SQL Editor.
+
 ## Direct bot -> website signal bridge
 
 The website accepts direct POST requests from the KETS trading bot at `/api/signals`. The bot sends JSON and the website normalizes the payload, rejects malformed requests, prevents duplicate signal IDs, stores the signal for the 7-day history, and makes it immediately available to the existing dashboard API. Signal authentication is optional by default so a Render secret mismatch cannot block delivery; set `KETS_REQUIRE_SIGNAL_AUTH=1` to require `X-KETS-API-KEY`.
