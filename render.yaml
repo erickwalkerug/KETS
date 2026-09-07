@@ -6,10 +6,13 @@ services:
     startCommand: gunicorn bot:app --workers 1 --threads 4 --timeout 120
     healthCheckPath: /api/health
     envVars:
-      # Supabase REST uses only the Project URL and Publishable Key.
+      # Server-only Supabase access. Never put this key in the browser.
       - key: SUPABASE_URL
         sync: false
-      - key: SUPABASE_PUBLISHABLE_KEY
+      - key: SUPABASE_SECRET_KEY
+        sync: false
+      # Legacy fallback accepted by the backend:
+      - key: SUPABASE_SERVICE_ROLE_KEY
         sync: false
       - key: KETS_SESSION_SECRET
         generateValue: true

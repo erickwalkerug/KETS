@@ -1,3 +1,9 @@
+IMPORTANT DEPLOYMENT NOTE (ACCOUNT CREATION FIX):
+The browser publishable key is NOT sufficient for KETS backend registration/payment writes when
+Supabase Row Level Security is enabled. Render must have SUPABASE_URL plus either
+SUPABASE_SECRET_KEY (preferred) or SUPABASE_SERVICE_ROLE_KEY. Keep that key server-side only.
+Run KETS_SUPABASE_REPAIR_ALL.sql once in Supabase SQL Editor.
+
 KETS WEBSITE VERSION — SUPABASE PERMANENT STORAGE
 
 This package removes the Android/PWA installation dependency. KETS is now a normal responsive website that users open in Chrome.
