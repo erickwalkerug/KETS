@@ -1,1 +1,0 @@
-KETS Supabase V2 applied: server-only key enforcement, retryable REST client, diagnostics, and idempotent schema repair.
