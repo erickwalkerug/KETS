@@ -58,18 +58,18 @@ def api_health():
             conn=db_conn()
             conn.execute("SELECT 1").fetchone()
             conn.close()
-        return jsonify({"ok":True,"service":"KETS","database_configured":True,"database_mode":"render_sqlite","storage":"render_persistent_disk","storage_path":DB_PATH})
+        return jsonify({"ok":True,"service":"KETS","database_configured":True,"database_mode":"render_postgres" if USING_POSTGRES else "sqlite","storage":"render_postgres" if USING_POSTGRES else "local_temp","storage_path":"DATABASE_URL" if USING_POSTGRES else DB_PATH})
     except Exception:
-        return jsonify({"ok":False,"service":"KETS","database_configured":False,"database_mode":"render_sqlite","storage":"render_persistent_disk","storage_path":DB_PATH}),503
+        return jsonify({"ok":False,"service":"KETS","database_configured":False,"database_mode":"render_postgres" if USING_POSTGRES else "sqlite","storage":"render_postgres" if USING_POSTGRES else "local_temp","storage_path":"DATABASE_URL" if USING_POSTGRES else DB_PATH}),503
 
 @app.route("/api/diagnostics", methods=["GET"])
 def api_diagnostics():
     try:
         with DB_LOCK:
             conn=db_conn(); conn.execute("SELECT 1").fetchone(); conn.close()
-        return jsonify({"ok":True,"service":"KETS","database":{"ok":True,"stage":"render_persistent_disk","code":"DB_OK"},"storage_path":DB_PATH})
+        return jsonify({"ok":True,"service":"KETS","database":{"ok":True,"stage":"render_postgres" if USING_POSTGRES else "sqlite","code":"DB_OK"},"storage_path":DB_PATH})
     except Exception:
-        return jsonify({"ok":False,"service":"KETS","database":{"ok":False,"stage":"render_persistent_disk","code":"DB_UNAVAILABLE"}}),503
+        return jsonify({"ok":False,"service":"KETS","database":{"ok":False,"stage":"render_postgres" if USING_POSTGRES else "sqlite","code":"DB_UNAVAILABLE"}}),503
 
 # Frontend routes. Render's web service must serve the KETS website itself.
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -100,14 +100,190 @@ def download_android():
 # in SQLite on the Render Persistent Disk. No Supabase database
 # is used by the website.
 # ============================================================
-POSTGRES_AVAILABLE = False
-RENDER_DATA_DIR = os.environ.get("KETS_DATA_DIR", "/var/data")
+# ============================================================
+# DATABASE STORAGE
+# Render Postgres is used automatically when DATABASE_URL exists.
+# SQLite remains as a local fallback for development.
+# ============================================================
 try:
-    os.makedirs(RENDER_DATA_DIR, exist_ok=True)
-except OSError:
-    pass
-DB_PATH = os.environ.get("KETS_DB_PATH", os.path.join(RENDER_DATA_DIR, "kets_website.db"))
+    import psycopg2
+    from psycopg2.extras import RealDictCursor
+    POSTGRES_AVAILABLE = True
+except ImportError:
+    psycopg2 = None
+    RealDictCursor = None
+    POSTGRES_AVAILABLE = False
+
+DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
+USING_POSTGRES = bool(DATABASE_URL and POSTGRES_AVAILABLE)
+
+class PGConnection:
+    def __init__(self, url):
+        self.raw = psycopg2.connect(url, connect_timeout=10)
+    def execute(self, sql, params=()):
+        sql = _pg_sql(sql)
+        cur = self.raw.cursor(cursor_factory=RealDictCursor)
+        cur.execute(sql, params)
+        return cur
+    def executescript(self, sql):
+        # Used only by init_db; split the static CREATE statements.
+        cur = self.raw.cursor()
+        for statement in sql.split(";"):
+            statement = statement.strip()
+            if statement:
+                cur.execute(_pg_sql(statement))
+        cur.close()
+    def commit(self):
+        self.raw.commit()
+    def close(self):
+        self.raw.close()
+    def __enter__(self):
+        return self
+    def __exit__(self, exc_type, exc, tb):
+        if exc_type:
+            self.raw.rollback()
+        else:
+            self.raw.commit()
+        self.raw.close()
+
+def _pg_sql(sql):
+    sql = sql.replace("COLLATE NOCASE", "")
+    sql = sql.replace("INSERT OR REPLACE INTO", "INSERT INTO")
+    # PostgreSQL accepts %s placeholders rather than SQLite's ?.
+    sql = sql.replace("?", "%s")
+    # For the two KETS tables that use INSERT OR REPLACE, emulate SQLite
+    # replacement semantics with an upsert on the primary key.
+    if sql.lstrip().upper().startswith("INSERT INTO"):
+        m = re.search(r"INSERT INTO\s+(\w+)\s*\(([^)]+)\)\s*VALUES\s*\(([^)]+)\)", sql, re.I | re.S)
+        if m and "ON CONFLICT" not in sql.upper() and m.group(1).lower() in ("payments", "signals"):
+            table=m.group(1)
+            cols=[c.strip() for c in m.group(2).split(",")]
+            updates=", ".join(f"{c}=EXCLUDED.{c}" for c in cols if c.lower() != "id")
+            sql += f" ON CONFLICT (id) DO UPDATE SET {updates}"
+    return sql
+
+def _choose_data_dir():
+    configured = os.environ.get("KETS_DATA_DIR", "").strip()
+    candidates = [configured] if configured else []
+    candidates += ["/tmp/kets_data", os.path.join(BASE_DIR, "data")]
+    for candidate in candidates:
+        try:
+            os.makedirs(candidate, exist_ok=True)
+            return candidate
+        except OSError:
+            continue
+    return "/tmp"
+
+RENDER_DATA_DIR = _choose_data_dir()
+DB_PATH = os.path.join(RENDER_DATA_DIR, "kets_website.db")
+
 DB_LOCK = Lock()
+
+def using_postgres():
+    return USING_POSTGRES
+
+def db_conn():
+    if USING_POSTGRES:
+        return PGConnection(DATABASE_URL)
+    conn = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+def _db_sql(sql):
+    return _pg_sql(sql) if USING_POSTGRES else sql
+
+def db_execute(conn, sql, params=()):
+    return conn.execute(_db_sql(sql), params)
+
+def init_db():
+    if USING_POSTGRES:
+        with db_conn() as conn:
+            conn.executescript("""
+            CREATE TABLE IF NOT EXISTS users (
+                id TEXT PRIMARY KEY,
+                email TEXT NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL,
+                name TEXT NOT NULL,
+                country_name TEXT,
+                country_code TEXT NOT NULL,
+                profile_picture TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS payments (
+                id TEXT PRIMARY KEY,
+                user_id TEXT NOT NULL,
+                tx_ref TEXT NOT NULL UNIQUE,
+                tracking_id TEXT,
+                plan TEXT NOT NULL,
+                amount DOUBLE PRECISION NOT NULL,
+                currency TEXT NOT NULL,
+                status TEXT NOT NULL,
+                network TEXT,
+                email TEXT,
+                phone TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_payments_user_status ON payments(user_id, status, updated_at);
+            CREATE TABLE IF NOT EXISTS signals (
+                id TEXT PRIMARY KEY,
+                asset TEXT NOT NULL,
+                direction TEXT,
+                score DOUBLE PRECISION,
+                timestamp TEXT,
+                payload TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_signals_timestamp ON signals(timestamp);
+            CREATE TABLE IF NOT EXISTS app_meta (key TEXT PRIMARY KEY, value TEXT);
+            """)
+        print("✅ KETS Render Postgres storage enabled")
+        return
+
+    with db_conn() as conn:
+        conn.executescript("""
+        CREATE TABLE IF NOT EXISTS users (
+            id TEXT PRIMARY KEY,
+            email TEXT NOT NULL UNIQUE COLLATE NOCASE,
+            password_hash TEXT NOT NULL,
+            name TEXT NOT NULL,
+            country_name TEXT,
+            country_code TEXT NOT NULL,
+            profile_picture TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS payments (
+            id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            tx_ref TEXT NOT NULL UNIQUE,
+            tracking_id TEXT,
+            plan TEXT NOT NULL,
+            amount REAL NOT NULL,
+            currency TEXT NOT NULL,
+            status TEXT NOT NULL,
+            network TEXT,
+            email TEXT,
+            phone TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_payments_user_status ON payments(user_id, status, updated_at);
+        CREATE TABLE IF NOT EXISTS signals (
+            id TEXT PRIMARY KEY,
+            asset TEXT NOT NULL,
+            direction TEXT,
+            score REAL,
+            timestamp TEXT,
+            payload TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_signals_timestamp ON signals(timestamp);
+        CREATE TABLE IF NOT EXISTS app_meta (key TEXT PRIMARY KEY, value TEXT);
+        """)
+    print(f"✅ KETS local SQLite fallback: {DB_PATH}")
+
 COUNTRY_REQUIRED = True
 
 def using_postgres():
@@ -125,7 +301,12 @@ def db_execute(conn, sql, params=()):
     return conn.execute(sql, params)
 
 def init_db():
-    os.makedirs(os.path.dirname(DB_PATH) or ".", exist_ok=True)
+    global DB_PATH
+    try:
+        os.makedirs(os.path.dirname(DB_PATH) or ".", exist_ok=True)
+    except OSError:
+        DB_PATH = "/tmp/kets_website.db"
+        os.makedirs("/tmp", exist_ok=True)
     with db_conn() as conn:
         conn.executescript("""
         CREATE TABLE IF NOT EXISTS users (

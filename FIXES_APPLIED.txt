@@ -23,3 +23,9 @@ ENTRY QUALITY HARDENING — 2026-09-05
 - Added hard rejection for reversal, overextension, timeframe conflict, weak trend, and failed entry structure.
 - Final broadcast gate now requires entry quality >=72 with no hard-fail condition.
 - bot.py passes Python syntax compilation after the changes.
+
+
+DEPLOYMENT FIX — 2026-09-07
+- Fixed PermissionError caused by attempting to create /var/data when no writable disk is mounted.
+- KETS now automatically selects a writable data directory and falls back to /tmp/kets_data.
+- render.yaml no longer requires the /var/data disk mount, allowing the Free web service to start.

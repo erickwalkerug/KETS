@@ -1,6 +1,7 @@
 KETS WEBSITE - FINAL
-- Storage: Render Persistent Disk at /var/data/kets_website.db
-- No Supabase database is required.
+- Storage: Render Postgres via DATABASE_URL.
+- Render Blueprint creates and connects the kets-db Postgres database automatically.
+- No Supabase database is required for KETS website accounts, payments, or stored signals.
 - Scanner feed refresh remains independent; trading engine scans every 1 minute.
 - Payment plans:
   Uganda: 30 min UGX 10,000; 1 hour UGX 30,000; 1 day UGX 50,000; 1 week UGX 400,000; 1 month UGX 2,000,000.
@@ -9,3 +10,4 @@ KETS WEBSITE - FINAL
 - Under every displayed subscription price: Payments are required for service maintanace
 - Website displays complete Entry Quality figures supplied by the trading engine.
 - Weekdays: GOLD only. Weekend: BTC only.
+- SQLite remains only as a local fallback if DATABASE_URL is not present.
