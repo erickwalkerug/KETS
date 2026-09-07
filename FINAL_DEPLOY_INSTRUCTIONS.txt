@@ -3,7 +3,7 @@ KETS FINAL REPAIR DEPLOYMENT
 1. In Supabase SQL Editor, run SUPABASE_FINAL_SETUP.sql.
 2. In Render -> Environment, set:
    SUPABASE_URL=https://YOUR-PROJECT.supabase.co
-   SUPABASE_SERVICE_ROLE_KEY=YOUR_SERVER_ONLY_SUPABASE_SERVICE_ROLE_OR_SECRET_KEY
+   LEGACY_SERVICE_ROLE_KEY_NOT_USED=YOUR_SERVER_ONLY_SUPABASE_SERVICE_ROLE_OR_SECRET_KEY
 3. Do NOT place the service-role/secret key in app.js, index.html, or any browser code.
 4. Redeploy the KETS service.
 5. Test Create account with a new email.

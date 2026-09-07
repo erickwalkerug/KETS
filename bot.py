@@ -51,30 +51,58 @@ def _source_config():
         or os.environ.get("KETS_SIGNALS_API_KEY", "").strip(),
     )
 
+def _probe_supabase():
+    """Perform a real, read-only Supabase/PostgREST probe.
+
+    Configuration-only checks are not enough: a service can have all Render
+    variables set while PostgREST is unreachable, rejecting the key, or the
+    users table is unavailable. This returns only safe diagnostic information.
+    """
+    if not SUPABASE_URL or not SUPABASE_SERVER_KEY:
+        return {"ok": False, "stage": "configuration", "code": "DB_NOT_CONFIGURED"}
+    try:
+        conn = SupabaseConnection()
+        conn._request("GET", "users", {"select": "id", "limit": "1"})
+        return {"ok": True, "stage": "database", "code": "DB_OK"}
+    except Exception as exc:
+        text = str(exc).lower()
+        if "network error" in text:
+            code = "DB_NETWORK"
+        elif "401" in text or "403" in text or "permission" in text or "row-level security" in text:
+            code = "DB_AUTH_OR_RLS"
+        elif "404" in text or "relation" in text or "schema cache" in text:
+            code = "DB_TABLE_OR_SCHEMA"
+        else:
+            code = "DB_UNAVAILABLE"
+        return {"ok": False, "stage": "database", "code": code}
+
+
 @app.route("/api/health", methods=["GET"])
 def api_health():
+    probe = _probe_supabase()
     return jsonify({
-        "ok": True,
+        "ok": probe["ok"],
         "service": "KETS",
         "database_configured": bool(SUPABASE_URL and SUPABASE_SERVER_KEY),
         "database_mode": "server-key" if SUPABASE_SERVER_KEY else ("publishable-key" if SUPABASE_PUBLISHABLE_KEY else "missing"),
-    })
+        "database": probe,
+    }), (200 if probe["ok"] else 503)
 
 
 @app.route("/api/diagnostics", methods=["GET"])
 def api_diagnostics():
-    # Safe operational diagnostics; never return keys or secrets.
-    configured = bool(SUPABASE_URL and SUPABASE_SERVER_KEY)
+    # Safe operational diagnostics; never return keys, secrets, or raw DB errors.
+    probe = _probe_supabase()
     return jsonify({
-        "ok": configured,
+        "ok": probe["ok"],
         "service": "KETS",
-        "database": "configured" if configured else "missing-server-key",
+        "database": probe,
         "message": (
-            "Supabase server access is configured."
-            if configured else
-            "Set SUPABASE_URL plus SUPABASE_SECRET_KEY or SUPABASE_SERVICE_ROLE_KEY in Render."
+            "Supabase REST/database access is working."
+            if probe["ok"] else
+            "Supabase REST/database access is not working. Check the database diagnostic code and Render logs."
         ),
-    }), (200 if configured else 503)
+    }), (200 if probe["ok"] else 503)
 
 
 # Frontend routes. Render's web service must serve the KETS website itself.
@@ -105,14 +133,11 @@ def download_android():
 # local SQLite database is required for the deployed service.
 SUPABASE_URL = os.environ.get("SUPABASE_URL", "").strip().rstrip("/")
 SUPABASE_PUBLISHABLE_KEY = os.environ.get("SUPABASE_PUBLISHABLE_KEY", "").strip()
-# Server-side key for database operations. Prefer the modern SUPABASE_SECRET_KEY;
-# the legacy SUPABASE_SERVICE_ROLE_KEY is also accepted. This key is never sent
-# to the browser and is required when RLS protects the public tables.
-SUPABASE_SERVER_KEY = (
-    os.environ.get("SUPABASE_SECRET_KEY", "").strip()
-    or os.environ.get("SUPABASE_SERVICE_ROLE_KEY", "").strip()
-    or os.environ.get("SUPABASE_SERVER_KEY", "").strip()
-)
+# Server-side Supabase Secret Key. This is the only server-side database key
+# KETS requires. The Publishable Key is kept separate for client-side use and
+# is never used as a substitute for the server secret.
+SUPABASE_SECRET_KEY = os.environ.get("SUPABASE_SECRET_KEY", "").strip()
+SUPABASE_SERVER_KEY = SUPABASE_SECRET_KEY
 
 
 class SupabaseIntegrityError(Exception):
@@ -130,7 +155,7 @@ class SupabaseConnection:
     """Small DB-API-like adapter for the KETS queries using PostgREST."""
     def __init__(self):
         if not SUPABASE_URL or not (SUPABASE_SERVER_KEY or SUPABASE_PUBLISHABLE_KEY):
-            raise RuntimeError("SUPABASE_URL and SUPABASE_SECRET_KEY (or SUPABASE_SERVICE_ROLE_KEY) must be configured.")
+            raise RuntimeError("SUPABASE_URL and SUPABASE_SECRET_KEY must be configured.")
         self.base = SUPABASE_URL + "/rest/v1"
         # Backend database operations use a server-only Supabase key so they can
         # work with RLS enabled. Never expose this key in index.html/app.js.
@@ -305,7 +330,7 @@ def init_db():
     if not SUPABASE_URL or not (SUPABASE_SERVER_KEY or SUPABASE_PUBLISHABLE_KEY):
         print("⚠️ SUPABASE_URL and a Supabase API key are not configured yet")
     elif not SUPABASE_SERVER_KEY:
-        print("⚠️ KETS is using SUPABASE_PUBLISHABLE_KEY only; protected RLS writes may fail. Configure SUPABASE_SECRET_KEY on Render.")
+        print("⚠️ SUPABASE_SECRET_KEY is missing; server-side account operations cannot run.")
     else:
         print("✅ KETS Supabase REST storage configured with a server-only key")
 
@@ -427,10 +452,10 @@ def api_register():
         # configuration failures from ordinary validation/duplicate errors.
         message = str(exc).lower()
         if "supabase_url" in message or "api key" in message or "configured" in message:
-            safe = "KETS database is not configured on the server. Set SUPABASE_URL and a server-only SUPABASE_SECRET_KEY or SUPABASE_SERVICE_ROLE_KEY in Render."
+            safe = "KETS database is not configured on the server. Set SUPABASE_URL and SUPABASE_SECRET_KEY in Render."
             code = "DB_NOT_CONFIGURED"
         elif "row-level security" in message or "permission denied" in message or "42501" in message or "403" in message:
-            safe = "KETS database rejected the account write. Use a server-only Supabase secret/service-role key on Render; do not use the publishable key for backend writes."
+            safe = "KETS database rejected the account write. Check the Supabase Secret Key and database permissions in Render."
             code = "DB_WRITE_FORBIDDEN"
         elif "column" in message or "relation" in message or "schema cache" in message or "23502" in message:
             safe = "KETS database schema is missing a required account field. Run KETS_SUPABASE_REPAIR_ALL.sql in the Supabase SQL Editor."
@@ -476,7 +501,11 @@ def api_login():
             conn.close()
     except Exception as exc:
         app.logger.exception("Normal user sign-in database lookup failed")
-        return jsonify({"error": "Sign-in service is temporarily unavailable. Please try again shortly."}), 503
+        probe = _probe_supabase()
+        return jsonify({
+            "error": "Sign-in service is temporarily unavailable. Please try again shortly.",
+            "code": probe.get("code", "DB_UNAVAILABLE"),
+        }), 503
 
     if not row:
         return jsonify({"error": "Account not found. Create a KETS account first."}), 401

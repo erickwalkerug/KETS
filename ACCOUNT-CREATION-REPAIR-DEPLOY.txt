@@ -1,7 +1,7 @@
 KETS ACCOUNT CREATION REPAIR — DEPLOY THIS VERSION
 
 What was repaired:
-- Backend accepts SUPABASE_SECRET_KEY or the legacy SUPABASE_SERVICE_ROLE_KEY.
+- Backend accepts SUPABASE_SECRET_KEY or the legacy LEGACY_SERVICE_ROLE_KEY_NOT_USED.
 - Render configuration now declares both server-key variables consistently.
 - Registration failures return safe, useful diagnostics instead of a generic HTTP 500.
 - Browser "Failed to fetch" is converted to a clear server-connectivity message.
@@ -14,7 +14,7 @@ IMPORTANT:
    SUPABASE_URL=https://YOUR-PROJECT.supabase.co
    SUPABASE_SECRET_KEY=YOUR_SERVER-ONLY-SUPABASE-SECRET-KEY
    KETS_SESSION_SECRET=YOUR-STABLE-RANDOM-SECRET (or let render.yaml generate it)
-3. If your project only has the legacy service-role JWT, set SUPABASE_SERVICE_ROLE_KEY instead.
+3. If your project only has the legacy service-role JWT, set LEGACY_SERVICE_ROLE_KEY_NOT_USED instead.
 4. Do NOT put the secret/service-role key into app.js, index.html, Android code, or GitHub.
 5. Deploy/redeploy the KETS Render service.
 6. Open /api/health. It should report database_configured=true and database_mode=server-key.
