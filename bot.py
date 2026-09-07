@@ -52,29 +52,8 @@ def _source_config():
     )
 
 def _probe_supabase():
-    """Perform a real, read-only Supabase/PostgREST probe.
-
-    Configuration-only checks are not enough: a service can have all Render
-    variables set while PostgREST is unreachable, rejecting the key, or the
-    users table is unavailable. This returns only safe diagnostic information.
-    """
-    if not SUPABASE_URL or not SUPABASE_SERVER_KEY:
-        return {"ok": False, "stage": "configuration", "code": "DB_NOT_CONFIGURED"}
-    try:
-        conn = SupabaseConnection()
-        conn._request("GET", "users", {"select": "id", "limit": "1"})
-        return {"ok": True, "stage": "database", "code": "DB_OK"}
-    except Exception as exc:
-        text = str(exc).lower()
-        if "network error" in text:
-            code = "DB_NETWORK"
-        elif "401" in text or "403" in text or "permission" in text or "row-level security" in text:
-            code = "DB_AUTH_OR_RLS"
-        elif "404" in text or "relation" in text or "schema cache" in text:
-            code = "DB_TABLE_OR_SCHEMA"
-        else:
-            code = "DB_UNAVAILABLE"
-        return {"ok": False, "stage": "database", "code": code}
+    """Perform a real, read-only Supabase/PostgREST probe."""
+    return supabase_diagnostics()
 
 
 @app.route("/api/health", methods=["GET"])
@@ -128,175 +107,18 @@ def download_android():
     return send_from_directory(BASE_DIR, "kets-android.apk", as_attachment=True, download_name="KETS-Android.apk")
 
 
-# Supabase REST storage: uses ONLY the Project URL + Publishable Key.
-# No PostgreSQL connection string, database password, service-role key, or
-# local SQLite database is required for the deployed service.
-SUPABASE_URL = os.environ.get("SUPABASE_URL", "").strip().rstrip("/")
-SUPABASE_PUBLISHABLE_KEY = os.environ.get("SUPABASE_PUBLISHABLE_KEY", "").strip()
-# Server-side Supabase Secret Key. This is the only server-side database key
-# KETS requires. The Publishable Key is kept separate for client-side use and
-# is never used as a substitute for the server secret.
-SUPABASE_SECRET_KEY = os.environ.get("SUPABASE_SECRET_KEY", "").strip()
-SUPABASE_SERVER_KEY = SUPABASE_SECRET_KEY
-
-
-class SupabaseIntegrityError(Exception):
-    """Raised when Supabase/PostgREST rejects a duplicate/conflicting row."""
-
-class SupabaseResult:
-    def __init__(self, rows=None):
-        self.rows = rows or []
-    def fetchone(self):
-        return self.rows[0] if self.rows else None
-    def fetchall(self):
-        return list(self.rows)
-
-class SupabaseConnection:
-    """Small DB-API-like adapter for the KETS queries using PostgREST."""
-    def __init__(self):
-        if not SUPABASE_URL or not (SUPABASE_SERVER_KEY or SUPABASE_PUBLISHABLE_KEY):
-            raise RuntimeError("SUPABASE_URL and SUPABASE_SECRET_KEY must be configured.")
-        self.base = SUPABASE_URL + "/rest/v1"
-        # Backend database operations use a server-only Supabase key so they can
-        # work with RLS enabled. Never expose this key in index.html/app.js.
-        api_key = SUPABASE_SERVER_KEY or SUPABASE_PUBLISHABLE_KEY
-        self.headers = {
-            "apikey": api_key,
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-        }
-        # Legacy service-role keys are JWTs and are safest with an Authorization
-        # header as well. Modern sb_secret_* keys are intentionally API-key only.
-        if SUPABASE_SERVER_KEY and SUPABASE_SERVER_KEY.count(".") == 2:
-            self.headers["Authorization"] = f"Bearer {SUPABASE_SERVER_KEY}"
-    def _request(self, method, table, params=None, payload=None, prefer=None):
-        headers = dict(self.headers)
-        if prefer:
-            headers["Prefer"] = prefer
-        try:
-            r = requests.request(method, f"{self.base}/{table}", headers=headers,
-                                 params=params, json=payload, timeout=20)
-        except requests.RequestException as exc:
-            raise RuntimeError(f"Supabase network error: {exc}") from exc
-        if r.status_code >= 400:
-            text = r.text[:800]
-            if r.status_code in (409, 422) or "duplicate" in text.lower() or "unique" in text.lower():
-                raise SupabaseIntegrityError(text)
-            raise RuntimeError(f"Supabase request failed ({r.status_code}): {text}")
-        if not r.content:
-            return []
-        try:
-            data = r.json()
-        except Exception:
-            return []
-        return data if isinstance(data, list) else [data] if isinstance(data, dict) else []
-
-    def execute(self, sql, params=()):
-        q = " ".join(str(sql).strip().split())
-        low = q.lower()
-        params = tuple(params or ())
-
-        # SELECT queries used by KETS.
-        if low.startswith("select"):
-            table_m = re.search(r"from\s+(users|payments|signals)\b", low)
-            if not table_m:
-                raise RuntimeError(f"Unsupported Supabase SELECT: {q[:200]}")
-            table = table_m.group(1)
-            if "count(*) n" in low and table == "payments":
-                rows = self._request("GET", "payments", {"select":"plan,status,updated_at", "status":"eq.COMPLETED", "updated_at":"not.is.null"})
-                counts = {}
-                for row in rows:
-                    plan = row.get("plan")
-                    counts[plan] = counts.get(plan, 0) + 1
-                return SupabaseResult([{"plan":k,"n":v} for k,v in counts.items()])
-
-            select_m = re.search(r"select\s+(.*?)\s+from\s+", q, re.I)
-            select_cols = select_m.group(1).strip() if select_m else "*"
-            select_cols = select_cols.replace(" COLLATE NOCASE", "")
-            api_params = {"select": select_cols}
-
-            # WHERE conditions in the known KETS queries.
-            if table == "users":
-                if "where id=" in low:
-                    api_params["id"] = f"eq.{params[0]}"
-                elif "where email=" in low:
-                    api_params["email"] = f"ilike.{params[0]}"
-            elif table == "payments":
-                if "where user_id=" in low:
-                    api_params["user_id"] = f"eq.{params[0]}"
-                    if "status='completed'" in low:
-                        api_params["status"] = "eq.COMPLETED"
-                elif "where tx_ref=" in low:
-                    api_params["tx_ref"] = f"eq.{params[0]}"
-                elif "where status='completed'" in low:
-                    api_params["status"] = "eq.COMPLETED"
-                if "status='completed'" in low and "status" not in api_params:
-                    api_params["status"] = "eq.COMPLETED"
-            elif table == "signals":
-                if "timestamp >=" in low:
-                    api_params["timestamp"] = f"gte.{params[0]}"
-
-            if "order by created_at desc" in low:
-                api_params["order"] = "created_at.desc"
-            elif "order by updated_at desc" in low:
-                api_params["order"] = "updated_at.desc"
-            elif "order by timestamp asc" in low:
-                api_params["order"] = "timestamp.asc"
-            if "limit 100" in low:
-                api_params["limit"] = "100"
-            elif "limit 500" in low:
-                api_params["limit"] = "500"
-
-            rows = self._request("GET", table, api_params)
-            return SupabaseResult(rows)
-
-        # INSERT/UPSERT queries.
-        if low.startswith("insert"):
-            table_m = re.search(r"into\s+(users|payments|signals)\s*\((.*?)\)\s+values", q, re.I)
-            if not table_m:
-                raise RuntimeError(f"Unsupported Supabase INSERT: {q[:240]}")
-            table = table_m.group(1)
-            columns = [c.strip() for c in table_m.group(2).split(",")]
-            row = dict(zip(columns, params))
-            if table == "users":
-                self._request("POST", table, payload=row, prefer="return=minimal")
-            elif table == "payments":
-                self._request("POST", table, payload=row,
-                              prefer="resolution=merge-duplicates,return=minimal")
-            elif table == "signals":
-                self._request("POST", table, payload=row,
-                              prefer="resolution=merge-duplicates,return=minimal")
-            return SupabaseResult([])
-
-        # UPDATE queries.
-        if low.startswith("update users set"):
-            values = {
-                "name": params[0], "country_name": params[1], "country_code": params[2],
-                "profile_picture": params[3], "updated_at": params[4]
-            }
-            self._request("PATCH", "users", {"id": f"eq.{params[5]}"}, values,
-                          prefer="return=minimal")
-            return SupabaseResult([])
-
-        if low.startswith("update payments set"):
-            # KETS uses two forms: completed update and non-completed status update.
-            if "updated_at=? where tx_ref=?" in low:
-                values = {"tracking_id": params[0], "status": "COMPLETED",
-                          "amount": params[1], "updated_at": params[2]}
-                tx_ref = params[3]
-            else:
-                values = {"tracking_id": params[0], "status": params[1], "amount": params[2]}
-                tx_ref = params[3]
-            self._request("PATCH", "payments", {"tx_ref": f"eq.{tx_ref}"}, values,
-                          prefer="return=minimal")
-            return SupabaseResult([])
-
-        raise RuntimeError(f"Unsupported Supabase query: {q[:300]}")
-
-    def commit(self):
-        pass
-    def close(self):
-        pass
+# Supabase REST storage is isolated in supabase_client.py.
+# The backend requires a server-only secret/service-role key; the browser
+# publishable key is never accepted for trusted database writes.
+from supabase_client import (
+    SUPABASE_URL,
+    SUPABASE_PUBLISHABLE_KEY,
+    SUPABASE_SERVER_KEY,
+    SupabaseConnection,
+    SupabaseIntegrityError,
+    SupabaseResult,
+    supabase_diagnostics,
+)
 
 # Compatibility names retained so the rest of KETS keeps its existing logic.
 POSTGRES_AVAILABLE = False
@@ -451,8 +273,8 @@ def api_register():
         # return a stable diagnostic code so the UI can distinguish database
         # configuration failures from ordinary validation/duplicate errors.
         message = str(exc).lower()
-        if "supabase_url" in message or "api key" in message or "configured" in message:
-            safe = "KETS database is not configured on the server. Set SUPABASE_URL and SUPABASE_SECRET_KEY in Render."
+        if "supabase_url" in message or "api key" in message or "configured" in message or "server key" in message or "wrong key type" in message:
+            safe = "KETS database is not configured on the server. Set SUPABASE_URL plus SUPABASE_SECRET_KEY (or SUPABASE_SERVICE_ROLE_KEY) in Render."
             code = "DB_NOT_CONFIGURED"
         elif "row-level security" in message or "permission denied" in message or "42501" in message or "403" in message:
             safe = "KETS database rejected the account write. Check the Supabase Secret Key and database permissions in Render."
