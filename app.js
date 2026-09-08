@@ -300,6 +300,12 @@ function renderRichDashboard(s, asset){
  const cls=direction==="SELL"?"sell":"buy";
  const score=Number(s?.score??s?.strength??s?.confidence??0);
  const confidence=goldConfidenceLabel(score,s?.confidence_label||s?.confidenceLabel||s?.confidence_level||s?.confidenceLevel);
+ const reversalSignal=Boolean(s?.reversal_signal??s?.reversalSignal??(String(s?.signal_type||"").toUpperCase()==="STRONG REVERSAL"));
+ const signalType=String(s?.signal_type||s?.signalType||"").trim().toUpperCase();
+ const classification=String(s?.classification||"").trim();
+ const reversalReasons=Array.isArray(s?.reversal_reasons)?s.reversal_reasons:[];
+ const evidenceCount=Number(s?.reversal_evidence_count??s?.reversalEvidenceCount);
+ const evidenceTotal=Number(s?.reversal_evidence_total??s?.reversalEvidenceTotal);
  const desc=goldConfidenceDescription(confidence,score);
  const eqScoreRaw=Number(s?.entry_quality_score??s?.entryQualityScore??s?.entry_quality?.score);
  const eqScore=Number.isFinite(eqScoreRaw)?Math.max(0,Math.min(100,Math.round(eqScoreRaw))):null;
@@ -347,6 +353,13 @@ function renderRichDashboard(s, asset){
  </div></div>`;
  return `<article class="gold-dashboard ${cls} ${isGold?'gold-market-dashboard':'btc-market-dashboard'}">
   <div class="gold-confidence-top"><div class="gold-confidence-title">KETS CONFIDENCE</div><div class="gold-confidence-value">${esc(confidence)}${score?` · ${score}%`:""}</div><div class="gold-confidence-description">${esc(desc)}</div></div>
+  ${reversalSignal?`<div class="strong-reversal-banner">
+    <div class="strong-reversal-title">🔥 STRONG REVERSAL ENTRY</div>
+    <div class="strong-reversal-subtitle">${esc(classification||signalType||"NEW STRONG REVERSAL")}</div>
+    <div class="strong-reversal-evidence">${Number.isFinite(evidenceCount)&&Number.isFinite(evidenceTotal)?`Evidence confirmed: ${evidenceCount}/${evidenceTotal} checks`:"Evidence gate confirmed before entry"} · 1-MIN ENGINE</div>
+    ${reversalReasons.length?`<div class="strong-reversal-reasons">${reversalReasons.map(x=>`<span>✓ ${esc(x)}</span>`).join("")}</div>`:""}
+  </div>`:""}
+
   <div class="entry-quality-panel ${eqClass}">
    <div class="entry-quality-head">
     <div><span class="entry-quality-kicker">ENTRY QUALITY</span><strong>${eqScore!==null?`${eqScore}/100`:"--"}</strong></div>
