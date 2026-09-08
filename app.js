@@ -1,4 +1,4 @@
-const API_BASE=window.location.origin, REFRESH_MS=10000, TIMER_MS=1000;
+const API_BASE=window.location.origin, REFRESH_MS=5000, TIMER_MS=1000;
 const freshHash=new URLSearchParams(location.hash.replace(/^#/,"?"));
 const hashToken=freshHash.get("login")||"";
 const storedToken=sessionStorage.getItem("kets_user_token")||"";
@@ -300,7 +300,7 @@ function renderRichDashboard(s, asset){
  const cls=direction==="SELL"?"sell":"buy";
  const score=Number(s?.score??s?.strength??s?.confidence??0);
  const confidence=goldConfidenceLabel(score,s?.confidence_label||s?.confidenceLabel||s?.confidence_level||s?.confidenceLevel);
- const reversalSignal=Boolean(s?.reversal_signal??s?.reversalSignal??(String(s?.signal_type||"").toUpperCase()==="STRONG REVERSAL"));
+ const reversalSignal=Boolean(s?.strong_reversal??s?.strongReversal??s?.reversal_signal??s?.reversalSignal??(String(s?.signal_type||"").toUpperCase().includes("STRONG REVERSAL")));
  const signalType=String(s?.signal_type||s?.signalType||"").trim().toUpperCase();
  const classification=String(s?.classification||"").trim();
  const reversalReasons=Array.isArray(s?.reversal_reasons)?s.reversal_reasons:[];
@@ -354,8 +354,9 @@ function renderRichDashboard(s, asset){
  return `<article class="gold-dashboard ${cls} ${isGold?'gold-market-dashboard':'btc-market-dashboard'}">
   <div class="gold-confidence-top"><div class="gold-confidence-title">KETS CONFIDENCE</div><div class="gold-confidence-value">${esc(confidence)}${score?` · ${score}%`:""}</div><div class="gold-confidence-description">${esc(desc)}</div></div>
   ${reversalSignal?`<div class="strong-reversal-banner">
-    <div class="strong-reversal-title">🔥 STRONG REVERSAL ENTRY</div>
+    <div class="strong-reversal-title">🔥 STRONG REVERSAL ENTRY — HIGH QUALITY ENTRY</div>
     <div class="strong-reversal-subtitle">${esc(classification||signalType||"NEW STRONG REVERSAL")}</div>
+    <div class="high-quality-entry-badge">✓ HIGH QUALITY ENTRY · STRONG REVERSAL CONFIRMED</div>
     <div class="strong-reversal-evidence">${Number.isFinite(evidenceCount)&&Number.isFinite(evidenceTotal)?`Evidence confirmed: ${evidenceCount}/${evidenceTotal} checks`:"Evidence gate confirmed before entry"} · 1-MIN ENGINE</div>
     ${reversalReasons.length?`<div class="strong-reversal-reasons">${reversalReasons.map(x=>`<span>✓ ${esc(x)}</span>`).join("")}</div>`:""}
   </div>`:""}

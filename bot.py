@@ -2134,6 +2134,69 @@ def build_startup_messages():
     return b,c
 
 
+
+def run_signal_source_bridge():
+    """Continuously mirror signals from the separate KETS trading-bot service.
+    This keeps the website dashboard synchronized with the same payload used
+    for Telegram, including STRONG REVERSAL ENTRY fields."""
+    global last_signal
+    while True:
+        try:
+            source_url, source_key = _source_config()
+            if source_url:
+                headers={"Accept":"application/json"}
+                if source_key:
+                    headers["X-KETS-API-KEY"]=source_key
+                r=requests.get(source_url + "/api/signals", headers=headers, timeout=8)
+                if r.status_code == 200:
+                    data=r.json() if r.content else {}
+                    incoming=[]
+                    sigs=data.get("signals") if isinstance(data,dict) else {}
+                    if isinstance(sigs,dict):
+                        incoming.extend(v for v in sigs.values() if isinstance(v,dict))
+                    hist=data.get("history") if isinstance(data,dict) else []
+                    if isinstance(hist,list):
+                        incoming.extend(v for v in hist if isinstance(v,dict))
+                    for item in incoming:
+                        asset=str(item.get("asset") or item.get("market") or "").upper()
+                        direction=str(item.get("direction") or "").upper()
+                        if asset and direction in {"BUY","SELL"}:
+                            normalized=dict(item)
+                            normalized["asset"]=asset
+                            normalized["market"]=normalized.get("market") or asset
+                            normalized["direction"]=direction
+                            normalized["score"]=_num(normalized.get("score",normalized.get("strength",0)))
+                            if not normalized.get("id"):
+                                normalized["id"]=f"{asset}-{direction}-{normalized.get('timestamp') or normalized.get('timestamp_utc') or time.time()}"
+                            with API_LOCK:
+                                # Keep the newest copy by id and avoid growing
+                                # memory indefinitely from repeated source polls.
+                                existing_ids={str(x.get("id")) for x in SIGNAL_HISTORY}
+                                if str(normalized["id"]) not in existing_ids:
+                                    SIGNAL_HISTORY.append(normalized)
+                                else:
+                                    for idx,x in enumerate(SIGNAL_HISTORY):
+                                        if str(x.get("id"))==str(normalized["id"]):
+                                            SIGNAL_HISTORY[idx]=normalized
+                                            break
+                                cutoff=get_eat_time()-datetime.timedelta(days=SIGNAL_HISTORY_DAYS)
+                                SIGNAL_HISTORY[:]=[x for x in SIGNAL_HISTORY if _signal_dt(x) >= cutoff]
+                            _persist_signal(normalized)
+        except Exception as exc:
+            print(f"⚠️ Signal source bridge: {str(exc)[:250]}")
+        time.sleep(10)
+
+
+def _signal_dt(item):
+    raw=item.get("timestamp") or item.get("timestamp_utc") or item.get("created_at")
+    try:
+        dt=datetime.datetime.fromisoformat(str(raw).replace("Z","+00:00"))
+        if dt.tzinfo is None: dt=dt.replace(tzinfo=EAT)
+        return dt
+    except Exception:
+        return get_eat_time()
+
+
 def run_strategy():
     global last_scan, next_scan
     token=os.environ.get("TELEGRAM_BOT_TOKEN"); bot_id=os.environ.get("TELEGRAM_CHAT_ID"); channel_id=os.environ.get("TELEGRAM_CHANNEL_ID"); key=os.environ.get("TWELVE_DATA_API_KEY")
