@@ -19,7 +19,11 @@ services:
       - key: KETS_DISABLE_ENGINE
         value: "1"
       - key: KETS_DISABLE_SOURCE_BRIDGE
-        value: "1"
+        value: "0"
+      - key: KETS_SIGNAL_SOURCE_URL
+        sync: false
+      - key: KETS_SIGNAL_SOURCE_KEY
+        sync: false
       - key: KETS_SIGNAL_RECEIVER_KEY
         sync: false
       - key: PESAPAL_CONSUMER_KEY

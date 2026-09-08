@@ -249,6 +249,7 @@
 .strong-reversal-reasons span{padding:6px 9px;border:1px solid #293b58;border-radius:999px;font-size:10px;font-weight:800;background:#091423}
 
 /* Strong Reversal dashboard details; display-only, existing strategy unchanged. */
+.strong-reversal-summary{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:9px;margin:12px 0 16px;padding:14px;border:1px solid #263753;border-radius:18px;background:#0a1422}.strong-reversal-summary>div{padding:10px 11px;border:1px solid #1b2b43;border-radius:12px;background:#08111e;min-width:0}.strong-reversal-summary span{display:block;color:#71829a;font-size:9px;font-weight:800;letter-spacing:.7px;margin-bottom:5px}.strong-reversal-summary b{display:block;color:#eef3fa;font-size:12px;line-height:1.35;word-break:break-word}.strong-reversal-summary>div:first-child{grid-column:span 2}.strong-reversal-summary>div:first-child b{font-size:11px}@media(max-width:900px){.strong-reversal-summary{grid-template-columns:repeat(2,minmax(0,1fr))}.strong-reversal-summary>div:first-child{grid-column:span 2}}@media(max-width:520px){.strong-reversal-summary{grid-template-columns:1fr}.strong-reversal-summary>div:first-child{grid-column:auto}}
 .strong-reversal-details{margin:14px 0 18px;padding:18px;border:1px solid #263753;border-radius:20px;background:linear-gradient(180deg,#0d1829,#09111f)}
 .strong-reversal-details-title{margin:12px 0 9px;font-size:11px;font-weight:950;letter-spacing:1.2px;color:#a997ff}
 .strong-reversal-details-title:first-child{margin-top:0}
@@ -280,6 +281,10 @@
 .reversal-metric b{display:block;font-size:14px}
 .reversal-metric small{font-size:9px;color:var(--muted)}
 .reversal-levels{display:flex;flex-direction:column;gap:5px;font-size:10px;text-align:right}
+.reversal-history-card{grid-template-columns:minmax(250px,1.7fr) auto auto auto minmax(240px,1fr)}
+.reversal-interpretation{margin-top:8px;color:#dbe5f2;font-size:10px;line-height:1.45}
+.reversal-levels span{display:block}
+@media(max-width:900px){.reversal-history-card{grid-template-columns:minmax(220px,1.5fr) auto auto;}.reversal-history-card .reversal-levels{grid-column:1/-1;text-align:left;display:flex;flex-direction:row;flex-wrap:wrap;gap:8px}}
 @media(max-width:700px){
  .reversal-history-summary{grid-template-columns:repeat(3,1fr)}
  .reversal-history-row{grid-template-columns:1fr auto;gap:10px}

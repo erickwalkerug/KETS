@@ -255,6 +255,30 @@ function renderAccess(){
  $("accessExpiry").textContent="Payment required";
  c.innerHTML=`<strong>Paid plan required</strong><span>Normal users need an active plan to sign in and access live signals.</span>`;
 }
+function normalizeDashboardSignal(raw){
+ const s={...(raw||{})};
+ const pick=(...keys)=>{for(const k of keys){const v=s[k];if(v!==undefined&&v!==null&&v!=="")return v;}return undefined;};
+ s.asset=String(pick("asset","market","symbol")||"").toUpperCase();
+ s.direction=String(pick("direction","signal","side")||"").toUpperCase();
+ s.score=Number(pick("score","strength","signal_strength","signalStrength","confidence")||0);
+ s.entry=pick("entry","entry_price","entryPrice","market_price","marketPrice","price","current_price","currentPrice");
+ s.take_profit=pick("take_profit","takeProfit","target","target_price","targetPrice","tp");
+ s.stop_loss=pick("stop_loss","stopLoss","sl","stop_price","stopPrice");
+ s.expected_move=pick("expected_move","expectedMove","price_move","priceMove","move");
+ s.expected_move_pct=pick("expected_move_pct","expectedMovePct","price_move_pct","priceMovePct","move_pct","movePct");
+ s.price_move=pick("price_move","priceMove","expected_move","expectedMove","move");
+ s.price_move_pct=pick("price_move_pct","priceMovePct","expected_move_pct","expectedMovePct","move_pct","movePct");
+ s.estimated_duration=pick("estimated_duration","estimatedDuration","duration_text","durationText","duration");
+ s.interpretation=pick("interpretation","signal_interpretation","signalInterpretation","description");
+ s.signal_type=pick("signal_type","signalType","type");
+ s.classification=pick("classification","setup","setup_classification","setupClassification");
+ s.timestamp=pick("timestamp","timestamp_utc","timestampUtc","created_at","createdAt","time");
+ const sr=pick("strong_reversal","strongReversal","reversal_signal","reversalSignal");
+ s.strong_reversal=(sr===true||String(sr).toLowerCase()==="true") || /STRONG\s+REVERSAL/i.test(String(s.signal_type||s.classification||s.setup||""));
+ s.reversal_signal=s.strong_reversal;
+ if(s.strong_reversal){s.signal_type="STRONG REVERSAL ENTRY";s.classification=s.classification||"NEW STRONG REVERSAL — price action, momentum and structure are turning together.";}
+ return s;
+}
 function goldConfidenceLabel(score, explicit=""){
  const e=String(explicit||"").toUpperCase();
  if(e.includes("VERY STRONG")) return "VERY STRONG";
@@ -294,7 +318,8 @@ function renderEntryQualityFigures(s){
  <div><span>VWAP</span><b>${n(vw.value)}</b></div><div><span>VWAP ALIGNED</span><b>${val(vw.aligned===true?"YES":vw.aligned===false?"NO":vw.available===false?"N/A":"--")}</b></div><div><span>EXTENDED</span><b>${val(x.extended===true?"YES":x.extended===false?"NO":"--")}</b></div><div><span>BREAKOUT RETEST</span><b>${val(br.held===true?"HELD":br.held===false?"NO":"--")}</b></div><div><span>REVERSAL</span><b>${val(rv.clear_reversal===true?"YES":rv.clear_reversal===false?"NO":"--")}</b></div>
  </div></div>`;
 }
-function renderRichDashboard(s, asset){
+function renderRichDashboard(raw, asset){
+ const s=normalizeDashboardSignal(raw);
  const isGold=asset==='GOLD';
  const direction=String(s?.direction||s?.signal||"WAIT").toUpperCase();
  const cls=direction==="SELL"?"sell":"buy";
@@ -325,7 +350,7 @@ function renderRichDashboard(s, asset){
  const target=Number.isFinite(targetRaw)?targetRaw:(Number.isFinite(entry)&&Number.isFinite(Number(s?.price_move)) ? entry+(direction==='SELL'?-1:1)*Math.abs(Number(s.price_move)) : NaN);
  const stop=Number.isFinite(stopRaw)?stopRaw:(Number.isFinite(entry)&&Number.isFinite(Number(s?.risk_move)) ? entry+(direction==='SELL'?1:-1)*Math.abs(Number(s.risk_move)) : NaN);
  const defaultMove=Number.isFinite(entry)&&Number.isFinite(target)?Math.abs(target-entry):NaN;
- const move=Number.isFinite(Number(s?.price_move))?Math.abs(Number(s.price_move)):defaultMove;
+ const move=Number.isFinite(Number(s?.price_move))?Math.abs(Number(s.price_move)):(Number.isFinite(Number(s?.expected_move))?Math.abs(Number(s.expected_move)):defaultMove);
  const riskMove=Number.isFinite(Number(s?.risk_move))?Math.abs(Number(s.risk_move)):(Number.isFinite(entry)&&Number.isFinite(stop)?Math.abs(entry-stop):NaN);
  const contractSize=Number(s?.contract_size)||(isGold?100:1);
  const lotUnit=isGold?"oz / 1.00 lot":"BTC / 1.00 lot";
@@ -334,7 +359,7 @@ function renderRichDashboard(s, asset){
  const riskPerLot=Number(s?.risk_per_lot_display)||Number(s?.risk_per_lot_usd_risk)|| (Number.isFinite(riskMove)?riskMove:NaN);
  const rr=Number(s?.risk_reward)|| (Number.isFinite(rewardPerLot)&&Number.isFinite(riskPerLot)&&riskPerLot>0?rewardPerLot/riskPerLot:NaN);
  const rate=Number(s?.usd_ugx_rate)||3800;
- const movePct=Number.isFinite(Number(s?.price_move_pct))?Number(s.price_move_pct):(Number.isFinite(entry)&&Number.isFinite(move)&&entry?move/entry*100:0);
+ const movePct=Number.isFinite(Number(s?.price_move_pct))?Number(s.price_move_pct):(Number.isFinite(Number(s?.expected_move_pct))?Number(s.expected_move_pct):(Number.isFinite(entry)&&Number.isFinite(move)&&entry?move/entry*100:0));
  const signalMs=parseSignalTime(s||{});
  const signalDisplay=Number.isFinite(signalMs)?new Date(signalMs).toLocaleString():String(signalTimestamp(s||{})||"--");
  const priceText=n=>Number.isFinite(Number(n))?Number(n).toLocaleString("en-US",{minimumFractionDigits:isGold?2:2,maximumFractionDigits:isGold?2:2}):"--";
@@ -426,6 +451,14 @@ function renderRichDashboard(s, asset){
    <div><span>MARKET MOVE</span><b>${priceText(move)} (${pct}%)</b></div>
    <div><span>EXPECTED MOVE</span><b>${priceText(move)} (${pct}%)</b></div>
    <div><span>ESTIMATED DURATION</span><b>${esc(s?.estimated_duration||s?.duration_text||"--")}</b></div>
+  </div>
+  <div class="strong-reversal-summary">
+   <div><span>INTERPRETATION</span><b>${esc(s?.interpretation||s?.classification||"--")}</b></div>
+   <div><span>TAKE PROFIT</span><b>${priceText(target)}</b></div>
+   <div><span>STOP LOSS</span><b>${priceText(stop)}</b></div>
+   <div><span>EXPECTED PRICE MOVE</span><b>${priceText(move)} (${pct}%)</b></div>
+   <div><span>ESTIMATED DURATION</span><b>${esc(s?.estimated_duration||"--")}</b></div>
+  </div>
   </div>
   <div class="gold-sl-panel"><div class="gold-panel-title">🛡 STOP LOSS MANAGEMENT</div><div class="gold-sl-grid">
    <div class="gold-sl-box active"><b>🟢 FIXED SL</b><strong>${priceText(fixed)}</strong><small>${Number.isFinite(riskPerLot)?`(-${usdText(riskPerLot)})`:"--"}</small></div>
@@ -524,20 +557,27 @@ function renderHistory(){
    const tp=s.take_profit??s.tp??s.target??s.takeProfit;
    const sl=s.stop_loss??s.sl??s.stopLoss;
    const score=s.entry_quality_score??s.score??s.strength??"--";
+   const strength=s.strength??s.score??"--";
    const evidence=s.reversal_evidence_count!=null
       ? `${s.reversal_evidence_count}/${s.reversal_evidence_total??"?"}`
       : "--";
+   const move=Number.isFinite(Number(s.expected_move))?Number(s.expected_move):(Number.isFinite(Number(s.price_move))?Number(s.price_move):null);
+   const movePct=Number.isFinite(Number(s.expected_move_pct))?Number(s.expected_move_pct):(Number.isFinite(Number(s.price_move_pct))?Number(s.price_move_pct):(Number.isFinite(price)&&Number.isFinite(move)&&price?Math.abs(move)/Math.abs(price)*100:null));
+   const duration=s.estimated_duration??s.duration_text??s.duration??"--";
+   const interpretation=s.interpretation??s.classification??"NEW STRONG REVERSAL — price action, momentum and structure are turning together.";
    const reasons=Array.isArray(s.reversal_reasons)?s.reversal_reasons.join(" · "):(s.reversal_reasons||"");
    const when=Number.isFinite(parseSignalTime(s))?new Date(parseSignalTime(s)).toLocaleString():(s.timestamp||"");
-   return `<div class="reversal-history-row">
+   return `<div class="reversal-history-row reversal-history-card">
      <div class="reversal-main">
        <div class="reversal-title"><span class="history-dir ${cls}">${label}</span><strong>${esc(s.market||s.asset||"")}</strong></div>
        <div class="history-meta">${esc(when)}</div>
+       <div class="reversal-interpretation">🧠 ${esc(interpretation)}</div>
        <div class="reversal-reasons">${esc(reasons||"Price action, momentum and structure turning together.")}</div>
      </div>
-     <div class="reversal-metric"><b>${esc(score)}</b><small>Quality</small></div>
+     <div class="reversal-metric"><b>${esc(strength)}%</b><small>Signal strength</small></div>
+     <div class="reversal-metric"><b>${esc(score)}</b><small>Entry quality</small></div>
      <div class="reversal-metric"><b>${esc(evidence)}</b><small>Evidence</small></div>
-     <div class="reversal-levels"><span>Entry ${signalMoney(price)}</span><span>TP ${signalMoney(tp)}</span><span>SL ${signalMoney(sl)}</span></div>
+     <div class="reversal-levels"><span>📍 Entry ${signalMoney(price)}</span><span>🎯 TP ${signalMoney(tp)}</span><span>🛑 SL ${signalMoney(sl)}</span><span>📊 Move ${move==null?"--":signalMoney(move)}${movePct==null?"":` (${movePct.toFixed(2)}%)`}</span><span>⏱️ Duration ${esc(duration)}</span></div>
    </div>`;
  }).join("");
  strongEl.innerHTML=header+rows;
@@ -586,7 +626,7 @@ async function loadAll(){
   Promise.all([api("/api/status",{timeoutMs:12000}),api("/api/signals",{timeoutMs:12000})])
    .then(([status,signalFeed])=>{
      state.status=status; setTimerDeadlines(status);
-     state.signals=signalFeed.signals||{}; state.signalMode="live"; state.signalDelayMinutes=0;
+     state.signals=Object.fromEntries(Object.entries(signalFeed.signals||{}).map(([k,v])=>[String(k).toUpperCase(),normalizeDashboardSignal(v)])); state.signalMode="live"; state.signalDelayMinutes=0;
      renderStatus(); renderSignals();
    }).catch(()=>{});
 

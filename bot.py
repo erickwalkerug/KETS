@@ -654,10 +654,23 @@ def api_status():
 
 
 def _latest_signal_map(items):
+    # Select by actual signal timestamp, not list insertion order. This prevents
+    # an older persisted copy from replacing the newest STRONG REVERSAL payload.
     latest = {}
+    def stamp(x):
+        raw=x.get("timestamp") or x.get("timestamp_utc") or x.get("created_at")
+        try:
+            dt=datetime.datetime.fromisoformat(str(raw).replace("Z","+00:00"))
+            if dt.tzinfo is None: dt=dt.replace(tzinfo=EAT)
+            return dt.timestamp()
+        except Exception:
+            return 0.0
     for item in items:
         asset = str(item.get("asset") or item.get("market") or "").upper()
-        if asset:
+        if not asset:
+            continue
+        current=latest.get(asset)
+        if current is None or stamp(item) >= stamp(current):
             latest[asset] = dict(item)
     return latest
 
@@ -1512,6 +1525,40 @@ def _load_persistent_signals():
         return []
 
 
+def normalize_signal_payload(item, asset=None):
+    """Normalize every signal alias used by Telegram, website and persistence."""
+    item=dict(item or {})
+    if asset: item["asset"]=str(item.get("asset") or item.get("market") or asset).upper()
+    item["market"]=item.get("market") or item.get("asset")
+    item["direction"]=str(item.get("direction") or item.get("signal") or item.get("side") or "").upper()
+    item["score"]=_num(item.get("score",item.get("strength",item.get("signal_strength",item.get("confidence",0)))))
+    item["strength"]=item.get("strength",item["score"])
+    aliases={
+      "entry":("entry","entry_price","entryPrice","market_price","marketPrice","price","current_price","currentPrice"),
+      "take_profit":("take_profit","takeProfit","target","target_price","targetPrice","tp"),
+      "stop_loss":("stop_loss","stopLoss","sl","stop_price","stopPrice"),
+      "expected_move":("expected_move","expectedMove","price_move","priceMove","move"),
+      "expected_move_pct":("expected_move_pct","expectedMovePct","price_move_pct","priceMovePct","move_pct","movePct"),
+      "estimated_duration":("estimated_duration","estimatedDuration","duration_text","durationText","duration"),
+      "interpretation":("interpretation","signal_interpretation","signalInterpretation","description"),
+      "signal_type":("signal_type","signalType","type"),
+      "classification":("classification","setup","setup_classification","setupClassification"),
+    }
+    for dest,keys in aliases.items():
+        if item.get(dest) in (None,""):
+            for key in keys:
+                if item.get(key) not in (None,""):
+                    item[dest]=item[key]; break
+    item["price_move"]=item.get("price_move",item.get("expected_move"))
+    item["price_move_pct"]=item.get("price_move_pct",item.get("expected_move_pct"))
+    sr=item.get("strong_reversal",item.get("reversal_signal",False))
+    item["strong_reversal"]=(sr is True or str(sr).lower()=="true" or "STRONG REVERSAL" in str(item.get("signal_type") or item.get("classification") or "").upper())
+    item["reversal_signal"]=item["strong_reversal"]
+    if item["strong_reversal"]:
+        item["signal_type"]="STRONG REVERSAL ENTRY"
+        item["classification"]=item.get("classification") or "NEW STRONG REVERSAL — price action, momentum and structure are turning together."
+    return item
+
 def store_app_signal(asset, signal):
     """Store the COMPLETE strategy payload for the KETS dashboard.
 
@@ -1520,12 +1567,7 @@ def store_app_signal(asset, signal):
     entry-quality and timing fields exactly as produced by analyze_market.
     """
     now = get_eat_time()
-    item = dict(signal or {})
-    item["asset"] = str(item.get("asset") or asset).upper()
-    item["market"] = item.get("market") or item["asset"]
-    item["direction"] = str(item.get("direction") or "").upper()
-    item["score"] = _num(item.get("score", item.get("strength", 0)))
-    item["strength"] = item.get("strength", item["score"])
+    item = normalize_signal_payload(signal, asset)
     item["entry"] = item.get("entry", item.get("price", item.get("current_price")))
     item["price"] = item.get("price", item.get("entry"))
     item["current_price"] = item.get("current_price", item.get("entry"))
@@ -2206,11 +2248,10 @@ def run_signal_source_bridge():
                         asset=str(item.get("asset") or item.get("market") or "").upper()
                         direction=str(item.get("direction") or "").upper()
                         if asset and direction in {"BUY","SELL"}:
-                            normalized=dict(item)
+                            normalized=normalize_signal_payload(item, asset)
                             normalized["asset"]=asset
                             normalized["market"]=normalized.get("market") or asset
                             normalized["direction"]=direction
-                            normalized["score"]=_num(normalized.get("score",normalized.get("strength",0)))
                             if not normalized.get("id"):
                                 normalized["id"]=f"{asset}-{direction}-{normalized.get('timestamp') or normalized.get('timestamp_utc') or time.time()}"
                             with API_LOCK:
