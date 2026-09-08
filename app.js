@@ -359,6 +359,44 @@ function renderRichDashboard(s, asset){
     <div class="strong-reversal-evidence">${Number.isFinite(evidenceCount)&&Number.isFinite(evidenceTotal)?`Evidence confirmed: ${evidenceCount}/${evidenceTotal} checks`:"Evidence gate confirmed before entry"} · 1-MIN ENGINE</div>
     ${reversalReasons.length?`<div class="strong-reversal-reasons">${reversalReasons.map(x=>`<span>✓ ${esc(x)}</span>`).join("")}</div>`:""}
   </div>`:""}
+  ${reversalSignal?`<div class="strong-reversal-details">
+    <div class="strong-reversal-details-title">📊 1-MIN EARLY ENTRY CHECK</div>
+    <div class="strong-reversal-details-grid">
+      <div><span>EMA 9</span><b>${priceText(s?.ema9)}</b></div>
+      <div><span>EMA 26</span><b>${priceText(s?.ema26)}</b></div>
+      <div><span>RSI(14)</span><b>${s?.rsi==null?"--":Number(s.rsi).toFixed(2)}</b></div>
+      <div><span>MACD</span><b>${s?.macd==null?"--":Number(s.macd).toFixed(5)}</b></div>
+      <div><span>SIGNAL</span><b>${s?.macd_signal==null?"--":Number(s.macd_signal).toFixed(5)}</b></div>
+      <div><span>MACD STATUS</span><b>${esc(s?.macd_status||"--")}</b></div>
+      <div><span>STRUCTURE</span><b>${direction==="BUY"?"Higher High + Higher Low":"Lower High + Lower Low"}</b></div>
+    </div>
+    <div class="strong-reversal-details-title">🧠 MARKET INTELLIGENCE</div>
+    <div class="strong-reversal-details-grid">
+      <div><span>MARKET REGIME</span><b>${esc(s?.market_regime||"--")}</b></div>
+      <div><span>ADX</span><b>${s?.adx==null?"--":Number(s.adx).toFixed(2)}</b></div>
+      <div><span>DI+</span><b>${s?.di_plus==null?"--":Number(s.di_plus).toFixed(2)}</b></div>
+      <div><span>DI-</span><b>${s?.di_minus==null?"--":Number(s.di_minus).toFixed(2)}</b></div>
+      <div><span>ATR(14)</span><b>${priceText(s?.atr)}</b></div>
+      <div><span>MOMENTUM</span><b>${esc((s?.momentum_direction||"--")+" / "+(s?.momentum_state||"--"))}</b></div>
+      <div><span>CANDLE QUALITY</span><b>${esc(s?.candle_quality||"--")}</b></div>
+      <div><span>5-MIN</span><b>${esc(s?.timeframe_5m||"--")}</b></div>
+      <div><span>15-MIN</span><b>${esc(s?.timeframe_15m||"--")}</b></div>
+      <div><span>VWAP</span><b>${s?.vwap==null?"Unavailable":priceText(s.vwap)}</b></div>
+    </div>
+    <div class="strong-reversal-details-title">🛡 ENTRY QUALITY CHECKS</div>
+    <div class="strong-reversal-reason-list">${(Array.isArray(s?.entry_quality_reasons)?s.entry_quality_reasons:[]).map(x=>`<span>• ${esc(x)}</span>`).join("")||"<span>• Entry-quality data pending.</span>"}</div>
+    <div class="strong-reversal-details-title">🎯 LEVEL ANALYSIS</div>
+    <div class="strong-reversal-details-grid">
+      <div><span>SUPPORT</span><b>${priceText(s?.support)}</b></div>
+      <div><span>RESISTANCE</span><b>${priceText(s?.resistance)}</b></div>
+      <div><span>DISTANCE TO SUPPORT</span><b>${Number.isFinite(entry)&&Number.isFinite(Number(s?.support))?priceText(Math.abs(entry-Number(s.support))):"--"}</b></div>
+      <div><span>DISTANCE TO RESISTANCE</span><b>${Number.isFinite(entry)&&Number.isFinite(Number(s?.resistance))?priceText(Math.abs(Number(s.resistance)-entry)):"--"}</b></div>
+    </div>
+    <div class="strong-reversal-details-title">🔎 CORE CONDITIONS DETECTED</div>
+    <div class="strong-reversal-reason-list">${(Array.isArray(s?.reversal_reasons)?s.reversal_reasons:[]).map(x=>`<span>• ${esc(x)}</span>`).join("")||"<span>• Strong reversal evidence is being evaluated.</span>"}</div>
+    <div class="strong-reversal-details-title">🧠 ADVANCED INTELLIGENCE</div>
+    <div class="strong-reversal-reason-list">${(Array.isArray(s?.advanced_intelligence)?s.advanced_intelligence:[]).map(x=>`<span>• ${esc(x)}</span>`).join("")||"<span>• Advanced intelligence data pending.</span>"}</div>
+  </div>`:""}
 
   <div class="entry-quality-panel ${eqClass}">
    <div class="entry-quality-head">

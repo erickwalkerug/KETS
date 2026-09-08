@@ -2044,6 +2044,33 @@ def analyze_market(asset, symbol, candles):
     entry_quality_score=entry_quality["score"]
     entry_quality_status=entry_quality["status"]
     entry_quality_reasons=entry_quality["reasons"]
+
+    # Dashboard-only Strong Reversal evidence. Existing strategy selection is
+    # intentionally untouched; these values only describe an already-created signal.
+    breakout_close = (
+        (direction=="BUY" and cur["close"] > prev["high"]) or
+        (direction=="SELL" and cur["close"] < prev["low"])
+    )
+    reversal_checks = [
+        bool((bullish and direction=="BUY") or (bearish and direction=="SELL")),
+        bool(breakout_close),
+        bool((mom["direction"]=="BULLISH" and direction=="BUY") or (mom["direction"]=="BEARISH" and direction=="SELL")),
+        bool((ebc and direction=="BUY") or (esc and direction=="SELL") or
+             (eb and direction=="BUY") or (es and direction=="SELL")),
+        bool((bull_cross or rb) if direction=="BUY" else (bear_cross or rs)),
+        bool((ad["plus_di"] > ad["minus_di"]) if direction=="BUY" else (ad["minus_di"] > ad["plus_di"]))
+    ]
+    reversal_evidence_count=sum(1 for x in reversal_checks if x)
+    reversal_evidence_total=len(reversal_checks)
+    strong_reversal = reversal_evidence_count >= 5 and ci["strength"] >= 55 and not extended
+    reversal_reasons=[]
+    if reversal_checks[0]: reversal_reasons.append("Strong bullish reversal candle" if direction=="BUY" else "Strong bearish reversal candle")
+    if reversal_checks[1]: reversal_reasons.append("Break above previous candle high" if direction=="BUY" else "Break below previous candle low")
+    if reversal_checks[2]: reversal_reasons.append("Bullish momentum turned/accelerated" if direction=="BUY" else "Bearish momentum turned/accelerated")
+    if reversal_checks[3]: reversal_reasons.append("EMA direction turning bullish" if direction=="BUY" else "EMA direction turning bearish")
+    if reversal_checks[4]: reversal_reasons.append("MACD momentum turned bullish" if direction=="BUY" else "MACD momentum turned bearish")
+    if reversal_checks[5]: reversal_reasons.append("DI+ moved above DI-" if direction=="BUY" else "DI- moved above DI+")
+
     bonus=0; adv=[]
     if ad["adx"]>=25:
         aligned=(direction=="BUY" and ad["plus_di"]>ad["minus_di"]) or (direction=="SELL" and ad["minus_di"]>ad["plus_di"])
@@ -2097,7 +2124,7 @@ def analyze_market(asset, symbol, candles):
     macd_status="Fresh crossover" if (bull_cross or bear_cross) else "Recent crossover" if ((direction=="BUY" and rb) or (direction=="SELL" and rs)) else "Momentum aligned"
     bot=(f"🤖 *KETS — EARLY ENTRY SIGNAL — {asset}*\n━━━━━━━━━━━━━━━━━━\n📈 *Direction:* {'🟢 BUY / LONG' if direction=='BUY' else '🔴 SELL / SHORT'}\n💯 *Signal Strength:* {score}%\n🧠 *Interpretation:* {interp}\n🏷️ *Setup:* {setup}\n🛡️ *Entry Quality:* {entry_quality_score}/100 — {entry_quality_status}\n━━━━━━━━━━━━━━━━━━\n📍 *Market Price:* ${entry:,.2f}\n🎯 *Take Profit:* ${tp:,.2f}\n🛑 *Stop Loss:* ${sl:,.2f}\n📊 *Expected Price Move:* ${move:,.2f} ({move_pct:.2f}%)\n⏱️ *Estimated Duration:* {duration}\n━━━━━━━━━━━━━━━━━━\n📊 *1-MIN CHECK*\n├ EMA9: ${ema9:,.2f}\n├ EMA26: ${ema26:,.2f}\n├ RSI(14): {rsi:.2f}\n├ MACD: {cm:.5f}\n├ Signal: {cs:.5f}\n└ MACD Status: {macd_status}\n━━━━━━━━━━━━━━━━━━\n🧠 *INTELLIGENCE*\n├ Regime: {regime}\n├ ADX: {ad['adx']:.2f}\n├ DI+: {ad['plus_di']:.2f}\n├ DI-: {ad['minus_di']:.2f}\n├ ATR: ${atr:,.2f}\n├ Momentum: {mom['direction']} / {mom['state']}\n├ Candle: {ci['quality']}\n├ 5M: {d5}\n├ 15M: {d15}\n└ VWAP: {'$'+format(vwap,',.2f') if vwap is not None else 'Unavailable'}\n━━━━━━━━━━━━━━━━━━\n🎯 *LEVELS*\n├ Support: ${levels['support']:,.2f}\n└ Resistance: ${levels['resistance']:,.2f}\n━━━━━━━━━━━━━━━━━━\n🔎 *CORE:*\n" + "\n".join("• "+x for x in reasons) + "\n━━━━━━━━━━━━━━━━━━\n🧠 *ADVANCED:*\n" + "\n".join("• "+x for x in adv) + f"\n━━━━━━━━━━━━━━━━━━\n⏰ {ts}\n⚠️ Strategy-alignment score, not win probability.")
     channel=(f"🤖 *KETS — EARLY ENTRY SIGNAL — {asset}*\n━━━━━━━━━━━━━━━━━━\n📈 *Direction:* {'🟢 BUY / LONG' if direction=='BUY' else '🔴 SELL / SHORT'}\n💯 *Signal Strength:* {score}%\n🧠 *Interpretation:* {interp}\n━━━━━━━━━━━━━━━━━━\n📍 *Market Price:* ${entry:,.2f}\n🎯 *Take Profit:* ${tp:,.2f}\n🛑 *Stop Loss:* ${sl:,.2f}\n📊 *Expected Price Move:* ${move:,.2f} ({move_pct:.2f}%)\n⏱️ *Estimated Duration:* {duration}\n━━━━━━━━━━━━━━━━━━\n⏰ {ts}\n⚠️ Strategy-alignment score, not win probability.")
-    return {"bot":bot,"channel":channel,"direction":direction,"score":score,"entry":entry,"take_profit":tp,"stop_loss":sl,"expected_move":move,"expected_move_pct":move_pct,"estimated_duration":duration,"entry_quality_score":entry_quality_score,"entry_quality_status":entry_quality_status,"entry_quality_reversal":entry_quality["clear_reversal"],"entry_quality_reasons":entry_quality_reasons,"entry_quality":{"score":entry_quality_score,"status":entry_quality_status,"clear_reversal":entry_quality["clear_reversal"],"ema20":entry_quality["ema20"],"ema50":entry_quality["ema50"],"adx_rising":entry_quality["adx_rising"],"previous_adx":entry_quality["previous_adx"],"reasons":entry_quality_reasons},"timestamp":ts}
+    return {"bot":bot,"channel":channel,"direction":direction,"score":score,"entry":entry,"take_profit":tp,"stop_loss":sl,"expected_move":move,"expected_move_pct":move_pct,"estimated_duration":duration,"entry_quality_score":entry_quality_score,"entry_quality_status":entry_quality_status,"entry_quality_reversal":entry_quality["clear_reversal"],"entry_quality_reasons":entry_quality_reasons,"entry_quality":{"score":entry_quality_score,"status":entry_quality_status,"clear_reversal":entry_quality["clear_reversal"],"ema20":entry_quality["ema20"],"ema50":entry_quality["ema50"],"adx_rising":entry_quality["adx_rising"],"previous_adx":entry_quality["previous_adx"],"reasons":entry_quality_reasons},"entry_quality_details":{"score":entry_quality_score,"status":entry_quality_status,"ema":{"ema9":ema9,"ema20":entry_quality["ema20"],"ema50":entry_quality["ema50"],"ema26":ema26,"price":price},"trend":{"adx":ad["adx"],"previous_adx":entry_quality["previous_adx"],"plus_di":ad["plus_di"],"minus_di":ad["minus_di"],"adx_rising":entry_quality["adx_rising"],"di_aligned":((ad["plus_di"]>ad["minus_di"]) if direction=="BUY" else (ad["minus_di"]>ad["plus_di"]))},"volume":{"current":cur.get("volume"),"average_20":None,"ratio":None,"available":cur.get("volume") is not None},"candle":{"open":cur["open"],"high":cur["high"],"low":cur["low"],"close":cur["close"],"range":cur["high"]-cur["low"],"close_position":((cur["close"]-cur["low"])/(cur["high"]-cur["low"]) if cur["high"]>cur["low"] else None),"direction":ci["direction"],"strength":ci["strength"],"quality":ci["quality"],"breakout":breakout_close},"momentum":{"direction":mom["direction"],"state":mom["state"],"aligned":((mom["direction"]=="BULLISH") if direction=="BUY" else (mom["direction"]=="BEARISH"))},"vwap":{"value":vwap,"available":vwap is not None,"aligned":((price>vwap) if direction=="BUY" else (price<vwap)) if vwap is not None else None},"extension":ext,"higher_timeframes":{"5m":d5,"15m":d15},"breakout_retest":{"held":None},"reversal":{"clear_reversal":entry_quality["clear_reversal"]}},"strong_reversal":strong_reversal,"reversal_signal":strong_reversal,"signal_type":"STRONG REVERSAL ENTRY" if strong_reversal else "EARLY ENTRY","classification":"NEW STRONG REVERSAL — price action, momentum and structure are turning together." if strong_reversal else setup,"reversal_evidence_count":reversal_evidence_count,"reversal_evidence_total":reversal_evidence_total,"reversal_reasons":reversal_reasons,"ema9":ema9,"ema26":ema26,"ema20":entry_quality["ema20"],"ema50":entry_quality["ema50"],"rsi":rsi,"macd":cm,"macd_signal":cs,"macd_status":macd_status,"market_regime":regime,"adx":ad["adx"],"di_plus":ad["plus_di"],"di_minus":ad["minus_di"],"atr":atr,"momentum_direction":mom["direction"],"momentum_state":mom["state"],"candle_quality":ci["quality"],"timeframe_5m":d5,"timeframe_15m":d15,"vwap":vwap,"support":levels["support"],"resistance":levels["resistance"],"core_conditions":reasons,"advanced_intelligence":adv,"timestamp":ts}
 
 
 # ------------------------- ENGINE ----------------------------
