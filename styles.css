@@ -247,3 +247,15 @@
 .strong-reversal-evidence{margin-top:7px;font-size:11px;font-weight:800;opacity:.9}
 .strong-reversal-reasons{display:flex;flex-wrap:wrap;gap:7px;justify-content:center;margin-top:10px}
 .strong-reversal-reasons span{padding:6px 9px;border:1px solid #293b58;border-radius:999px;font-size:10px;font-weight:800;background:#091423}
+
+/* Strong Reversal dashboard details; display-only, existing strategy unchanged. */
+.strong-reversal-details{margin:14px 0 18px;padding:18px;border:1px solid #263753;border-radius:20px;background:linear-gradient(180deg,#0d1829,#09111f)}
+.strong-reversal-details-title{margin:12px 0 9px;font-size:11px;font-weight:950;letter-spacing:1.2px;color:#a997ff}
+.strong-reversal-details-title:first-child{margin-top:0}
+.strong-reversal-details-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+.strong-reversal-details-grid>div{padding:10px 11px;border:1px solid #1b2b43;border-radius:12px;background:#08111e}
+.strong-reversal-details-grid span{display:block;color:#71829a;font-size:9px;font-weight:800;letter-spacing:.7px;margin-bottom:5px}
+.strong-reversal-details-grid b{display:block;color:#eef3fa;font-size:11px;word-break:break-word}
+.strong-reversal-reason-list{display:flex;flex-wrap:wrap;gap:7px}
+.strong-reversal-reason-list span{padding:8px 10px;border:1px solid #1b2b43;border-radius:10px;background:#08111e;color:#c9d4e4;font-size:10px;line-height:1.35}
+@media(max-width:760px){.strong-reversal-details-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
