@@ -259,3 +259,5 @@
 .strong-reversal-reason-list{display:flex;flex-wrap:wrap;gap:7px}
 .strong-reversal-reason-list span{padding:8px 10px;border:1px solid #1b2b43;border-radius:10px;background:#08111e;color:#c9d4e4;font-size:10px;line-height:1.35}
 @media(max-width:760px){.strong-reversal-details-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+
+.high-quality-entry-badge{display:inline-flex;align-items:center;gap:7px;margin-top:10px;padding:8px 12px;border-radius:999px;border:1px solid #25d695;background:#25d69518;color:#8ff0c8;font-size:11px;font-weight:950;letter-spacing:.7px}
