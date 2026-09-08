@@ -29,3 +29,9 @@ DEPLOYMENT FIX — 2026-09-07
 - Fixed PermissionError caused by attempting to create /var/data when no writable disk is mounted.
 - KETS now automatically selects a writable data directory and falls back to /tmp/kets_data.
 - render.yaml no longer requires the /var/data disk mount, allowing the Free web service to start.
+
+2026-09-08 — STRONG REVERSAL DASHBOARD SYNC FIX
+- Fixed store_app_signal() so the website no longer strips the rich signal payload before saving it.
+- Preserves STRONG REVERSAL ENTRY flag, classification/interpretation, evidence count, reversal reasons, market intelligence, entry-quality details, levels, timing, and all existing entry/TP/SL fields.
+- Existing trading strategy and other setups were not changed.
+- The dashboard can now render the same Strong Reversal information produced by the strategy engine.

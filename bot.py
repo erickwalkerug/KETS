@@ -1488,30 +1488,48 @@ def _load_persistent_signals():
 
 
 def store_app_signal(asset, signal):
+    """Store the COMPLETE strategy payload for the KETS dashboard.
+
+    Telegram receives the rich signal payload, so the website must not reduce
+    it to only entry/TP/SL.  Preserve Strong Reversal, intelligence, evidence,
+    entry-quality and timing fields exactly as produced by analyze_market.
+    """
     now = get_eat_time()
-    item = {
-        "id": f"{asset}-{signal.get('direction')}-{now.timestamp()}",
-        "asset": asset,
-        "market": asset,
-        "direction": signal.get("direction"),
-        "score": signal.get("score"),
-        "strength": signal.get("score"),
-        "entry": signal.get("entry"),
-        "price": signal.get("entry"),
-        "current_price": signal.get("entry"),
-        "take_profit": signal.get("take_profit"),
-        "stop_loss": signal.get("stop_loss"),
-        "price_move": signal.get("expected_move"),
-        "price_move_pct": signal.get("expected_move_pct"),
-        "expected_move": signal.get("expected_move"),
-        "expected_move_pct": signal.get("expected_move_pct"),
-        "estimated_duration": signal.get("estimated_duration"),
-        "timestamp": now.isoformat(),
-    }
+    item = dict(signal or {})
+    item["asset"] = str(item.get("asset") or asset).upper()
+    item["market"] = item.get("market") or item["asset"]
+    item["direction"] = str(item.get("direction") or "").upper()
+    item["score"] = _num(item.get("score", item.get("strength", 0)))
+    item["strength"] = item.get("strength", item["score"])
+    item["entry"] = item.get("entry", item.get("price", item.get("current_price")))
+    item["price"] = item.get("price", item.get("entry"))
+    item["current_price"] = item.get("current_price", item.get("entry"))
+    item["take_profit"] = item.get("take_profit")
+    item["stop_loss"] = item.get("stop_loss")
+    item["price_move"] = item.get("price_move", item.get("expected_move"))
+    item["price_move_pct"] = item.get("price_move_pct", item.get("expected_move_pct"))
+    item["expected_move"] = item.get("expected_move", item.get("price_move"))
+    item["expected_move_pct"] = item.get("expected_move_pct", item.get("price_move_pct"))
+    item["estimated_duration"] = item.get("estimated_duration", item.get("duration_text"))
+    item["timestamp"] = str(item.get("timestamp") or item.get("timestamp_utc") or now.isoformat())
+    item["timestamp_utc"] = item.get("timestamp_utc", item["timestamp"])
+    item["id"] = str(item.get("id") or f"{item['asset']}-{item['direction']}-{item['timestamp']}")
+    item["strong_reversal"] = bool(item.get("strong_reversal", item.get("reversal_signal", False)))
+    item["reversal_signal"] = item["strong_reversal"]
+    if item["strong_reversal"]:
+        item["signal_type"] = "STRONG REVERSAL ENTRY"
+        item["classification"] = item.get("classification") or "NEW STRONG REVERSAL — price action, momentum and structure are turning together."
     with API_LOCK:
-        SIGNAL_HISTORY.append(item)
+        existing_ids = {str(x.get("id")) for x in SIGNAL_HISTORY}
+        if item["id"] not in existing_ids:
+            SIGNAL_HISTORY.append(item)
+        else:
+            for idx, existing in enumerate(SIGNAL_HISTORY):
+                if str(existing.get("id")) == item["id"]:
+                    SIGNAL_HISTORY[idx] = item
+                    break
         cutoff = now - datetime.timedelta(days=SIGNAL_HISTORY_DAYS)
-        SIGNAL_HISTORY[:] = [x for x in SIGNAL_HISTORY if datetime.datetime.fromisoformat(x["timestamp"]) >= cutoff]
+        SIGNAL_HISTORY[:] = [x for x in SIGNAL_HISTORY if _signal_dt(x) >= cutoff]
     _persist_signal(item)
     return item
 
@@ -2124,7 +2142,7 @@ def analyze_market(asset, symbol, candles):
     macd_status="Fresh crossover" if (bull_cross or bear_cross) else "Recent crossover" if ((direction=="BUY" and rb) or (direction=="SELL" and rs)) else "Momentum aligned"
     bot=(f"🤖 *KETS — EARLY ENTRY SIGNAL — {asset}*\n━━━━━━━━━━━━━━━━━━\n📈 *Direction:* {'🟢 BUY / LONG' if direction=='BUY' else '🔴 SELL / SHORT'}\n💯 *Signal Strength:* {score}%\n🧠 *Interpretation:* {interp}\n🏷️ *Setup:* {setup}\n🛡️ *Entry Quality:* {entry_quality_score}/100 — {entry_quality_status}\n━━━━━━━━━━━━━━━━━━\n📍 *Market Price:* ${entry:,.2f}\n🎯 *Take Profit:* ${tp:,.2f}\n🛑 *Stop Loss:* ${sl:,.2f}\n📊 *Expected Price Move:* ${move:,.2f} ({move_pct:.2f}%)\n⏱️ *Estimated Duration:* {duration}\n━━━━━━━━━━━━━━━━━━\n📊 *1-MIN CHECK*\n├ EMA9: ${ema9:,.2f}\n├ EMA26: ${ema26:,.2f}\n├ RSI(14): {rsi:.2f}\n├ MACD: {cm:.5f}\n├ Signal: {cs:.5f}\n└ MACD Status: {macd_status}\n━━━━━━━━━━━━━━━━━━\n🧠 *INTELLIGENCE*\n├ Regime: {regime}\n├ ADX: {ad['adx']:.2f}\n├ DI+: {ad['plus_di']:.2f}\n├ DI-: {ad['minus_di']:.2f}\n├ ATR: ${atr:,.2f}\n├ Momentum: {mom['direction']} / {mom['state']}\n├ Candle: {ci['quality']}\n├ 5M: {d5}\n├ 15M: {d15}\n└ VWAP: {'$'+format(vwap,',.2f') if vwap is not None else 'Unavailable'}\n━━━━━━━━━━━━━━━━━━\n🎯 *LEVELS*\n├ Support: ${levels['support']:,.2f}\n└ Resistance: ${levels['resistance']:,.2f}\n━━━━━━━━━━━━━━━━━━\n🔎 *CORE:*\n" + "\n".join("• "+x for x in reasons) + "\n━━━━━━━━━━━━━━━━━━\n🧠 *ADVANCED:*\n" + "\n".join("• "+x for x in adv) + f"\n━━━━━━━━━━━━━━━━━━\n⏰ {ts}\n⚠️ Strategy-alignment score, not win probability.")
     channel=(f"🤖 *KETS — EARLY ENTRY SIGNAL — {asset}*\n━━━━━━━━━━━━━━━━━━\n📈 *Direction:* {'🟢 BUY / LONG' if direction=='BUY' else '🔴 SELL / SHORT'}\n💯 *Signal Strength:* {score}%\n🧠 *Interpretation:* {interp}\n━━━━━━━━━━━━━━━━━━\n📍 *Market Price:* ${entry:,.2f}\n🎯 *Take Profit:* ${tp:,.2f}\n🛑 *Stop Loss:* ${sl:,.2f}\n📊 *Expected Price Move:* ${move:,.2f} ({move_pct:.2f}%)\n⏱️ *Estimated Duration:* {duration}\n━━━━━━━━━━━━━━━━━━\n⏰ {ts}\n⚠️ Strategy-alignment score, not win probability.")
-    return {"bot":bot,"channel":channel,"direction":direction,"score":score,"entry":entry,"take_profit":tp,"stop_loss":sl,"expected_move":move,"expected_move_pct":move_pct,"estimated_duration":duration,"entry_quality_score":entry_quality_score,"entry_quality_status":entry_quality_status,"entry_quality_reversal":entry_quality["clear_reversal"],"entry_quality_reasons":entry_quality_reasons,"entry_quality":{"score":entry_quality_score,"status":entry_quality_status,"clear_reversal":entry_quality["clear_reversal"],"ema20":entry_quality["ema20"],"ema50":entry_quality["ema50"],"adx_rising":entry_quality["adx_rising"],"previous_adx":entry_quality["previous_adx"],"reasons":entry_quality_reasons},"entry_quality_details":{"score":entry_quality_score,"status":entry_quality_status,"ema":{"ema9":ema9,"ema20":entry_quality["ema20"],"ema50":entry_quality["ema50"],"ema26":ema26,"price":price},"trend":{"adx":ad["adx"],"previous_adx":entry_quality["previous_adx"],"plus_di":ad["plus_di"],"minus_di":ad["minus_di"],"adx_rising":entry_quality["adx_rising"],"di_aligned":((ad["plus_di"]>ad["minus_di"]) if direction=="BUY" else (ad["minus_di"]>ad["plus_di"]))},"volume":{"current":cur.get("volume"),"average_20":None,"ratio":None,"available":cur.get("volume") is not None},"candle":{"open":cur["open"],"high":cur["high"],"low":cur["low"],"close":cur["close"],"range":cur["high"]-cur["low"],"close_position":((cur["close"]-cur["low"])/(cur["high"]-cur["low"]) if cur["high"]>cur["low"] else None),"direction":ci["direction"],"strength":ci["strength"],"quality":ci["quality"],"breakout":breakout_close},"momentum":{"direction":mom["direction"],"state":mom["state"],"aligned":((mom["direction"]=="BULLISH") if direction=="BUY" else (mom["direction"]=="BEARISH"))},"vwap":{"value":vwap,"available":vwap is not None,"aligned":((price>vwap) if direction=="BUY" else (price<vwap)) if vwap is not None else None},"extension":ext,"higher_timeframes":{"5m":d5,"15m":d15},"breakout_retest":{"held":None},"reversal":{"clear_reversal":entry_quality["clear_reversal"]}},"strong_reversal":strong_reversal,"reversal_signal":strong_reversal,"signal_type":"STRONG REVERSAL ENTRY" if strong_reversal else "EARLY ENTRY","classification":"NEW STRONG REVERSAL — price action, momentum and structure are turning together." if strong_reversal else setup,"reversal_evidence_count":reversal_evidence_count,"reversal_evidence_total":reversal_evidence_total,"reversal_reasons":reversal_reasons,"ema9":ema9,"ema26":ema26,"ema20":entry_quality["ema20"],"ema50":entry_quality["ema50"],"rsi":rsi,"macd":cm,"macd_signal":cs,"macd_status":macd_status,"market_regime":regime,"adx":ad["adx"],"di_plus":ad["plus_di"],"di_minus":ad["minus_di"],"atr":atr,"momentum_direction":mom["direction"],"momentum_state":mom["state"],"candle_quality":ci["quality"],"timeframe_5m":d5,"timeframe_15m":d15,"vwap":vwap,"support":levels["support"],"resistance":levels["resistance"],"core_conditions":reasons,"advanced_intelligence":adv,"timestamp":ts}
+    return {"asset":asset,"market":asset,"bot":bot,"channel":channel,"direction":direction,"score":score,"strength":score,"entry":entry,"price":entry,"current_price":entry,"take_profit":tp,"stop_loss":sl,"expected_move":move,"expected_move_pct":move_pct,"price_move":move,"price_move_pct":move_pct,"estimated_duration":duration,"interpretation":interp,"setup":setup,"signal_type":"STRONG REVERSAL ENTRY" if strong_reversal else "EARLY ENTRY","strong_reversal":strong_reversal,"reversal_signal":strong_reversal,"classification":"NEW STRONG REVERSAL — price action, momentum and structure are turning together." if strong_reversal else setup,"reversal_evidence_count":reversal_evidence_count,"reversal_evidence_total":reversal_evidence_total,"reversal_reasons":reversal_reasons,"entry_quality_score":entry_quality_score,"entry_quality_status":entry_quality_status,"entry_quality_reversal":entry_quality["clear_reversal"],"entry_quality_reasons":entry_quality_reasons,"entry_quality":{"score":entry_quality_score,"status":entry_quality_status,"clear_reversal":entry_quality["clear_reversal"],"ema20":entry_quality["ema20"],"ema50":entry_quality["ema50"],"adx_rising":entry_quality["adx_rising"],"previous_adx":entry_quality["previous_adx"],"reasons":entry_quality_reasons},"entry_quality_details":{"score":entry_quality_score,"status":entry_quality_status,"ema":{"ema9":ema9,"ema20":entry_quality["ema20"],"ema50":entry_quality["ema50"],"ema26":ema26,"price":price},"trend":{"adx":ad["adx"],"previous_adx":entry_quality["previous_adx"],"plus_di":ad["plus_di"],"minus_di":ad["minus_di"],"adx_rising":entry_quality["adx_rising"],"di_aligned":((ad["plus_di"]>ad["minus_di"]) if direction=="BUY" else (ad["minus_di"]>ad["plus_di"]))},"volume":{"current":cur.get("volume"),"average_20":None,"ratio":None,"available":cur.get("volume") is not None},"candle":{"open":cur["open"],"high":cur["high"],"low":cur["low"],"close":cur["close"],"range":cur["high"]-cur["low"],"close_position":((cur["close"]-cur["low"])/(cur["high"]-cur["low"]) if cur["high"]>cur["low"] else None),"direction":ci["direction"],"strength":ci["strength"],"quality":ci["quality"],"breakout":breakout_close},"momentum":{"direction":mom["direction"],"state":mom["state"],"aligned":((mom["direction"]=="BULLISH") if direction=="BUY" else (mom["direction"]=="BEARISH"))},"vwap":{"value":vwap,"available":vwap is not None,"aligned":((price>vwap) if direction=="BUY" else (price<vwap)) if vwap is not None else None},"extension":ext,"higher_timeframes":{"5m":d5,"15m":d15},"breakout_retest":{"held":None},"reversal":{"clear_reversal":entry_quality["clear_reversal"]}},"strong_reversal":strong_reversal,"reversal_signal":strong_reversal,"signal_type":"STRONG REVERSAL ENTRY" if strong_reversal else "EARLY ENTRY","classification":"NEW STRONG REVERSAL — price action, momentum and structure are turning together." if strong_reversal else setup,"reversal_evidence_count":reversal_evidence_count,"reversal_evidence_total":reversal_evidence_total,"reversal_reasons":reversal_reasons,"ema9":ema9,"ema26":ema26,"ema20":entry_quality["ema20"],"ema50":entry_quality["ema50"],"rsi":rsi,"macd":cm,"macd_signal":cs,"macd_status":macd_status,"market_regime":regime,"adx":ad["adx"],"di_plus":ad["plus_di"],"di_minus":ad["minus_di"],"atr":atr,"momentum_direction":mom["direction"],"momentum_state":mom["state"],"candle_quality":ci["quality"],"timeframe_5m":d5,"timeframe_15m":d15,"vwap":vwap,"support":levels["support"],"resistance":levels["resistance"],"core_conditions":reasons,"advanced_intelligence":adv,"timestamp":ts}
 
 
 # ------------------------- ENGINE ----------------------------
