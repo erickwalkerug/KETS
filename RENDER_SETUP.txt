@@ -11,3 +11,13 @@ KETS WEBSITE - FINAL
 - Website displays complete Entry Quality figures supplied by the trading engine.
 - Weekdays: GOLD only. Weekend: BTC only.
 - SQLite remains only as a local fallback if DATABASE_URL is not present.
+
+
+STRONG REVERSAL WEBSITE SYNC — 2026-09-08
+- The website now exposes a private machine-to-machine endpoint: /api/source/signals.
+- The source bridge polls every 10 seconds and does not require a paid browser session.
+- The bridge is enabled by default.
+- Set KETS_SIGNAL_SOURCE_URL on the website to the trading-bot Render URL.
+- Set the same secret in KETS_SIGNAL_SOURCE_KEY on the website and KETS_SIGNAL_RECEIVER_KEY on the source/bot service.
+- The dashboard continues to use the normal paid/developer access rules.
+- Strong Reversal fields are preserved and displayed; existing setups are unchanged.
