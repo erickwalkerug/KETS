@@ -240,3 +240,10 @@
   }
 }
 \n.entry-quality-figures{margin-top:14px;padding:14px;border:1px solid #1b2b43;border-radius:16px;background:#07101c}.eq-fig-title{font-size:10px;font-weight:950;letter-spacing:1.6px;color:#9b87ff;margin-bottom:10px}.eq-fig-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(125px,1fr));gap:7px}.eq-fig-grid>div{padding:9px 10px;border:1px solid #182940;border-radius:10px;background:#091423}.eq-fig-grid span{display:block;font-size:8px;color:#72829a;letter-spacing:.7px;font-weight:800}.eq-fig-grid b{display:block;margin-top:4px;font-size:12px;color:#edf3fb;word-break:break-word}.payment-maintenance-note{display:block!important;margin-top:5px;color:#c9b8ff!important;font-size:10px!important;font-weight:700!important;line-height:1.35}\n
+/* Strong reversal display only — existing KETS setup, rules, auth, payments and database are unchanged. */
+.strong-reversal-banner{margin:12px 0;padding:16px;border:1px solid #7b5cff;border-radius:16px;background:rgba(123,92,255,.10);text-align:center}
+.strong-reversal-title{font-size:clamp(20px,5vw,32px);font-weight:1000;letter-spacing:1px}
+.strong-reversal-subtitle{margin-top:5px;font-weight:900;font-size:13px}
+.strong-reversal-evidence{margin-top:7px;font-size:11px;font-weight:800;opacity:.9}
+.strong-reversal-reasons{display:flex;flex-wrap:wrap;gap:7px;justify-content:center;margin-top:10px}
+.strong-reversal-reasons span{padding:6px 9px;border:1px solid #293b58;border-radius:999px;font-size:10px;font-weight:800;background:#091423}
