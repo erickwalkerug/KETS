@@ -470,10 +470,16 @@ function renderSignals(){
  if(showBtc) html += btc ? renderRichDashboard(btc,'BTC') : renderWaitingDashboard('BTC');
  grid.innerHTML=html || `<div class="empty">No market dashboard is scheduled right now.</div>`;
 }
+function isStrongReversal(s){
+ const t=String(s?.signal_type||s?.setup||s?.classification||"").toUpperCase();
+ return s?.strong_reversal===true || s?.reversal_signal===true || t.includes("STRONG REVERSAL");
+}
 function renderHistory(){
  const el=$("historyList");
+ const strongEl=$("strongReversalHistory");
  if(!state.history.length){
   el.innerHTML=`<div class="empty">No engine scans recorded in the last 7 days.</div>`;
+  if(strongEl) strongEl.innerHTML=`<div class="empty">No STRONG REVERSAL ENTRY history yet.</div>`;
   return;
  }
  el.innerHTML=state.history.slice().reverse().slice(0,80).map(s=>{
@@ -495,6 +501,46 @@ function renderHistory(){
     <div class="history-price">${signalMoney(price)}</div>
   </div>`;
  }).join("");
+
+ if(!strongEl) return;
+ const reversals=state.history.filter(isStrongReversal).slice().sort((a,b)=>parseSignalTime(b)-parseSignalTime(a)).slice(0,100);
+ if(!reversals.length){
+   strongEl.innerHTML=`<div class="empty">No STRONG REVERSAL ENTRY history yet.</div>`;
+   return;
+ }
+ const bullish=reversals.filter(s=>String(s.direction||"").toUpperCase()==="BUY").length;
+ const bearish=reversals.filter(s=>String(s.direction||"").toUpperCase()==="SELL").length;
+ const header=`<div class="reversal-history-summary">
+   <div><b>${reversals.length}</b><small>Strong reversals</small></div>
+   <div class="buy"><b>${bullish}</b><small>🟢 Bullish / BUY</small></div>
+   <div class="sell"><b>${bearish}</b><small>🔴 Bearish / SELL</small></div>
+ </div>`;
+ const rows=reversals.map(s=>{
+   const dir=String(s.direction||"").toUpperCase();
+   const bullishDir=dir==="BUY";
+   const cls=bullishDir?"buy":"sell";
+   const label=bullishDir?"🟢 BULLISH / BUY":"🔴 BEARISH / SELL";
+   const price=s.price??s.current_price??s.market_price;
+   const tp=s.take_profit??s.tp??s.target??s.takeProfit;
+   const sl=s.stop_loss??s.sl??s.stopLoss;
+   const score=s.entry_quality_score??s.score??s.strength??"--";
+   const evidence=s.reversal_evidence_count!=null
+      ? `${s.reversal_evidence_count}/${s.reversal_evidence_total??"?"}`
+      : "--";
+   const reasons=Array.isArray(s.reversal_reasons)?s.reversal_reasons.join(" · "):(s.reversal_reasons||"");
+   const when=Number.isFinite(parseSignalTime(s))?new Date(parseSignalTime(s)).toLocaleString():(s.timestamp||"");
+   return `<div class="reversal-history-row">
+     <div class="reversal-main">
+       <div class="reversal-title"><span class="history-dir ${cls}">${label}</span><strong>${esc(s.market||s.asset||"")}</strong></div>
+       <div class="history-meta">${esc(when)}</div>
+       <div class="reversal-reasons">${esc(reasons||"Price action, momentum and structure turning together.")}</div>
+     </div>
+     <div class="reversal-metric"><b>${esc(score)}</b><small>Quality</small></div>
+     <div class="reversal-metric"><b>${esc(evidence)}</b><small>Evidence</small></div>
+     <div class="reversal-levels"><span>Entry ${signalMoney(price)}</span><span>TP ${signalMoney(tp)}</span><span>SL ${signalMoney(sl)}</span></div>
+   </div>`;
+ }).join("");
+ strongEl.innerHTML=header+rows;
 }
 function renderPayments(){
  const el=$("paymentHistory");if(!state.payments.length){el.innerHTML=`<div class="empty">No payments yet.</div>`;return;}

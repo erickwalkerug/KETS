@@ -35,3 +35,5 @@ DEPLOYMENT FIX — 2026-09-07
 - Preserves STRONG REVERSAL ENTRY flag, classification/interpretation, evidence count, reversal reasons, market intelligence, entry-quality details, levels, timing, and all existing entry/TP/SL fields.
 - Existing trading strategy and other setups were not changed.
 - The dashboard can now render the same Strong Reversal information produced by the strategy engine.
+
+- Added dedicated STRONG REVERSAL ENTRY history with bullish/BUY and bearish/SELL counts, reversal evidence, quality score, reasons, entry, TP and SL for the retained 7-day history.

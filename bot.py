@@ -51,6 +51,12 @@ def _source_config():
         or os.environ.get("KETS_SIGNALS_API_KEY", "").strip(),
     )
 
+def _source_request_authorized():
+    """Authorize private bot -> website signal sync without requiring a paid user session."""
+    supplied = request.headers.get("X-KETS-API-KEY", "").strip()
+    expected = os.environ.get("KETS_SIGNAL_RECEIVER_KEY", "").strip() or _source_config()[1]
+    return bool(expected) and bool(supplied) and secrets.compare_digest(supplied, expected)
+
 @app.route("/api/health", methods=["GET"])
 def api_health():
     try:
@@ -719,9 +725,13 @@ def api_signals():
         _persist_signal(item)
         return jsonify({"ok": True, "accepted": True, "signal": item}), 200
 
-    user, error = _require_active_access()
-    if error:
-        return error
+    # The private website bridge must be able to read the bot feed without
+    # pretending to be a subscribed browser user. Browser requests still use
+    # the normal paid/developer access gate.
+    if not _source_request_authorized():
+        user, error = _require_active_access()
+        if error:
+            return error
     history = _history_items()
     return jsonify({
         "ok": True,
@@ -731,6 +741,21 @@ def api_signals():
         "time_eat": get_eat_time().isoformat(),
     })
 
+
+@app.route("/api/source/signals", methods=["GET"])
+def api_source_signals():
+    """Private machine-to-machine feed for the trading bot -> website bridge."""
+    if not _source_request_authorized():
+        return jsonify({"error": "Signal source authentication failed."}), 401
+    history = _history_items()
+    return jsonify({
+        "ok": True,
+        "signals": _latest_signal_map(history),
+        "history": history,
+        "markets": list(get_markets().keys()),
+        "time_eat": get_eat_time().isoformat(),
+        "source": "KETS private strategy feed",
+    })
 
 @app.route("/api/history", methods=["GET"])
 def api_history():
@@ -2165,7 +2190,9 @@ def run_signal_source_bridge():
                 headers={"Accept":"application/json"}
                 if source_key:
                     headers["X-KETS-API-KEY"]=source_key
-                r=requests.get(source_url + "/api/signals", headers=headers, timeout=8)
+                r=requests.get(source_url + "/api/source/signals", headers=headers, timeout=8)
+                if r.status_code in (404, 405):
+                    r=requests.get(source_url + "/api/signals", headers=headers, timeout=8)
                 if r.status_code == 200:
                     data=r.json() if r.content else {}
                     incoming=[]
@@ -2258,7 +2285,7 @@ if os.environ.get("KETS_DISABLE_ENGINE", "1") != "1":
 # Always run the source bridge unless explicitly disabled. This is independent
 # of browser traffic and guarantees the website actively requests source signals.
 source_bridge_started = False
-if os.environ.get("KETS_DISABLE_SOURCE_BRIDGE", "1") != "1":
+if os.environ.get("KETS_DISABLE_SOURCE_BRIDGE", "0") != "1":
     source_bridge_started = True
     Thread(target=run_signal_source_bridge, daemon=True, name="kets-signal-source-bridge").start()
 
