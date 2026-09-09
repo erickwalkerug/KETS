@@ -1,0 +1,43 @@
+services:
+  - type: web
+    name: kets
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app --workers 1 --threads 4 --timeout 120
+    healthCheckPath: /api/health
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: kets-db
+          property: connectionString
+      - key: KETS_SESSION_SECRET
+        generateValue: true
+      - key: KETS_DEVELOPER_USERNAME
+        sync: false
+      - key: KETS_DEVELOPER_PASSWORD
+        sync: false
+      - key: KETS_DISABLE_ENGINE
+        value: "1"
+      - key: KETS_DISABLE_SOURCE_BRIDGE
+        value: "0"
+      - key: KETS_TRADING_BOT_URL
+        sync: false
+      - key: KETS_SIGNAL_SOURCE_URL
+        sync: false
+      - key: KETS_SIGNAL_SOURCE_KEY
+        sync: false
+      - key: KETS_SIGNAL_RECEIVER_KEY
+        sync: false
+      - key: PESAPAL_CONSUMER_KEY
+        sync: false
+      - key: PESAPAL_CONSUMER_SECRET
+        sync: false
+      - key: PESAPAL_ENVIRONMENT
+        value: "live"
+      - key: KETS_PUBLIC_BASE_URL
+        sync: false
+
+databases:
+  - name: kets-db
+    databaseName: kets
+    plan: free
