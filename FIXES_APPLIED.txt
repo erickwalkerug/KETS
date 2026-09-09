@@ -1,39 +1,12 @@
-KETS FINAL FIXES
+KETS FULL TELEMETRY FIX - 2026-09-09
 
-- Market schedule: GOLD (XAU/USD) on weekdays only. No signals on weekends.
-- Scan/update interval: every 1 minute.
-- Dashboard countdown fallback: next update every 1 minute.
-- Strong entry-quality validation and hard rejection of weak/reversal/extended setups.
-- 60 completed 1-minute candles required for data quality.
-- Current/forming candle excluded from analysis.
-- Public dashboard continues to hide strategy indicators.
-- Signal history retained for 7 days.
-- Trading window remains 06:00-18:00 EAT.
+Fixed Strong Reversal dashboard empty telemetry fields.
 
-ENTRY QUALITY HARDENING — 2026-09-05
-- Rebuilt entry-quality scoring with a fixed 100-point denominator.
-- Missing volume/VWAP data can no longer inflate the quality percentage.
-- Added mandatory 5M and 15M directional agreement.
-- Added mandatory EMA20/EMA50 entry structure.
-- Raised the minimum ADX gate to 20 and require DI direction alignment.
-- Added mandatory RSI entry-zone validation.
-- Added mandatory decisive 1-minute candle-close confirmation.
-- Added stricter price-location/chasing protection around EMA9 and ATR.
-- Preserved early entries by allowing strong directional closes as well as breakouts.
-- Added hard rejection for reversal, overextension, timeframe conflict, weak trend, and failed entry structure.
-- Final broadcast gate now requires entry quality >=72 with no hard-fail condition.
-- bot.py passes Python syntax compilation after the changes.
-
-
-DEPLOYMENT FIX — 2026-09-07
-- Fixed PermissionError caused by attempting to create /var/data when no writable disk is mounted.
-- KETS now automatically selects a writable data directory and falls back to /tmp/kets_data.
-- render.yaml no longer requires the /var/data disk mount, allowing the Free web service to start.
-
-2026-09-08 — STRONG REVERSAL DASHBOARD SYNC FIX
-- Fixed store_app_signal() so the website no longer strips the rich signal payload before saving it.
-- Preserves STRONG REVERSAL ENTRY flag, classification/interpretation, evidence count, reversal reasons, market intelligence, entry-quality details, levels, timing, and all existing entry/TP/SL fields.
-- Existing trading strategy and other setups were not changed.
-- The dashboard can now render the same Strong Reversal information produced by the strategy engine.
-
-- Added dedicated STRONG REVERSAL ENTRY history with bullish/BUY and bearish/SELL counts, reversal evidence, quality score, reasons, entry, TP and SL for the retained 7-day history.
+Changes:
+- Strong Reversal 1-minute panel now reads EMA9, EMA26, RSI, MACD and MACD Signal from the nested entry-quality telemetry when needed.
+- Market Intelligence now reads market regime, ADX, DI+/DI-, ATR, momentum, candle quality, 5M, 15M and VWAP from the same source.
+- Support/resistance fallbacks added.
+- Advanced Intelligence falls back to engine telemetry instead of showing pending when data exists.
+- Reversal evidence count/total is displayed from explicit fields or safely derived from reversal reasons for older payloads.
+- Service-worker cache version bumped so browsers receive the fixed app.js.
+- No strategy/scoring rules were changed.

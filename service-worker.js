@@ -1,4 +1,4 @@
-const CACHE="kets-display-v6-prop-firm";
+const CACHE="kets-display-v7-full-telemetry";
 const APP_SHELL=["/","/index.html","/styles.css","/app.js","/manifest.json","/static/icon-192.png","/static/icon-512.png"];
 self.addEventListener("install",event=>{
   event.waitUntil(caches.open(CACHE).then(cache=>cache.addAll(APP_SHELL)).then(()=>self.skipWaiting()));
