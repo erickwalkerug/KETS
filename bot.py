@@ -793,7 +793,7 @@ def developer_signals():
     if source_url and source_key:
         try:
             r = requests.get(
-                _source_endpoint(source_url, "/api/signals"),
+                source_url + "/api/signals",
                 headers={"X-KETS-API-KEY": source_key, "Accept": "application/json"},
                 timeout=5,
             )

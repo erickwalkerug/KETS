@@ -20,8 +20,6 @@ services:
         value: "1"
       - key: KETS_DISABLE_SOURCE_BRIDGE
         value: "0"
-      - key: KETS_TRADING_BOT_URL
-        sync: false
       - key: KETS_SIGNAL_SOURCE_URL
         sync: false
       - key: KETS_SIGNAL_SOURCE_KEY

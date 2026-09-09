@@ -273,43 +273,9 @@ function normalizeDashboardSignal(raw){
  s.signal_type=pick("signal_type","signalType","type");
  s.classification=pick("classification","setup","setup_classification","setupClassification");
  s.timestamp=pick("timestamp","timestamp_utc","timestampUtc","created_at","createdAt","time");
- const d=s?.entry_quality_details||s?.entry_quality?.details||{};
- const e=d.ema||{}, t=d.trend||{}, v=d.volume||{}, c=d.candle||{}, m=d.momentum||{}, vw=d.vwap||{}, x=d.extension||{}, ht=d.higher_timeframes||{}, rv=d.reversal||{};
- const sr=pick("strong_reversal","strongReversal","strong_reversal_entry","reversal_signal","reversalSignal");
+ const sr=pick("strong_reversal","strongReversal","reversal_signal","reversalSignal");
  s.strong_reversal=(sr===true||String(sr).toLowerCase()==="true") || /STRONG\s+REVERSAL/i.test(String(s.signal_type||s.classification||s.setup||""));
  s.reversal_signal=s.strong_reversal;
- // The strategy payload keeps detailed telemetry under entry_quality_details.
- // Promote those values here so the public Strong Reversal panel and history
- // never show '--' when the engine actually calculated the value.
- const nested=(topKeys, obj, objKeys)=>pick(...topKeys) ?? pick(...objKeys.map(k=>obj?.[k]));
- s.ema9=nested(["ema9","ema_9"],e,["ema9"]);
- s.ema26=nested(["ema26","ema_26"],e,["ema26"]);
- s.ema20=nested(["ema20","ema_20"],e,["ema20"]);
- s.ema50=nested(["ema50","ema_50"],e,["ema50"]);
- s.rsi=nested(["rsi","rsi14","rsi_14"],d,["rsi","rsi14","rsi_14"]);
- s.macd=nested(["macd","macd_value"],d,["macd","macd_value"]);
- s.macd_signal=nested(["macd_signal","macdSignal"],d,["macd_signal","macdSignal"]);
- s.macd_status=nested(["macd_status","macdStatus"],d,["macd_status","macdStatus"]);
- s.adx=nested(["adx"],t,["adx"]);
- s.previous_adx=nested(["previous_adx","previousAdx"],t,["previous_adx","previousAdx"]);
- s.di_plus=nested(["di_plus","plus_di","plusDI"],t,["plus_di","di_plus","plusDI"]);
- s.di_minus=nested(["di_minus","minus_di","minusDI"],t,["minus_di","di_minus","minusDI"]);
- s.atr=nested(["atr","atr14","atr_14"],d,["atr","atr14","atr_14"]);
- s.momentum_direction=nested(["momentum_direction","momentumDirection"],m,["direction","momentum_direction"]);
- s.momentum_state=nested(["momentum_state","momentumState"],m,["state","momentum_state"]);
- s.candle_quality=nested(["candle_quality","candleQuality"],c,["quality","candle_quality"]);
- s.timeframe_5m=nested(["timeframe_5m","timeframe5m","direction_5m"],ht,["5m","5M","direction_5m"]);
- s.timeframe_15m=nested(["timeframe_15m","timeframe15m","direction_15m"],ht,["15m","15M","direction_15m"]);
- s.vwap=nested(["vwap","vwap_value"],vw,["value","vwap","vwap_value"]);
- s.support=nested(["support"],d,["support"]);
- s.resistance=nested(["resistance"],d,["resistance"]);
- s.advanced_intelligence=Array.isArray(s.advanced_intelligence)?s.advanced_intelligence:(Array.isArray(d.advanced_intelligence)?d.advanced_intelligence:(Array.isArray(s.advanced_reasons)?s.advanced_reasons:[]));
- if(!Array.isArray(s.entry_quality_reasons)) s.entry_quality_reasons=Array.isArray(d.reasons)?d.reasons:[];
- if(s.reversal_evidence_count==null && s.strong_reversal){
-   const reasons=Array.isArray(s.reversal_reasons)?s.reversal_reasons:[];
-   s.reversal_evidence_count=pick("reversal_evidence_count","reversalEvidenceCount") ?? reasons.length;
-   s.reversal_evidence_total=pick("reversal_evidence_total","reversalEvidenceTotal") ?? 8;
- }
  if(s.strong_reversal){s.signal_type="STRONG REVERSAL ENTRY";s.classification=s.classification||"NEW STRONG REVERSAL — price action, momentum and structure are turning together.";}
  return s;
 }
