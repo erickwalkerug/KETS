@@ -10,3 +10,12 @@ Changes:
 - Reversal evidence count/total is displayed from explicit fields or safely derived from reversal reasons for older payloads.
 - Service-worker cache version bumped so browsers receive the fixed app.js.
 - No strategy/scoring rules were changed.
+
+
+SIGNAL DELIVERY FIX - 2026-09-09
+- Trading bot signal bridge now accepts either a full /api/signals URL or a website base URL.
+- Added automatic short retries for transient Render/network failures.
+- Added /api/source/signals to the trading bot for reliable website polling.
+- Website source bridge now accepts KETS_TRADING_BOT_URL and normalizes base/API URLs.
+- Render configuration now includes the explicit trading-bot URL variable.
+- Signal payload and strategy rules were not changed.

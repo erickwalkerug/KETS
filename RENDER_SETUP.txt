@@ -21,3 +21,10 @@ STRONG REVERSAL WEBSITE SYNC — 2026-09-08
 - Set the same secret in KETS_SIGNAL_SOURCE_KEY on the website and KETS_SIGNAL_RECEIVER_KEY on the source/bot service.
 - The dashboard continues to use the normal paid/developer access rules.
 - Strong Reversal fields are preserved and displayed; existing setups are unchanged.
+
+
+SIGNAL BRIDGE CONFIGURATION - FINAL
+- On the trading-bot service: KETS_SIGNAL_SOURCE_URL or KETS_WEBSITE_URL may be the KETS website base URL or /api/signals URL; the bot normalizes it automatically.
+- On the website service: KETS_TRADING_BOT_URL should be the trading-bot Render base URL. KETS_SIGNAL_SOURCE_URL is retained as a fallback.
+- Use the same secret value in the bot KETS_SIGNAL_SOURCE_KEY and website KETS_SIGNAL_RECEIVER_KEY.
+- The trading bot exposes /api/source/signals for reliable website polling.
