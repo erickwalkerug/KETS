@@ -1,0 +1,21 @@
+KETS PRICING
+
+UGANDA (UGX)
+30 minutes: UGX 500
+1 hour: UGX 1,000
+4 hours: UGX 3,000
+1 day: UGX 5,000
+1 week: UGX 30,000
+1 month: UGX 50,000
+
+ABROAD (USD)
+1 day: $1
+1 week: $5
+1 month: $15
+
+Country-based currency:
+Uganda = UGX
+All other countries = USD
+
+International pricing is available for the 1-day, 1-week and 1-month plans.
+Short plans remain Uganda-only because no international short-plan prices were specified.

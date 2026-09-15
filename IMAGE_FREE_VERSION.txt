@@ -1,0 +1,1 @@
+KETS image-free version. Logo, app icon, marketing images, branding artwork, and image upload UI/assets have been removed. Core authentication, signals, payments, and deployment files are retained.
