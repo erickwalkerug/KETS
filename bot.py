@@ -121,8 +121,10 @@ except ImportError:
     RealDictCursor = None
     POSTGRES_AVAILABLE = False
 
-DATABASE_URL = os.environ.get("DATABASE_URL", "").strip()
-USING_POSTGRES = bool(DATABASE_URL and POSTGRES_AVAILABLE)
+# KETS production storage is SQLite on the Render Persistent Disk.
+# Deliberately do not auto-switch to PostgreSQL/Supabase from DATABASE_URL.
+DATABASE_URL = ""
+USING_POSTGRES = False
 
 class PGConnection:
     def __init__(self, url):

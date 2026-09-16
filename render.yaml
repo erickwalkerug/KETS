@@ -5,11 +5,13 @@ services:
     buildCommand: pip install -r requirements.txt
     startCommand: gunicorn app:app --workers 1 --threads 4 --timeout 120
     healthCheckPath: /api/health
+    disk:
+      name: kets-data
+      mountPath: /var/data
+      sizeGB: 1
     envVars:
-      - key: DATABASE_URL
-        fromDatabase:
-          name: kets-db
-          property: connectionString
+      - key: KETS_DATA_DIR
+        value: /var/data
       - key: KETS_SESSION_SECRET
         generateValue: true
       - key: KETS_DEVELOPER_USERNAME
@@ -41,7 +43,3 @@ services:
       - key: CTRADER_REDIRECT_URI
         value: "https://kets.onrender.com/ctrader/callback"
 
-databases:
-  - name: kets-db
-    databaseName: kets
-    plan: free
