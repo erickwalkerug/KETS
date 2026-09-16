@@ -178,7 +178,7 @@
     <article class="panel managed-control-card">
       <div class="panel-title"><h3>Trading controls</h3><span class="muted">Your strategy remains unchanged</span></div>
       <label>Trading allocation <select id="managedAllocation"><option value="10">10% of trading balance</option><option value="25">25% of trading balance</option><option value="50">50% of trading balance</option><option value="100">100% of trading balance</option></select></label>
-      <label>Custom lot size <input id="managedLotSize" type="number" min="0.01" max="10" step="0.01" value="0.01" inputmode="decimal"></label>
+      <label>Selected lot size <input id="managedLotSize" type="number" min="0.01" max="10" step="0.01" value="0.01" inputmode="decimal"></label>
       <label>Maximum open trades <select id="managedMaxTrades"><option>1</option><option>2</option><option>3</option></select></label>
       <label>Minimum entry quality <select id="managedMinQuality"><option value="40" selected>40 / 100 — Low-risk eligible</option><option value="50">50 / 100</option><option value="60">60 / 100</option><option value="70">70 / 100</option><option value="85">85 / 100</option></select></label>
       <label>Target projected profit <input id="managedProfitTarget" type="number" min="0" step="1" value="25" inputmode="decimal"></label>
@@ -196,7 +196,7 @@
         <div class="panel-title"><h3>Manual Trade</h3><span class="muted">Uses your connected cTrader account</span></div>
         <div class="manual-trade-grid">
           <label>Symbol <select id="manualTradeSymbol"><option value="XAUUSD">XAU/USD</option><option value="BTCUSD">BTC/USD</option></select></label>
-          <label>Lot size <input id="manualTradeLot" type="number" min="0.01" max="10" step="0.01" value="0.01" inputmode="decimal"></label>
+          <label>Lot size <input id="manualTradeLot" type="number" min="0.01" max="10" step="0.01" value="0.01" inputmode="decimal" readonly></label>
           <label>Stop Loss <input id="manualTradeSL" type="number" step="any" placeholder="Optional"></label>
           <label>Take Profit <input id="manualTradeTP" type="number" step="any" placeholder="Optional"></label>
         </div>
@@ -205,7 +205,7 @@
           <button class="sell-btn" id="manualSellBtn" disabled>🔴 SELL</button>
           <button class="ghost-btn" id="manualCloseAllBtn" disabled>✕ Close All Manual Trades</button>
         </div>
-        <p class="tiny">Manual orders are separate from KETS automatic entries. Optional SL/TP can be entered before placing the order.</p>
+        <p class="tiny">Manual orders use the same saved lot size selected above as KETS automatic entries. Optional SL/TP can be entered before placing the order.</p>
       </div>
       <div class="managed-toggle-row"><div><strong>Require strong reversal only</strong><small>Optional. Turn this on if you want fewer entries; leave off to allow any low-risk KETS entry.</small></div><label class="switch"><input id="managedStrongOnly" type="checkbox"><span></span></label></div>
       <button class="primary-btn full" id="saveManagedSettings">Save trading settings</button>
