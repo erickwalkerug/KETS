@@ -1059,6 +1059,75 @@ def _ctrader_autotrade_loop():
         except Exception: app.logger.exception("cTrader auto-trade loop error")
         time.sleep(15)
 
+def _ctrader_close_all_positions(row):
+    accounts=json.loads(row.get("account_ids_json") or "[]")
+    selected=str(row.get("selected_account_id") or "")
+    account=next((a for a in accounts if str(a.get("id"))==selected), None)
+    if not account: raise RuntimeError("No cTrader account selected. Connect cTrader and choose an account first.")
+    access_token=_ctrader_fernet().decrypt(row["access_token_enc"].encode()).decode()
+    is_live=bool(account.get("is_live"))
+    try: positions=json.loads(row.get("positions_json") or "[]")
+    except Exception: positions=[]
+    async def run():
+        import websockets
+        async with websockets.connect(_ctrader_host(is_live),open_timeout=15,close_timeout=5,ping_interval=20,ping_timeout=20) as ws:
+            async def send(pt,payload):
+                await ws.send(json.dumps({"clientMsgId":str(uuid.uuid4()),"payloadType":pt,"payload":payload}))
+                for _ in range(10):
+                    d=json.loads(await asyncio.wait_for(ws.recv(),timeout=20))
+                    if d.get("payloadType")==51: continue
+                    return d
+                raise RuntimeError("cTrader response timeout")
+            r=await send(2100,{"clientId":_ctrader_client_id(),"clientSecret":_ctrader_client_secret()})
+            if r.get("payloadType")!=2101: raise RuntimeError("cTrader application authorization failed")
+            r=await send(2102,{"ctidTraderAccountId":int(selected),"accessToken":access_token})
+            if r.get("payloadType")!=2103: raise RuntimeError((r.get("payload") or {}).get("description") or "cTrader account authorization failed")
+            results=[]
+            for pos in positions:
+                pid=pos.get("positionId") or pos.get("id")
+                vol=pos.get("volume")
+                if not pid: continue
+                # cTrader volumes are expressed in 0.01-lot units in account position data.
+                volume=int(round(float(vol or 0)))
+                if volume<=0: volume=int(round(float(pos.get("lot",0.01))*10000))
+                results.append(await send(2107,{"ctidTraderAccountId":int(selected),"positionId":int(pid),"volume":volume}))
+            return results
+    return asyncio.run(run())
+
+@app.route("/api/managed/manual-order", methods=["POST"])
+def managed_manual_order():
+    user=_current_user()
+    if not user: return jsonify({"error":"Sign in required."}),401
+    row=_ctrader_row_for_user(user["id"])
+    if not row or row.get("status") not in ("AUTHORIZED","CONNECTED"): return jsonify({"error":"Connect cTrader and select an account first."}),400
+    body=request.get_json(silent=True) or {}
+    direction=str(body.get("direction") or "").upper()
+    symbol=str(body.get("symbol") or "XAUUSD").replace("/","").upper()
+    if direction not in ("BUY","SELL"): return jsonify({"error":"Choose BUY or SELL."}),400
+    if symbol not in ("XAUUSD","BTCUSD"): return jsonify({"error":"Unsupported symbol."}),400
+    try: volume=max(.01,min(float(body.get("volume") or row.get("lot_size") or .01),10))
+    except Exception: volume=float(row.get("lot_size") or .01)
+    order={"symbol":symbol,"direction":direction,"volume":volume,"stop_loss":body.get("stop_loss"),"take_profit":body.get("take_profit")}
+    try:
+        result,selected=_ctrader_execute_order(row,order)
+        with DB_LOCK:
+            conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET selected_account_id=?,last_error=NULL,updated_at=? WHERE id=?",(selected,_now_iso(),row["id"])); conn.commit(); conn.close()
+        return jsonify({"ok":True,"broker":"cTrader","result":result})
+    except Exception as exc:
+        return jsonify({"error":str(exc)}),400
+
+@app.route("/api/managed/close-all", methods=["POST"])
+def managed_close_all():
+    user=_current_user()
+    if not user: return jsonify({"error":"Sign in required."}),401
+    row=_ctrader_row_for_user(user["id"])
+    if not row: return jsonify({"error":"Connect cTrader first."}),400
+    try:
+        result=_ctrader_close_all_positions(row)
+        return jsonify({"ok":True,"broker":"cTrader","closed_requests":len(result)})
+    except Exception as exc:
+        return jsonify({"error":str(exc)}),400
+
 @app.route("/api/managed/queue-current", methods=["POST"])
 def managed_queue_current():
     user=_current_user()

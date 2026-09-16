@@ -826,9 +826,34 @@ if($("disconnectCTraderBtn")) $("disconnectCTraderBtn").onclick=async()=>{
  try{await api("/api/ctrader/disconnect",{method:"POST"});await refreshCTraderStatus();}
  catch(e){alert(e.message);}
 };
-async function refreshManagedStatus(){try{const d=await api("/api/managed/status",{timeoutMs:8000});if($("managedConnectionStatus"))$("managedConnectionStatus").textContent=d.status||"NOT CONNECTED";if($("managedAutoTrade"))$("managedAutoTrade").disabled=!d.connected;if($("managedAutoTrade"))$("managedAutoTrade").checked=!!d.auto_enabled;if($("managedBalance"))$("managedBalance").textContent=money(Number(d.balance||0),"USD");if($("managedOpenTrades"))$("managedOpenTrades").textContent=String((d.positions||[]).length);const st=await api("/api/managed/settings",{timeoutMs:8000});if($("managedLotSize")&&document.activeElement!==$("managedLotSize"))$("managedLotSize").value=Number(st.lot_size||0.01).toFixed(2);if($("managedProfitTarget")&&document.activeElement!==$("managedProfitTarget"))$("managedProfitTarget").value=Number(st.profit_target??25).toFixed(0);if($("managedMinQuality"))$("managedMinQuality").value=String(st.min_quality||40);if($("managedStrongOnly"))$("managedStrongOnly").checked=!!st.strong_only;if($("managedMaxTrades"))$("managedMaxTrades").value=String(st.max_open_trades||1);if($("managedAllocation"))$("managedAllocation").value=String(st.allocation_pct||10);}catch(e){}}
+async function refreshManagedStatus(){try{const d=await api("/api/managed/status",{timeoutMs:8000});const connected=!!d.connected, enabled=!!d.auto_enabled;if($("managedConnectionStatus"))$("managedConnectionStatus").textContent=d.status||"NOT CONNECTED";if($("managedAutoTrade"))$("managedAutoTrade").disabled=!connected;if($("managedAutoTrade"))$("managedAutoTrade").checked=enabled;const ats=$("managedAutoTradeStatus");if(ats){ats.textContent=!connected?"NOT CONNECTED":(enabled?"RUNNING":"PAUSED / STOPPED");ats.className=enabled?"running":(connected?"paused":"");}if($("autoStartBtn"))$("autoStartBtn").disabled=!connected||enabled;if($("autoPauseBtn"))$("autoPauseBtn").disabled=!connected||!enabled;if($("autoStopBtn"))$("autoStopBtn").disabled=!connected||!enabled;if($("manualBuyBtn"))$("manualBuyBtn").disabled=!connected;if($("manualSellBtn"))$("manualSellBtn").disabled=!connected;if($("manualCloseAllBtn"))$("manualCloseAllBtn").disabled=!connected;if($("managedBalance"))$("managedBalance").textContent=money(Number(d.balance||0),"USD");if($("managedOpenTrades"))$("managedOpenTrades").textContent=String((d.positions||[]).length);const st=await api("/api/managed/settings",{timeoutMs:8000});if($("managedLotSize")&&document.activeElement!==$("managedLotSize"))$("managedLotSize").value=Number(st.lot_size||0.01).toFixed(2);if($("managedProfitTarget")&&document.activeElement!==$("managedProfitTarget"))$("managedProfitTarget").value=Number(st.profit_target??25).toFixed(0);if($("managedMinQuality"))$("managedMinQuality").value=String(st.min_quality||40);if($("managedStrongOnly"))$("managedStrongOnly").checked=!!st.strong_only;if($("managedMaxTrades"))$("managedMaxTrades").value=String(st.max_open_trades||1);if($("managedAllocation"))$("managedAllocation").value=String(st.allocation_pct||10);}catch(e){}}
 setInterval(()=>{if(!$("managedTradingPage")?.classList.contains("hidden")){refreshManagedStatus();refreshCTraderStatus();}},5000);
-if($("managedAutoTrade")) $("managedAutoTrade").onchange=async()=>{try{await api("/api/managed/toggle",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({enabled:$("managedAutoTrade").checked})});}catch(e){$("managedAutoTrade").checked=false;alert(e.message);}};
+async function setAutoTradeControl(enabled, label){
+ try{
+  await api("/api/managed/toggle",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({enabled:!!enabled})});
+  await refreshManagedStatus();
+ }catch(e){alert(e.message);}
+}
+if($("managedAutoTrade")) $("managedAutoTrade").onchange=async()=>{await setAutoTradeControl($("managedAutoTrade").checked,"toggle");};
+if($("autoStartBtn")) $("autoStartBtn").onclick=async()=>{await setAutoTradeControl(true,"start");};
+if($("autoPauseBtn")) $("autoPauseBtn").onclick=async()=>{await setAutoTradeControl(false,"pause");};
+if($("autoStopBtn")) $("autoStopBtn").onclick=async()=>{await setAutoTradeControl(false,"stop");};
+
+async function manualTrade(direction){
+ try{
+  const body={direction, symbol:$("manualTradeSymbol").value, volume:Number($("manualTradeLot").value||0.01)};
+  const sl=$("manualTradeSL").value, tp=$("manualTradeTP").value;
+  if(sl) body.stop_loss=Number(sl); if(tp) body.take_profit=Number(tp);
+  if(!confirm(`Place manual ${direction} order on ${body.symbol} for ${body.volume} lot?`)) return;
+  await api("/api/managed/manual-order",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+  alert(`Manual ${direction} order sent to cTrader.`); await refreshManagedStatus();
+ }catch(e){alert(e.message);}
+}
+if($("manualBuyBtn")) $("manualBuyBtn").onclick=()=>manualTrade("BUY");
+if($("manualSellBtn")) $("manualSellBtn").onclick=()=>manualTrade("SELL");
+if($("manualCloseAllBtn")) $("manualCloseAllBtn").onclick=async()=>{
+ try{ if(!confirm("Close all manual/open positions on the selected cTrader account?")) return; await api("/api/managed/close-all",{method:"POST"}); alert("Close request sent to cTrader."); await refreshManagedStatus(); }catch(e){alert(e.message);}
+};
 if($("saveManagedSettings")) $("saveManagedSettings").onclick=async()=>{try{await api("/api/managed/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({lot_size:Number($("managedLotSize").value||0.01),profit_target:Number($("managedProfitTarget").value||25),min_quality:Number($("managedMinQuality").value||85),strong_only:$("managedStrongOnly").checked,max_lot:10,max_open_trades:Number($("managedMaxTrades").value||1),allocation_pct:Number($("managedAllocation").value||10)})});alert("KETS trading settings saved.");}catch(e){alert(e.message);}};
 if($("managedDepositBtn")) $("managedDepositBtn").onclick=()=>alert("Deposit directly with your cTrader broker. KETS does not receive or hold trading funds.");
 if($("managedWithdrawBtn")) $("managedWithdrawBtn").onclick=()=>alert("Withdraw profits directly through your broker/exchange after a completed trade. KETS does not hold withdrawal funds.");
