@@ -182,7 +182,8 @@
       <label>Maximum open trades <select id="managedMaxTrades"><option>1</option><option>2</option><option>3</option></select></label>
       <label>Minimum entry quality <select id="managedMinQuality"><option value="40" selected>40 / 100 — Low-risk eligible</option><option value="50">50 / 100</option><option value="60">60 / 100</option><option value="70">70 / 100</option><option value="85">85 / 100</option></select></label>
       <label>Target projected profit <input id="managedProfitTarget" type="number" min="0" step="1" value="25" inputmode="decimal"></label>
-      <div class="managed-toggle-row"><div><strong>Automatic entries &amp; exits</strong><small>Enters when KETS marks a setup low risk and the entry plan is complete. It waits for agreement, then uses the signal TP/SL.</small></div><label class="switch"><input id="managedAutoTrade" type="checkbox" disabled><span></span></label></div>
+      <div class="managed-toggle-row"><div><strong>Automatic entries &amp; exits</strong><small>Choose the market below, then tap the switch to turn automatic trading ON or OFF.</small></div><label class="switch" title="Turn automatic trading on or off"><input id="managedAutoTrade" type="checkbox" disabled><span></span></label></div>
+      <label class="auto-trade-symbol-label">Auto-trade symbol<select id="autoTradeSymbol" disabled><option value="XAUUSD">XAU/USD</option><option value="BTCUSD">BTC/USD</option></select></label>
       <div class="auto-trade-controls">
         <div class="auto-trade-status"><span>AUTO-TRADE STATUS</span><strong id="managedAutoTradeStatus">NOT CONNECTED</strong></div>
         <div class="auto-trade-buttons">
