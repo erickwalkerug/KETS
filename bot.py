@@ -626,25 +626,34 @@ def _ctrader_account_snapshot(row, retry=True):
     async def run(token):
         import websockets
         async with websockets.connect(_ctrader_host(is_live),open_timeout=15,close_timeout=5,ping_interval=20,ping_timeout=20) as ws:
-            async def send(pt,payload):
-                await ws.send(json.dumps({"clientMsgId":str(uuid.uuid4()),"payloadType":pt,"payload":payload}))
-                for _ in range(12):
+            async def send(pt,payload,expected=None,label="cTrader request"):
+                # Match responses to the request that generated them.  cTrader can
+                # send asynchronous events on the same WebSocket, so returning the
+                # first non-heartbeat message can otherwise populate the dashboard
+                # with an empty/default payload.
+                client_msg_id=str(uuid.uuid4())
+                await ws.send(json.dumps({"clientMsgId":client_msg_id,"payloadType":pt,"payload":payload}))
+                for _ in range(20):
                     d=json.loads(await asyncio.wait_for(ws.recv(),timeout=20))
-                    if d.get("payloadType")==51: continue
+                    if d.get("payloadType")==51:
+                        continue
+                    if d.get("clientMsgId") not in (None, client_msg_id):
+                        continue
+                    if d.get("payloadType")==2142:
+                        ep=d.get("payload") or {}
+                        raise RuntimeError(ep.get("description") or ep.get("errorCode") or f"{label} failed")
+                    if expected and d.get("payloadType")!=expected:
+                        continue
                     return d
-                raise RuntimeError("cTrader response timeout")
-            r=await send(2100,{"clientId":_ctrader_client_id(),"clientSecret":_ctrader_client_secret()})
-            if r.get("payloadType")!=2101:
-                raise RuntimeError((r.get("payload") or {}).get("description") or "cTrader application authorization failed")
-            r=await send(2102,{"ctidTraderAccountId":int(selected),"accessToken":token})
-            if r.get("payloadType")!=2103:
-                payload=r.get("payload") or {}
-                raise RuntimeError(payload.get("description") or payload.get("errorCode") or "cTrader account authorization failed")
-            trader_res=await send(2121,{"ctidTraderAccountId":int(selected)})
-            recon_res=await send(2124,{"ctidTraderAccountId":int(selected),"returnProtectionOrders":False})
-            pnl_res=await send(2187,{"ctidTraderAccountId":int(selected)})
-            deal_res=await send(2133,{"ctidTraderAccountId":int(selected),"fromTimestamp":from_ms,"toTimestamp":to_ms,"maxRows":1000})
-            asset_res=await send(2112,{"ctidTraderAccountId":int(selected)})
+                raise RuntimeError(f"cTrader did not return the expected {label} response")
+
+            r=await send(2100,{"clientId":_ctrader_client_id(),"clientSecret":_ctrader_client_secret()},2101,"application authorization")
+            r=await send(2102,{"ctidTraderAccountId":int(selected),"accessToken":token},2103,"account authorization")
+            trader_res=await send(2121,{"ctidTraderAccountId":int(selected)},2122,"account balance")
+            recon_res=await send(2124,{"ctidTraderAccountId":int(selected),"returnProtectionOrders":False},2125,"open positions")
+            pnl_res=await send(2187,{"ctidTraderAccountId":int(selected)},2188,"open P/L")
+            deal_res=await send(2133,{"ctidTraderAccountId":int(selected),"fromTimestamp":from_ms,"toTimestamp":to_ms,"maxRows":1000},2134,"today's deals")
+            asset_res=await send(2112,{"ctidTraderAccountId":int(selected)},2113,"account currency")
             return trader_res,recon_res,pnl_res,deal_res,asset_res
 
     try:
@@ -660,6 +669,8 @@ def _ctrader_account_snapshot(row, retry=True):
 
     trader_payload=(responses[0].get("payload") or {})
     trader=trader_payload.get("trader") or {}
+    if not trader or trader.get("balance") is None:
+        raise RuntimeError("cTrader returned account data without a balance for the selected account.")
     money_digits=int(trader.get("moneyDigits") or 0)
     scale=10**money_digits
     balance=_num(trader.get("balance"))/scale if scale else _num(trader.get("balance"))
@@ -713,17 +724,29 @@ def _ctrader_account_snapshot(row, retry=True):
         conversion=_num(close.get("pnlConversionFee"))/div
         realized_today += gross + swap + commission + conversion
 
-    # Equity is balance plus broker-calculated open-position net P/L. Free
-    # margin is equity less the used margin reported on open positions.
-    equity=balance+unrealized
-    free_margin=equity-used_margin
+    # cTrader's Trader response is authoritative for the account balance.
+    # Equity/free margin are derived from the broker's position P/L and the
+    # used margin returned for open positions.  Some cTrader environments may
+    # also expose these fields directly; prefer those values when present.
+    equity_raw=trader.get("equity")
+    free_margin_raw=trader.get("freeMargin")
+    equity=(_num(equity_raw)/scale) if equity_raw is not None and scale else (_num(equity_raw) if equity_raw is not None else balance+unrealized)
+    free_margin=( _num(free_margin_raw)/scale ) if free_margin_raw is not None and scale else (_num(free_margin_raw) if free_margin_raw is not None else equity-used_margin)
 
     assets=(responses[4].get("payload") or {}).get("asset") or []
     deposit_id=str(trader.get("depositAssetId") or "")
-    currency="USD"
+    currency=""
     for asset in assets:
         if str(asset.get("assetId"))==deposit_id:
-            currency=str(asset.get("name") or asset.get("displayName") or currency).upper()
+            # Depending on broker/API version the currency code may be in
+            # name, displayName, or a dedicated ISO/code field.
+            currency=str(asset.get("currency") or asset.get("code") or asset.get("name") or asset.get("displayName") or "").strip().upper()
+            if len(currency)>5 and isinstance(asset.get("name"),str):
+                # Keep a clean ISO-style display when the API returns e.g.
+                # "US Dollar (USD)" or "USD - US Dollar".
+                import re as _re
+                m=_re.search(r"\b([A-Z]{3})\b", currency)
+                if m: currency=m.group(1)
             break
     if not currency or currency=="NONE": currency="USD"
 

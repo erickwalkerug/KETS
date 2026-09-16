@@ -862,7 +862,14 @@ async function refreshManagedStatus(){
   renderManagedMoney("managedRealizedPnl",d.realized_pnl,currency);
   renderManagedMoney("managedFreeMargin",d.free_margin,currency);
   if($("managedOpenTrades"))$("managedOpenTrades").textContent=String((d.positions||[]).length);
-  if(d.last_error) setManagedActionMessage(`cTrader update: ${d.last_error}`,"error");
+  if($("managedConnectionNote")){
+    $("managedConnectionNote").textContent=d.last_error
+      ? `cTrader data update failed: ${d.last_error}`
+      : (connected ? `Live data from cTrader account ${d.selected_account_id||"selected account"}. Values refresh automatically.` : "These figures are read from the selected cTrader account. Connect cTrader and select an account to load the live data.");
+  }
+  if(d.last_error){
+    setManagedActionMessage(`cTrader update: ${d.last_error}`,"error");
+  }
   const st=await api("/api/managed/settings",{timeoutMs:8000});
   if($("managedLotSize")&&document.activeElement!==$("managedLotSize"))$("managedLotSize").value=Number(st.lot_size||0.01).toFixed(2);
   if($("managedProfitTarget")&&document.activeElement!==$("managedProfitTarget"))$("managedProfitTarget").value=Number(st.profit_target??25).toFixed(0);

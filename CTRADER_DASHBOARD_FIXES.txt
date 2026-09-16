@@ -18,3 +18,10 @@ Important:
 - The displayed balance/P&L comes from the selected cTrader account only after cTrader authorization and account selection.
 - A demo account can legitimately show a zero balance if that demo account has no funds.
 - Live trading remains controlled by the connected cTrader authorization and the user's settings.
+
+
+Additional reliability fix:
+- cTrader WebSocket requests now match responses by clientMsgId and expected payload type, preventing asynchronous account events from being mistaken for the balance response.
+- The dashboard rejects an account snapshot that contains no balance instead of silently displaying USD 0.
+- Equity/free margin prefer values supplied by cTrader when available and otherwise use the open-position P/L and used-margin data.
+- The dashboard no longer uses a misleading “Broker connection is not configured yet” message after cTrader has connected.
