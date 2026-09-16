@@ -1466,6 +1466,27 @@ def _ctrader_execute_order(row, order):
             if not bool(symbol.get("enabled", True)):
                 raise RuntimeError(f"{symbol.get('symbolName') or requested_symbol} is disabled for trading.")
 
+            # ProtoOASymbolsListRes returns ProtoOALightSymbol entries only.
+            # lotSize/minVolume/maxVolume/stepVolume are full ProtoOASymbol
+            # fields, so fetch the selected symbol by ID before converting
+            # the website lot setting into cTrader protocol volume.
+            symbol_details_res = await send(
+                CTRADER_PAYLOAD["SYMBOL_BY_ID_REQ"],
+                {"ctidTraderAccountId": int(selected), "symbolId": [symbol_id]},
+                2117,
+                "full symbol details",
+            )
+            full_symbols = (symbol_details_res.get("payload") or {}).get("symbol") or []
+            full_symbol = next(
+                (s for s in full_symbols if int(s.get("symbolId") or -1) == symbol_id),
+                None,
+            )
+            if not full_symbol:
+                raise RuntimeError(
+                    f"cTrader did not return full symbol details for {symbol.get('symbolName') or requested_symbol}."
+                )
+            symbol = {**symbol, **full_symbol}
+
             lot_size_cents = int(_num(symbol.get("lotSize")) or 0)
             min_volume = int(_num(symbol.get("minVolume")) or 0)
             max_volume = int(_num(symbol.get("maxVolume")) or 0)
@@ -1478,12 +1499,21 @@ def _ctrader_execute_order(row, order):
                     f"cTrader did not provide the contract lot size for {symbol.get('symbolName') or requested_symbol}."
                 )
 
-            # 1 lot = symbol.lotSize (already expressed in cTrader volume cents).
-            volume = int(round(lots * lot_size_cents))
-            if step_volume > 0:
-                volume = (volume // step_volume) * step_volume
+            # 1 website lot = the broker's cTrader lotSize.
+            requested_volume = int(round(lots * lot_size_cents))
+            volume = requested_volume
+
+            if step_volume > 0 and volume % step_volume:
+                # Never silently reduce the user's selected lot size.
+                lower = (volume // step_volume) * step_volume
+                upper = lower + step_volume
+                volume = upper if (volume - lower) >= (upper - volume) else lower
+
             if min_volume > 0 and volume < min_volume:
-                volume = min_volume
+                raise RuntimeError(
+                    f"Selected lot size {lots:g} is below the broker minimum "
+                    f"({min_volume / lot_size_cents:g} lot) for {symbol.get('symbolName') or requested_symbol}."
+                )
             if max_volume > 0 and volume > max_volume:
                 raise RuntimeError(
                     f"Lot size {lots:g} exceeds the broker's maximum volume for {symbol.get('symbolName') or requested_symbol}."
@@ -1524,6 +1554,10 @@ def _ctrader_execute_order(row, order):
                 "direction": direction,
                 "lots": lots,
                 "volume_cents": volume,
+                "broker_lot_size": lot_size_cents,
+                "broker_min_volume": min_volume,
+                "broker_max_volume": max_volume,
+                "broker_step_volume": step_volume,
                 "order_id": rp.get("orderId") or (rp.get("order") or {}).get("orderId"),
                 "position_id": rp.get("positionId") or (rp.get("position") or {}).get("positionId"),
                 "execution_type": rp.get("executionType"),
@@ -1644,8 +1678,10 @@ def managed_manual_order():
     symbol=str(body.get("symbol") or "XAUUSD").replace("/","").upper()
     if direction not in ("BUY","SELL"): return jsonify({"error":"Choose BUY or SELL."}),400
     if symbol not in ("XAUUSD","BTCUSD"): return jsonify({"error":"Unsupported symbol."}),400
-    try: volume=max(.01,min(float(body.get("volume") or row.get("lot_size") or .01),10))
-    except Exception: volume=float(row.get("lot_size") or .01)
+    # The saved website lot size is the single source of truth for both
+    # automatic and manual cTrader orders.
+    try: volume=max(.01,min(float(row.get("lot_size") or .01),10))
+    except Exception: volume=.01
     order={"symbol":symbol,"direction":direction,"volume":volume,"stop_loss":body.get("stop_loss"),"take_profit":body.get("take_profit")}
     try:
         result,selected=_ctrader_execute_order(row,order)

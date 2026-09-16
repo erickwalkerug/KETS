@@ -961,7 +961,8 @@ if($("autoStopBtn")) $("autoStopBtn").onclick=async()=>{await setAutoTradeContro
 async function manualTrade(direction){
  const btn=direction==="BUY"?$("manualBuyBtn"):$("manualSellBtn");
  try{
-  const body={direction,symbol:$("manualTradeSymbol").value,volume:Number($("manualTradeLot").value||0.01)};
+  const selectedLot=Number($("managedLotSize")?.value||$("manualTradeLot")?.value||0.01);
+  const body={direction,symbol:$("manualTradeSymbol").value,volume:selectedLot};
   const sl=$("manualTradeSL").value,tp=$("manualTradeTP").value;
   if(sl)body.stop_loss=Number(sl);if(tp)body.take_profit=Number(tp);
   if(!confirm(`Place manual ${direction} order on ${body.symbol} for ${body.volume} lot?`))return;
