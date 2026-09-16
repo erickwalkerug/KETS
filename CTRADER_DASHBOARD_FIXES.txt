@@ -25,3 +25,11 @@ Additional reliability fix:
 - The dashboard rejects an account snapshot that contains no balance instead of silently displaying USD 0.
 - Equity/free margin prefer values supplied by cTrader when available and otherwise use the open-position P/L and used-margin data.
 - The dashboard no longer uses a misleading “Broker connection is not configured yet” message after cTrader has connected.
+
+
+Final balance reliability fix:
+- ProtoOATrader balance is now requested and processed before secondary requests.
+- Failures in positions, P/L, deal history, or asset/currency lookup can no longer discard a valid balance and make the dashboard fall back to USD 0.
+- The selected cTrader account ID is used for account authorization and Trader requests.
+- Trader payload parsing accepts the normal payload.trader shape and a direct-payload fallback.
+- Secondary-data warnings are shown separately while the live balance remains visible.

@@ -421,3 +421,10 @@
 .manual-trade-controls{margin-top:14px;padding:15px;border:1px solid #1b2b43;border-radius:16px;background:#07101d}.manual-trade-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin:12px 0}.manual-trade-buttons{display:grid;grid-template-columns:1fr 1fr 1.6fr;gap:8px}.manual-trade-buttons button{min-height:44px}.buy-btn,.sell-btn{border:0;border-radius:12px;font-weight:900;cursor:pointer}.buy-btn{background:#168a55;color:#fff}.sell-btn{background:#a83a46;color:#fff}.manual-trade-buttons button:disabled{opacity:.5;cursor:not-allowed}@media(max-width:560px){.manual-trade-grid,.manual-trade-buttons{grid-template-columns:1fr}}
 
 .managed-action-message{min-height:18px;margin-top:10px;color:#9eabc0;font-size:11px;font-weight:700}.managed-action-message.ok{color:var(--good)}.managed-action-message.error{color:var(--bad)}.managed-action-message.busy{color:#f4c65b}
+
+
+/* cTrader account selection */
+.ctrader-account-picker{margin-top:14px;padding:14px;border:1px solid rgba(255,255,255,.09);border-radius:16px;background:rgba(0,0,0,.12)}
+.ctrader-account-picker label{display:block;margin-bottom:8px;font-weight:700}
+.ctrader-account-picker select{width:100%;margin-bottom:8px}
+.ctrader-account-picker .primary-btn{margin-top:10px;width:100%}

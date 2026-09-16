@@ -792,15 +792,47 @@ if($("dashboardManagedTrading")) $("dashboardManagedTrading").onclick=()=>showPa
 async function refreshCTraderStatus(){
  try{
   const d=await api("/api/ctrader/status",{timeoutMs:10000});
-  const status=$("ctraderConnectionStatus"), note=$("ctraderConnectionNote"), connect=$("connectCTraderBtn"), disconnect=$("disconnectCTraderBtn"), wrap=$("ctraderAccountPickerWrap"), picker=$("ctraderAccountPicker");
+  const status=$("ctraderConnectionStatus"), note=$("ctraderConnectionNote"), connect=$("connectCTraderBtn"), disconnect=$("disconnectCTraderBtn"), wrap=$("ctraderAccountPickerWrap"), picker=$("ctraderAccountPicker"), selectBtn=$("selectCTraderAccountBtn"), selectedNote=$("ctraderSelectedAccountNote");
   if(status) status.textContent=d.status||"NOT CONNECTED";
   if(connect) connect.style.display=d.connected?"none":"inline-flex";
   if(disconnect) disconnect.style.display=d.connected?"inline-flex":"none";
   const accounts=d.accounts||[];
   if(wrap&&picker&&accounts.length){
-   wrap.style.display="block"; picker.innerHTML=accounts.map(a=>`<option value="${esc(String(a.id))}">${esc(String(a.id))} · ${a.is_live?"LIVE":"DEMO"}${a.broker?" · "+esc(String(a.broker)):""}</option>`).join("");
+   wrap.style.display="block";
+   picker.innerHTML=accounts.map(a=>`<option value="${esc(String(a.id))}">${esc(String(a.id))} · ${a.is_live?"LIVE":"DEMO"}${a.broker?" · "+esc(String(a.broker)):""}</option>`).join("");
    if(d.selected_account_id) picker.value=String(d.selected_account_id);
-   picker.onchange=async()=>{try{await api("/api/ctrader/select-account",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({account_id:picker.value})});refreshCTraderStatus();}catch(e){alert(e.message);}};
+   if(selectedNote){
+     const chosen=accounts.find(a=>String(a.id)===String(d.selected_account_id));
+     selectedNote.textContent=chosen
+       ? `✓ Selected for KETS trading: ${chosen.id} · ${chosen.is_live?"LIVE":"DEMO"}${chosen.broker?" · "+chosen.broker:""}`
+       : "No trading account selected yet. Choose an account below.";
+   }
+   if(selectBtn){
+     selectBtn.disabled=!picker.value || String(picker.value)===String(d.selected_account_id||"");
+     selectBtn.textContent=String(picker.value)===String(d.selected_account_id||"") && d.selected_account_id ? "Selected for trading" : "Use selected account for trading";
+     selectBtn.onclick=async()=>{
+       if(!picker.value)return;
+       try{
+         selectBtn.disabled=true; selectBtn.textContent="Selecting account…";
+         await api("/api/ctrader/select-account",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({account_id:picker.value})});
+         await refreshCTraderStatus();
+         await refreshManagedStatus();
+         setManagedActionMessage(`cTrader account ${picker.value} is now selected for trading.`,"ok");
+       }catch(e){
+         selectBtn.disabled=false; alert(e.message);
+       }
+     };
+   }
+   picker.onchange=()=>{
+     if(selectBtn){
+       selectBtn.disabled=!picker.value;
+       selectBtn.textContent=String(picker.value)===String(d.selected_account_id||"") && d.selected_account_id ? "Selected for trading" : "Use selected account for trading";
+     }
+     if(selectedNote){
+       const chosen=accounts.find(a=>String(a.id)===String(picker.value));
+       selectedNote.textContent=chosen ? `Ready to select: ${chosen.id} · ${chosen.is_live?"LIVE":"DEMO"}${chosen.broker?" · "+chosen.broker:""}` : "Choose an account.";
+     }
+   };
   } else if(wrap) wrap.style.display="none";
   if(note){
    if(d.connected) note.textContent=accounts.length?`cTrader connected · ${accounts.length} account(s) available. Select the account KETS may trade.`:"cTrader authorization received. No account list was returned yet.";
@@ -864,11 +896,15 @@ async function refreshManagedStatus(){
   if($("managedOpenTrades"))$("managedOpenTrades").textContent=String((d.positions||[]).length);
   if($("managedConnectionNote")){
     $("managedConnectionNote").textContent=d.last_error
-      ? `cTrader data update failed: ${d.last_error}`
-      : (connected ? `Live data from cTrader account ${d.selected_account_id||"selected account"}. Values refresh automatically.` : "These figures are read from the selected cTrader account. Connect cTrader and select an account to load the live data.");
+      ? `cTrader balance update failed: ${d.last_error}`
+      : d.data_warning
+        ? `Live balance is from cTrader account ${d.selected_account_id||"selected account"}. Some secondary data is temporarily unavailable: ${d.data_warning}`
+        : (connected ? `Live data from cTrader account ${d.selected_account_id||"selected account"}. Values refresh automatically.` : "These figures are read from the selected cTrader account. Connect cTrader and select an account to load the live data.");
   }
   if(d.last_error){
     setManagedActionMessage(`cTrader update: ${d.last_error}`,"error");
+  } else if(d.data_warning){
+    setManagedActionMessage(`cTrader balance is live. Secondary data warning: ${d.data_warning}`,"busy");
   }
   const st=await api("/api/managed/settings",{timeoutMs:8000});
   if($("managedLotSize")&&document.activeElement!==$("managedLotSize"))$("managedLotSize").value=Number(st.lot_size||0.01).toFixed(2);

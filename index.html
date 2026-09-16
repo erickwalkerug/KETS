@@ -151,7 +151,13 @@
     <p class="muted">Connect your own cTrader account through cTrader's official authorization page. KETS never asks for your cTrader password.</p>
     <button class="primary-btn" id="connectCTraderBtn">Connect cTrader</button>
     <button class="ghost-btn" id="disconnectCTraderBtn" style="display:none">Disconnect cTrader</button>
-    <p class="tiny" id="ctraderConnectionNote">No cTrader account is connected.</p><label id="ctraderAccountPickerWrap" style="display:none">Trading account <select id="ctraderAccountPicker"></select></label>
+    <p class="tiny" id="ctraderConnectionNote">No cTrader account is connected.</p>
+    <div id="ctraderAccountPickerWrap" style="display:none" class="ctrader-account-picker">
+      <label for="ctraderAccountPicker">Account KETS will use for trading</label>
+      <select id="ctraderAccountPicker"></select>
+      <div class="tiny" id="ctraderSelectedAccountNote">No trading account selected.</div>
+      <button class="primary-btn" id="selectCTraderAccountBtn" type="button">Use selected account for trading</button>
+    </div>
   </section>
 
   <section class="managed-grid">

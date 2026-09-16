@@ -610,9 +610,10 @@ def _ctrader_access_token(row, force_refresh=False):
 def _ctrader_account_snapshot(row, retry=True):
     """Read the live cTrader account state used by the dashboard.
 
-    cTrader's Trader message is the source of the account balance. Reconcile
-    returns open positions, and the PnL request returns broker-calculated
-    unrealized P/L. Deal history is used for realized P/L today.
+    Balance is the critical value: it comes directly from ProtoOATrader.
+    Secondary requests (positions/PnL/deals/currency) are deliberately
+    best-effort so a failure in one secondary endpoint can never turn a valid
+    cTrader balance into the dashboard's fallback USD 0.
     """
     account, selected=_ctrader_selected_account(row)
     is_live=bool(account.get("is_live"))
@@ -625,64 +626,149 @@ def _ctrader_account_snapshot(row, retry=True):
 
     async def run(token):
         import websockets
-        async with websockets.connect(_ctrader_host(is_live),open_timeout=15,close_timeout=5,ping_interval=20,ping_timeout=20) as ws:
-            async def send(pt,payload,expected=None,label="cTrader request"):
-                # Match responses to the request that generated them.  cTrader can
-                # send asynchronous events on the same WebSocket, so returning the
-                # first non-heartbeat message can otherwise populate the dashboard
-                # with an empty/default payload.
+        async with websockets.connect(
+            _ctrader_host(is_live),
+            open_timeout=15,
+            close_timeout=5,
+            ping_interval=20,
+            ping_timeout=20,
+        ) as ws:
+
+            async def send(pt,payload,expected=None,label="cTrader request",required=True):
                 client_msg_id=str(uuid.uuid4())
-                await ws.send(json.dumps({"clientMsgId":client_msg_id,"payloadType":pt,"payload":payload}))
-                for _ in range(20):
+                await ws.send(json.dumps({
+                    "clientMsgId":client_msg_id,
+                    "payloadType":pt,
+                    "payload":payload
+                }))
+                for _ in range(30):
                     d=json.loads(await asyncio.wait_for(ws.recv(),timeout=20))
+                    # Heartbeats/events can arrive on the same connection.
                     if d.get("payloadType")==51:
                         continue
+                    # cTrader responses to our request should carry the same
+                    # clientMsgId. Ignore unrelated asynchronous messages.
                     if d.get("clientMsgId") not in (None, client_msg_id):
                         continue
                     if d.get("payloadType")==2142:
                         ep=d.get("payload") or {}
-                        raise RuntimeError(ep.get("description") or ep.get("errorCode") or f"{label} failed")
+                        msg=ep.get("description") or ep.get("errorCode") or f"{label} failed"
+                        if required:
+                            raise RuntimeError(msg)
+                        return None, msg
                     if expected and d.get("payloadType")!=expected:
                         continue
-                    return d
-                raise RuntimeError(f"cTrader did not return the expected {label} response")
+                    return d, ""
+                msg=f"cTrader did not return the expected {label} response"
+                if required:
+                    raise RuntimeError(msg)
+                return None, msg
 
-            r=await send(2100,{"clientId":_ctrader_client_id(),"clientSecret":_ctrader_client_secret()},2101,"application authorization")
-            r=await send(2102,{"ctidTraderAccountId":int(selected),"accessToken":token},2103,"account authorization")
-            trader_res=await send(2121,{"ctidTraderAccountId":int(selected)},2122,"account balance")
-            recon_res=await send(2124,{"ctidTraderAccountId":int(selected),"returnProtectionOrders":False},2125,"open positions")
-            pnl_res=await send(2187,{"ctidTraderAccountId":int(selected)},2188,"open P/L")
-            deal_res=await send(2133,{"ctidTraderAccountId":int(selected),"fromTimestamp":from_ms,"toTimestamp":to_ms,"maxRows":1000},2134,"today's deals")
-            asset_res=await send(2112,{"ctidTraderAccountId":int(selected)},2113,"account currency")
-            return trader_res,recon_res,pnl_res,deal_res,asset_res
+            # Application authentication and account authentication are required
+            # before ProtoOATraderReq can read the selected account.
+            await send(
+                2100,
+                {"clientId":_ctrader_client_id(),"clientSecret":_ctrader_client_secret()},
+                2101,
+                "application authorization",
+                True,
+            )
+            await send(
+                2102,
+                {"ctidTraderAccountId":int(selected),"accessToken":token},
+                2103,
+                "account authorization",
+                True,
+            )
+
+            # THIS is the authoritative balance request. Do it before any
+            # optional requests and never discard it because another request
+            # fails.
+            trader_res,_=await send(
+                2121,
+                {"ctidTraderAccountId":int(selected)},
+                2122,
+                "account balance",
+                True,
+            )
+
+            secondary = {}
+            secondary_errors = []
+
+            for key, pt, payload, expected, label in (
+                ("reconcile",2124,
+                 {"ctidTraderAccountId":int(selected),"returnProtectionOrders":False},
+                 2125,"open positions"),
+                ("pnl",2187,
+                 {"ctidTraderAccountId":int(selected)},
+                 2188,"open P/L"),
+                ("deals",2133,
+                 {"ctidTraderAccountId":int(selected),"fromTimestamp":from_ms,
+                  "toTimestamp":to_ms,"maxRows":1000},
+                 2134,"today's deals"),
+                ("assets",2112,
+                 {"ctidTraderAccountId":int(selected)},
+                 2113,"account currency"),
+            ):
+                try:
+                    res, err = await send(pt,payload,expected,label,False)
+                    secondary[key]=res
+                    if err:
+                        secondary_errors.append(f"{label}: {err}")
+                except Exception as exc:
+                    secondary[key]=None
+                    secondary_errors.append(f"{label}: {str(exc)[:180]}")
+
+            return trader_res, secondary, secondary_errors
 
     try:
-        responses=asyncio.run(run(access_token))
+        trader_res, secondary, secondary_errors = asyncio.run(run(access_token))
     except RuntimeError as exc:
         msg=str(exc)
-        if retry and any(x in msg.upper() for x in ("TOKEN", "AUTH", "INVALID")):
+        if retry and any(x in msg.upper() for x in ("TOKEN", "AUTH", "INVALID", "ACCESS")):
             fresh_row=_ctrader_row_for_user(row["user_id"]) or row
             new_token=_ctrader_access_token(fresh_row,force_refresh=True)
-            responses=asyncio.run(run(new_token))
+            trader_res, secondary, secondary_errors = asyncio.run(run(new_token))
         else:
             raise
 
-    trader_payload=(responses[0].get("payload") or {})
-    trader=trader_payload.get("trader") or {}
+    trader_payload=(trader_res.get("payload") or {})
+    # JSON Open API normally nests this as payload.trader. Accept the payload
+    # itself as a fallback for broker/API variants without changing the normal path.
+    trader=trader_payload.get("trader")
+    if not isinstance(trader,dict):
+        trader=trader_payload if isinstance(trader_payload,dict) else {}
     if not trader or trader.get("balance") is None:
-        raise RuntimeError("cTrader returned account data without a balance for the selected account.")
+        raise RuntimeError(
+            "cTrader account authorization succeeded, but ProtoOATrader did not return a balance for the selected account."
+        )
+
     money_digits=int(trader.get("moneyDigits") or 0)
     scale=10**money_digits
-    balance=_num(trader.get("balance"))/scale if scale else _num(trader.get("balance"))
+    raw_balance=trader.get("balance")
+    balance=_num(raw_balance)/scale if scale else _num(raw_balance)
 
-    recon_payload=(responses[1].get("payload") or {})
+    # Secondary data is optional.
+    recon_res=secondary.get("reconcile")
+    recon_payload=(recon_res.get("payload") or {}) if isinstance(recon_res,dict) else {}
     raw_positions=recon_payload.get("position") or []
-    pnl_payload=(responses[2].get("payload") or {})
-    pnl_digits=int(pnl_payload.get("moneyDigits") if pnl_payload.get("moneyDigits") is not None else money_digits)
-    pnl_scale=10**pnl_digits
-    pnl_by_id={str(x.get("positionId")): _num(x.get("netUnrealizedPnL"))/pnl_scale for x in (pnl_payload.get("positionUnrealizedPnL") or [])}
 
-    positions=[]; used_margin=0.0; unrealized=0.0
+    pnl_res=secondary.get("pnl")
+    pnl_payload=(pnl_res.get("payload") or {}) if isinstance(pnl_res,dict) else {}
+    pnl_digits=int(
+        pnl_payload.get("moneyDigits")
+        if pnl_payload.get("moneyDigits") is not None
+        else money_digits
+    )
+    pnl_scale=10**pnl_digits
+    pnl_by_id={
+        str(x.get("positionId")):_num(x.get("netUnrealizedPnL"))/pnl_scale
+        for x in (pnl_payload.get("positionUnrealizedPnL") or [])
+    }
+
+    positions=[]
+    used_margin=0.0
+    unrealized=0.0
     for pos in raw_positions:
         td=pos.get("tradeData") or {}
         pid=str(pos.get("positionId") or "")
@@ -690,8 +776,13 @@ def _ctrader_account_snapshot(row, retry=True):
         pdigits=int(pos.get("moneyDigits") or money_digits)
         pscale=10**pdigits
         margin=_num(pos.get("usedMargin"))/pscale if pscale else _num(pos.get("usedMargin"))
-        used_margin+=margin; unrealized+=net
-        side="BUY" if int(td.get("tradeSide") or 0)==1 else "SELL" if int(td.get("tradeSide") or 0)==2 else "--"
+        used_margin+=margin
+        unrealized+=net
+        side=(
+            "BUY" if int(td.get("tradeSide") or 0)==1
+            else "SELL" if int(td.get("tradeSide") or 0)==2
+            else "--"
+        )
         positions.append({
             "positionId":pid,
             "symbolId":td.get("symbolId"),
@@ -709,14 +800,19 @@ def _ctrader_account_snapshot(row, retry=True):
         })
 
     realized_today=0.0
-    deals=(responses[3].get("payload") or {}).get("deal") or []
-    for deal in deals:
+    deals_res=secondary.get("deals")
+    deals=(deals_res.get("payload") or {}).get("deal") if isinstance(deals_res,dict) else []
+    for deal in deals or []:
         if int(deal.get("dealStatus") or 0) not in (2,3):
             continue
         close=deal.get("closePositionDetail")
         if not isinstance(close,dict):
             continue
-        digits=int(close.get("moneyDigits") if close.get("moneyDigits") is not None else deal.get("moneyDigits") or money_digits)
+        digits=int(
+            close.get("moneyDigits")
+            if close.get("moneyDigits") is not None
+            else deal.get("moneyDigits") or money_digits
+        )
         div=10**digits
         gross=_num(close.get("grossProfit"))/div
         swap=_num(close.get("swap"))/div
@@ -724,35 +820,68 @@ def _ctrader_account_snapshot(row, retry=True):
         conversion=_num(close.get("pnlConversionFee"))/div
         realized_today += gross + swap + commission + conversion
 
-    # cTrader's Trader response is authoritative for the account balance.
-    # Equity/free margin are derived from the broker's position P/L and the
-    # used margin returned for open positions.  Some cTrader environments may
-    # also expose these fields directly; prefer those values when present.
+    # ProtoOATrader is authoritative for balance. cTrader's ProtoOATrader
+    # schema does not require equity/freeMargin fields, so use them only if a
+    # broker/API variant supplies them; otherwise derive them.
     equity_raw=trader.get("equity")
     free_margin_raw=trader.get("freeMargin")
-    equity=(_num(equity_raw)/scale) if equity_raw is not None and scale else (_num(equity_raw) if equity_raw is not None else balance+unrealized)
-    free_margin=( _num(free_margin_raw)/scale ) if free_margin_raw is not None and scale else (_num(free_margin_raw) if free_margin_raw is not None else equity-used_margin)
+    equity=(
+        _num(equity_raw)/scale
+        if equity_raw is not None and scale
+        else _num(equity_raw)
+        if equity_raw is not None
+        else balance+unrealized
+    )
+    free_margin=(
+        _num(free_margin_raw)/scale
+        if free_margin_raw is not None and scale
+        else _num(free_margin_raw)
+        if free_margin_raw is not None
+        else equity-used_margin
+    )
 
-    assets=(responses[4].get("payload") or {}).get("asset") or []
+    assets_res=secondary.get("assets")
+    assets=(assets_res.get("payload") or {}).get("asset") if isinstance(assets_res,dict) else []
     deposit_id=str(trader.get("depositAssetId") or "")
     currency=""
-    for asset in assets:
+    for asset in assets or []:
         if str(asset.get("assetId"))==deposit_id:
-            # Depending on broker/API version the currency code may be in
-            # name, displayName, or a dedicated ISO/code field.
-            currency=str(asset.get("currency") or asset.get("code") or asset.get("name") or asset.get("displayName") or "").strip().upper()
+            currency=str(
+                asset.get("currency")
+                or asset.get("code")
+                or asset.get("name")
+                or asset.get("displayName")
+                or ""
+            ).strip().upper()
             if len(currency)>5 and isinstance(asset.get("name"),str):
-                # Keep a clean ISO-style display when the API returns e.g.
-                # "US Dollar (USD)" or "USD - US Dollar".
-                import re as _re
-                m=_re.search(r"\b([A-Z]{3})\b", currency)
-                if m: currency=m.group(1)
+                m=re.search(r"\b([A-Z]{3})\b", currency)
+                if m:
+                    currency=m.group(1)
             break
-    if not currency or currency=="NONE": currency="USD"
+    if not currency or currency=="NONE":
+        # Most BlackBull demo accounts are USD, but prefer any currency field
+        # returned directly by the broker/API if available.
+        currency=str(
+            trader.get("depositCurrency")
+            or trader.get("currency")
+            or "USD"
+        ).strip().upper()
+        if len(currency)>5:
+            m=re.search(r"\b([A-Z]{3})\b",currency)
+            if m:
+                currency=m.group(1)
+
+    # Keep the main dashboard usable even if optional data is temporarily
+    # unavailable. This warning is surfaced separately and never replaces the
+    # real balance.
+    warning="; ".join(secondary_errors[:3])
 
     return {
         "selected_account_id":selected,
-        "account_login":next((a.get("login") or a.get("traderLogin") for a in [account] if a),None),
+        "account_login":next(
+            (a.get("login") or a.get("traderLogin") for a in [account] if a),
+            None
+        ),
         "account_type":"LIVE" if is_live else "DEMO",
         "currency":currency,
         "balance":balance,
@@ -764,66 +893,8 @@ def _ctrader_account_snapshot(row, retry=True):
         "used_margin":used_margin,
         "positions":positions,
         "server_time":_now_iso(),
+        "data_warning":warning,
     }
-
-def _ctrader_execute_order(row, order):
-    accounts=json.loads(row.get("account_ids_json") or "[]")
-    selected=str(row.get("selected_account_id") or "")
-    account=next((a for a in accounts if str(a.get("id"))==selected), None)
-    if not account and accounts:
-        account=accounts[0]; selected=str(account["id"])
-    if not account:
-        raise RuntimeError("No cTrader account selected. Connect cTrader and choose an account first.")
-    symbol_name=str(order.get("symbol") or "XAUUSD").replace("/","").upper()
-    access_token=_ctrader_fernet().decrypt(row["access_token_enc"].encode()).decode()
-    is_live=bool(account.get("is_live"))
-    async def run():
-        import websockets
-        async with websockets.connect(_ctrader_host(is_live), open_timeout=15, close_timeout=5, ping_interval=20, ping_timeout=20) as ws:
-            async def send(pt,payload):
-                await ws.send(json.dumps({"clientMsgId":str(uuid.uuid4()),"payloadType":pt,"payload":payload}))
-                for _ in range(10):
-                    d=json.loads(await asyncio.wait_for(ws.recv(),timeout=20))
-                    if d.get("payloadType")==51: continue
-                    return d
-                raise RuntimeError("cTrader response timeout")
-            r=await send(2100,{"clientId":_ctrader_client_id(),"clientSecret":_ctrader_client_secret()})
-            if r.get("payloadType")!=2101: raise RuntimeError("cTrader application authorization failed")
-            r=await send(2102,{"ctidTraderAccountId":int(selected),"accessToken":access_token})
-            if r.get("payloadType")!=2103: raise RuntimeError((r.get("payload") or {}).get("description") or "cTrader account authorization failed")
-            r=await send(2114,{"ctidTraderAccountId":int(selected)})
-            symbols=(r.get("payload") or {}).get("symbol",[]) or []
-            wanted=symbol_name
-            sym=next((x for x in symbols if str(x.get("name","")).replace("/","").upper()==wanted),None)
-            if not sym:
-                sym=next((x for x in symbols if wanted in str(x.get("name","")).replace("/","").upper()),None)
-            if not sym: raise RuntimeError(f"cTrader symbol {symbol_name} was not found on this account")
-            symbol_id=int(sym.get("symbolId"))
-            detail_res=await send(2116,{"ctidTraderAccountId":int(selected),"symbolId":symbol_id})
-            detail=(detail_res.get("payload") or {}).get("symbol") or []
-            detail=detail[0] if isinstance(detail,list) and detail else (detail if isinstance(detail,dict) else {})
-            lot_size_cents=int(detail.get("lotSize") or 0)
-            min_volume=int(detail.get("minVolume") or 0)
-            max_volume=int(detail.get("maxVolume") or 0)
-            step_volume=int(detail.get("stepVolume") or 0)
-            if lot_size_cents<=0: raise RuntimeError(f"cTrader did not return a valid lot size for {symbol_name}")
-            side=1 if str(order.get("direction")).upper()=="BUY" else 2
-            lot=max(0.01,float(order.get("volume") or 0.01))
-            volume_cents=int(round(lot*lot_size_cents))
-            if min_volume>0: volume_cents=max(volume_cents,min_volume)
-            if max_volume>0: volume_cents=min(volume_cents,max_volume)
-            if step_volume>0 and volume_cents>min_volume:
-                volume_cents=min_volume+round((volume_cents-min_volume)/step_volume)*step_volume
-            payload={"ctidTraderAccountId":int(selected),"symbolId":symbol_id,"orderType":1,"tradeSide":side,"volume":int(volume_cents),"comment":"KETS low-risk auto entry"}
-            if _num(order.get("stop_loss"))>0: payload["stopLoss"]=_num(order.get("stop_loss"))
-            if _num(order.get("take_profit"))>0: payload["takeProfit"]=_num(order.get("take_profit"))
-            return await send(2106,payload)
-    result=asyncio.run(run())
-    if result.get("payloadType") not in (2107,2108,2109,2110,2111,2121,2122):
-        # Execution responses vary by broker/API version; error payloads are explicit.
-        if result.get("payloadType")==2142 or (result.get("payload") or {}).get("errorCode"):
-            raise RuntimeError((result.get("payload") or {}).get("description") or (result.get("payload") or {}).get("errorCode") or "cTrader rejected the order")
-    return result, selected
 
 @app.route("/api/ctrader/connect-url", methods=["GET"])
 def ctrader_connect_url():
@@ -1235,6 +1306,7 @@ def managed_status():
         "unrealized_pnl":(snapshot or {}).get("unrealized_pnl",0),
         "positions":(snapshot or {}).get("positions",positions),
         "last_error":live_error or row.get("last_error") or "",
+        "data_warning":(snapshot or {}).get("data_warning") or "",
         "server_time":(snapshot or {}).get("server_time") or _now_iso(),
     })
 
