@@ -808,55 +808,125 @@ async function refreshCTraderStatus(){
   }
  }catch(e){}
 }
+function setManagedActionMessage(text,type=""){
+ const el=$("managedActionMessage"); if(!el)return;
+ el.textContent=text||""; el.className="managed-action-message"+(type?` ${type}`:"");
+}
+function renderManagedMoney(id,value,currency="USD"){
+ const el=$(id); if(!el)return;
+ const n=Number(value); el.textContent=Number.isFinite(n)?money(n,currency):"--";
+ el.classList.toggle("positive",Number.isFinite(n)&&n>0); el.classList.toggle("negative",Number.isFinite(n)&&n<0);
+}
 if($("connectCTraderBtn")) $("connectCTraderBtn").onclick=async()=>{
+ const btn=$("connectCTraderBtn");
  try{
-  // Existing bearer-token sessions continue to work. New logins also have
-  // a secure same-origin cookie so OAuth redirects retain the KETS user.
+  btn.disabled=true;btn.dataset.oldText=btn.textContent;btn.textContent="Opening cTrader…";
+  setManagedActionMessage("Opening the official cTrader authorization page…","busy");
   const d=await api("/api/ctrader/connect-url");
-  if(d.url) location.href=d.url;
-  else location.href="/ctrader/connect";
+  if(d.url) location.href=d.url; else location.href="/ctrader/connect";
  }catch(e){
-  // The direct same-origin route is useful for the Android WebView after
-  // the secure KETS cookie has been established.
-  location.href="/ctrader/connect";
+  btn.disabled=false;btn.textContent=btn.dataset.oldText||"Connect cTrader";
+  setManagedActionMessage(e.message||"Unable to open cTrader authorization.","error");
  }
 };
 if($("disconnectCTraderBtn")) $("disconnectCTraderBtn").onclick=async()=>{
  if(!confirm("Disconnect your cTrader authorization from KETS?")) return;
- try{await api("/api/ctrader/disconnect",{method:"POST"});await refreshCTraderStatus();}
- catch(e){alert(e.message);}
-};
-async function refreshManagedStatus(){try{const d=await api("/api/managed/status",{timeoutMs:8000});const connected=!!d.connected, enabled=!!d.auto_enabled;if($("managedConnectionStatus"))$("managedConnectionStatus").textContent=d.status||"NOT CONNECTED";if($("managedAutoTrade"))$("managedAutoTrade").disabled=!connected;if($("managedAutoTrade"))$("managedAutoTrade").checked=enabled;const ats=$("managedAutoTradeStatus");if(ats){ats.textContent=!connected?"NOT CONNECTED":(enabled?"RUNNING":"PAUSED / STOPPED");ats.className=enabled?"running":(connected?"paused":"");}if($("autoStartBtn"))$("autoStartBtn").disabled=!connected||enabled;if($("autoPauseBtn"))$("autoPauseBtn").disabled=!connected||!enabled;if($("autoStopBtn"))$("autoStopBtn").disabled=!connected||!enabled;if($("manualBuyBtn"))$("manualBuyBtn").disabled=!connected;if($("manualSellBtn"))$("manualSellBtn").disabled=!connected;if($("manualCloseAllBtn"))$("manualCloseAllBtn").disabled=!connected;if($("managedBalance"))$("managedBalance").textContent=money(Number(d.balance||0),"USD");if($("managedOpenTrades"))$("managedOpenTrades").textContent=String((d.positions||[]).length);const st=await api("/api/managed/settings",{timeoutMs:8000});if($("managedLotSize")&&document.activeElement!==$("managedLotSize"))$("managedLotSize").value=Number(st.lot_size||0.01).toFixed(2);if($("managedProfitTarget")&&document.activeElement!==$("managedProfitTarget"))$("managedProfitTarget").value=Number(st.profit_target??25).toFixed(0);if($("managedMinQuality"))$("managedMinQuality").value=String(st.min_quality||40);if($("managedStrongOnly"))$("managedStrongOnly").checked=!!st.strong_only;if($("managedMaxTrades"))$("managedMaxTrades").value=String(st.max_open_trades||1);if($("managedAllocation"))$("managedAllocation").value=String(st.allocation_pct||10);}catch(e){}}
-setInterval(()=>{if(!$("managedTradingPage")?.classList.contains("hidden")){refreshManagedStatus();refreshCTraderStatus();}},5000);
-async function setAutoTradeControl(enabled, label){
+ const btn=$("disconnectCTraderBtn");
  try{
+  btn.disabled=true;btn.dataset.oldText=btn.textContent;btn.textContent="Disconnecting…";
+  setManagedActionMessage("Disconnecting cTrader…","busy");
+  await api("/api/ctrader/disconnect",{method:"POST"});
+  setManagedActionMessage("cTrader disconnected.","ok");
+  await refreshCTraderStatus();await refreshManagedStatus();
+ }catch(e){setManagedActionMessage(e.message||"Disconnect failed.","error");}
+ finally{btn.disabled=false;btn.textContent=btn.dataset.oldText||"Disconnect cTrader";}
+};
+async function refreshManagedStatus(){
+ try{
+  const d=await api("/api/managed/status",{timeoutMs:20000});
+  const connected=!!d.connected, enabled=!!d.auto_enabled, currency=String(d.currency||"USD").toUpperCase();
+  if($("managedConnectionStatus"))$("managedConnectionStatus").textContent=d.status||"NOT CONNECTED";
+  if($("managedAutoTrade")){ $("managedAutoTrade").disabled=!connected; $("managedAutoTrade").checked=enabled; }
+  const ats=$("managedAutoTradeStatus");
+  if(ats){ats.textContent=!connected?"NOT CONNECTED":(enabled?"RUNNING":"PAUSED / STOPPED");ats.className=enabled?"running":(connected?"paused":"");}
+  if($("autoStartBtn"))$("autoStartBtn").disabled=!connected||enabled;
+  if($("autoPauseBtn"))$("autoPauseBtn").disabled=!connected||!enabled;
+  if($("autoStopBtn"))$("autoStopBtn").disabled=!connected||!enabled;
+  if($("manualBuyBtn"))$("manualBuyBtn").disabled=!connected;
+  if($("manualSellBtn"))$("manualSellBtn").disabled=!connected;
+  if($("manualCloseAllBtn"))$("manualCloseAllBtn").disabled=!connected;
+  renderManagedMoney("managedBalance",d.balance,currency);
+  renderManagedMoney("managedEquity",d.equity,currency);
+  renderManagedMoney("managedTodayPnl",d.today_pnl,currency);
+  renderManagedMoney("managedUnrealizedPnl",d.unrealized_pnl,currency);
+  renderManagedMoney("managedRealizedPnl",d.realized_pnl,currency);
+  renderManagedMoney("managedFreeMargin",d.free_margin,currency);
+  if($("managedOpenTrades"))$("managedOpenTrades").textContent=String((d.positions||[]).length);
+  if(d.last_error) setManagedActionMessage(`cTrader update: ${d.last_error}`,"error");
+  const st=await api("/api/managed/settings",{timeoutMs:8000});
+  if($("managedLotSize")&&document.activeElement!==$("managedLotSize"))$("managedLotSize").value=Number(st.lot_size||0.01).toFixed(2);
+  if($("managedProfitTarget")&&document.activeElement!==$("managedProfitTarget"))$("managedProfitTarget").value=Number(st.profit_target??25).toFixed(0);
+  if($("managedMinQuality"))$("managedMinQuality").value=String(st.min_quality||40);
+  if($("managedStrongOnly"))$("managedStrongOnly").checked=!!st.strong_only;
+  if($("managedMaxTrades"))$("managedMaxTrades").value=String(st.max_open_trades||1);
+  if($("managedAllocation"))$("managedAllocation").value=String(st.allocation_pct||10);
+ }catch(e){setManagedActionMessage(e.message||"Unable to refresh cTrader status.","error");}
+}
+setInterval(()=>{if(!$('managedTradingPage')?.classList.contains('hidden')){refreshManagedStatus();refreshCTraderStatus();}},5000);
+async function setAutoTradeControl(enabled,label){
+ const buttons=[$("autoStartBtn"),$("autoPauseBtn"),$("autoStopBtn")].filter(Boolean);
+ try{
+  buttons.forEach(b=>{b.disabled=true;b.dataset.oldText=b.textContent;b.textContent="Working…";});
+  setManagedActionMessage(enabled?"Starting KETS automatic trading…":"Pausing KETS automatic trading…","busy");
   await api("/api/managed/toggle",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({enabled:!!enabled})});
+  setManagedActionMessage(enabled?"Automatic trading is RUNNING.":"Automatic trading is PAUSED / STOPPED.","ok");
   await refreshManagedStatus();
- }catch(e){alert(e.message);}
+ }catch(e){setManagedActionMessage(e.message||"The action failed.","error");await refreshManagedStatus();}
+ finally{buttons.forEach(b=>{b.textContent=b.dataset.oldText||b.textContent;});}
 }
 if($("managedAutoTrade")) $("managedAutoTrade").onchange=async()=>{await setAutoTradeControl($("managedAutoTrade").checked,"toggle");};
 if($("autoStartBtn")) $("autoStartBtn").onclick=async()=>{await setAutoTradeControl(true,"start");};
 if($("autoPauseBtn")) $("autoPauseBtn").onclick=async()=>{await setAutoTradeControl(false,"pause");};
 if($("autoStopBtn")) $("autoStopBtn").onclick=async()=>{await setAutoTradeControl(false,"stop");};
-
 async function manualTrade(direction){
+ const btn=direction==="BUY"?$("manualBuyBtn"):$("manualSellBtn");
  try{
-  const body={direction, symbol:$("manualTradeSymbol").value, volume:Number($("manualTradeLot").value||0.01)};
-  const sl=$("manualTradeSL").value, tp=$("manualTradeTP").value;
-  if(sl) body.stop_loss=Number(sl); if(tp) body.take_profit=Number(tp);
-  if(!confirm(`Place manual ${direction} order on ${body.symbol} for ${body.volume} lot?`)) return;
+  const body={direction,symbol:$("manualTradeSymbol").value,volume:Number($("manualTradeLot").value||0.01)};
+  const sl=$("manualTradeSL").value,tp=$("manualTradeTP").value;
+  if(sl)body.stop_loss=Number(sl);if(tp)body.take_profit=Number(tp);
+  if(!confirm(`Place manual ${direction} order on ${body.symbol} for ${body.volume} lot?`))return;
+  if(btn){btn.disabled=true;btn.dataset.oldText=btn.textContent;btn.textContent="Sending…";}
+  setManagedActionMessage(`Sending ${direction} order to cTrader…`,"busy");
   await api("/api/managed/manual-order",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
-  alert(`Manual ${direction} order sent to cTrader.`); await refreshManagedStatus();
- }catch(e){alert(e.message);}
+  setManagedActionMessage(`Manual ${direction} order accepted by KETS and sent to cTrader.`,"ok");
+ }catch(e){setManagedActionMessage(e.message||"Manual order failed.","error");}
+ finally{if(btn){btn.textContent=btn.dataset.oldText||btn.textContent;}await refreshManagedStatus();}
 }
-if($("manualBuyBtn")) $("manualBuyBtn").onclick=()=>manualTrade("BUY");
-if($("manualSellBtn")) $("manualSellBtn").onclick=()=>manualTrade("SELL");
-if($("manualCloseAllBtn")) $("manualCloseAllBtn").onclick=async()=>{
- try{ if(!confirm("Close all manual/open positions on the selected cTrader account?")) return; await api("/api/managed/close-all",{method:"POST"}); alert("Close request sent to cTrader."); await refreshManagedStatus(); }catch(e){alert(e.message);}
+if($("manualBuyBtn"))$("manualBuyBtn").onclick=()=>manualTrade("BUY");
+if($("manualSellBtn"))$("manualSellBtn").onclick=()=>manualTrade("SELL");
+if($("manualCloseAllBtn"))$("manualCloseAllBtn").onclick=async()=>{
+ const btn=$("manualCloseAllBtn");
+ try{
+  if(!confirm("Close all open positions on the selected cTrader account?"))return;
+  btn.disabled=true;btn.dataset.oldText=btn.textContent;btn.textContent="Closing…";
+  setManagedActionMessage("Sending close-all request to cTrader…","busy");
+  const d=await api("/api/managed/close-all",{method:"POST"});
+  setManagedActionMessage(`Close request sent. ${Number(d.closed_requests||0)} position(s) requested to close.`,"ok");
+  await refreshManagedStatus();
+ }catch(e){setManagedActionMessage(e.message||"Close-all failed.","error");}
+ finally{btn.disabled=false;btn.textContent=btn.dataset.oldText||"✕ Close All Manual Trades";await refreshManagedStatus();}
 };
-if($("saveManagedSettings")) $("saveManagedSettings").onclick=async()=>{try{await api("/api/managed/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({lot_size:Number($("managedLotSize").value||0.01),profit_target:Number($("managedProfitTarget").value||25),min_quality:Number($("managedMinQuality").value||85),strong_only:$("managedStrongOnly").checked,max_lot:10,max_open_trades:Number($("managedMaxTrades").value||1),allocation_pct:Number($("managedAllocation").value||10)})});alert("KETS trading settings saved.");}catch(e){alert(e.message);}};
-if($("managedDepositBtn")) $("managedDepositBtn").onclick=()=>alert("Deposit directly with your cTrader broker. KETS does not receive or hold trading funds.");
-if($("managedWithdrawBtn")) $("managedWithdrawBtn").onclick=()=>alert("Withdraw profits directly through your broker/exchange after a completed trade. KETS does not hold withdrawal funds.");
+if($("saveManagedSettings"))$("saveManagedSettings").onclick=async()=>{
+ const btn=$("saveManagedSettings");
+ try{
+  btn.disabled=true;btn.dataset.oldText=btn.textContent;btn.textContent="Saving…";setManagedActionMessage("Saving trading controls…","busy");
+  await api("/api/managed/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({lot_size:Number($("managedLotSize").value||0.01),profit_target:Number($("managedProfitTarget").value||25),min_quality:Number($("managedMinQuality").value||85),strong_only:$("managedStrongOnly").checked,max_lot:10,max_open_trades:Number($("managedMaxTrades").value||1),allocation_pct:Number($("managedAllocation").value||10)})});
+  setManagedActionMessage("Trading settings saved successfully.","ok");await refreshManagedStatus();
+ }catch(e){setManagedActionMessage(e.message||"Settings could not be saved.","error");}
+ finally{btn.disabled=false;btn.textContent=btn.dataset.oldText||"Save trading settings";}
+};
+if($("managedDepositBtn"))$("managedDepositBtn").onclick=()=>setManagedActionMessage("Deposit directly with your cTrader broker. KETS never receives or holds trading funds.","ok");
+if($("managedWithdrawBtn"))$("managedWithdrawBtn").onclick=()=>setManagedActionMessage("Withdraw profits directly through your cTrader broker. KETS does not hold withdrawal funds.","ok");
 document.querySelectorAll(".page-back-btn").forEach(b=>b.onclick=showDashboardHome);
 if($("backToDashboardBtn")) $("backToDashboardBtn").onclick=showDashboardHome;
 window.addEventListener("hashchange",handleHistoryRoute);

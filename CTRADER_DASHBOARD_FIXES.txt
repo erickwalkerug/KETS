@@ -1,0 +1,20 @@
+KETS cTrader dashboard update
+
+This build keeps the existing KETS signal/strategy logic intact and fixes the cTrader management display/actions.
+
+Changes:
+- Reads the selected cTrader account's live balance from ProtoOATrader.
+- Displays equity, free margin, today's realized P/L, open/unrealized P/L and open-trade count.
+- Uses the cTrader account deposit currency returned by the API instead of forcing USD.
+- Refreshes the cTrader account snapshot automatically while the Managed Trading page is open.
+- Refreshes the cTrader access token when the stored access token is expired.
+- Uses cTrader symbol lotSize/minVolume/maxVolume/stepVolume when converting the user's lot-size setting to order volume.
+- Fixes Close All to use the correct cTrader Close Position request (2111).
+- Preserves the existing KETS strategy and signal filtering.
+- Buttons now show Working/Sending/Closing/Saving states and report success/error in the page.
+- Deposit/Withdraw buttons now show clear broker-directed instructions without pretending KETS holds funds.
+
+Important:
+- The displayed balance/P&L comes from the selected cTrader account only after cTrader authorization and account selection.
+- A demo account can legitimately show a zero balance if that demo account has no funds.
+- Live trading remains controlled by the connected cTrader authorization and the user's settings.

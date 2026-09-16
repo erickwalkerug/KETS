@@ -398,7 +398,7 @@
 .managed-balance span,.managed-mini-grid span{display:block;color:var(--muted);font-size:10px}
 .managed-balance strong{display:block;font-size:34px;margin-top:5px}
 .managed-mini-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:14px 0 17px}
-.managed-mini-grid>div{padding:11px;border:1px solid var(--line);border-radius:12px;background:#07101d}
+.managed-mini-grid{grid-template-columns:repeat(2,1fr)}.managed-mini-grid>div{padding:11px;border:1px solid var(--line);border-radius:12px;background:#07101d}.managed-mini-grid b.positive{color:var(--good)}.managed-mini-grid b.negative{color:var(--bad)}
 .managed-mini-grid b{display:block;margin-top:5px;font-size:13px}
 .managed-note{margin-top:10px;line-height:1.5}
 .managed-control-card label{display:block;margin:0 0 13px;font-size:10px;color:var(--muted)}
@@ -419,3 +419,5 @@
 .auto-trade-controls{margin-top:12px;padding:15px;border:1px solid #1b2b43;border-radius:16px;background:#07101d}.auto-trade-status{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:11px}.auto-trade-status span{font-size:9px;letter-spacing:1.3px;color:#8291a8;font-weight:900}.auto-trade-status strong{font-size:11px;color:#f4c65b}.auto-trade-status strong.running{color:var(--good)}.auto-trade-status strong.paused,.auto-trade-status strong.stopped{color:var(--bad)}.auto-trade-buttons{display:grid;grid-template-columns:1.2fr 1fr 1.3fr;gap:8px}.auto-trade-buttons button{min-height:44px}.auto-trade-buttons button:disabled{opacity:.55;cursor:not-allowed}@media(max-width:560px){.auto-trade-buttons{grid-template-columns:1fr}.auto-trade-status{align-items:flex-start;flex-direction:column}}
 
 .manual-trade-controls{margin-top:14px;padding:15px;border:1px solid #1b2b43;border-radius:16px;background:#07101d}.manual-trade-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin:12px 0}.manual-trade-buttons{display:grid;grid-template-columns:1fr 1fr 1.6fr;gap:8px}.manual-trade-buttons button{min-height:44px}.buy-btn,.sell-btn{border:0;border-radius:12px;font-weight:900;cursor:pointer}.buy-btn{background:#168a55;color:#fff}.sell-btn{background:#a83a46;color:#fff}.manual-trade-buttons button:disabled{opacity:.5;cursor:not-allowed}@media(max-width:560px){.manual-trade-grid,.manual-trade-buttons{grid-template-columns:1fr}}
+
+.managed-action-message{min-height:18px;margin-top:10px;color:#9eabc0;font-size:11px;font-weight:700}.managed-action-message.ok{color:var(--good)}.managed-action-message.error{color:var(--bad)}.managed-action-message.busy{color:#f4c65b}

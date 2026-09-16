@@ -506,8 +506,11 @@ def _ctrader_row_for_user(user_id):
 
 CTRADER_PAYLOAD = {
     "APP_AUTH_REQ": 2100, "ACCOUNT_AUTH_REQ": 2102,
-    "NEW_ORDER_REQ": 2106, "SYMBOLS_LIST_REQ": 2114,
-    "GET_ACCOUNT_LIST_REQ": 2149,
+    "NEW_ORDER_REQ": 2106, "CLOSE_POSITION_REQ": 2111,
+    "ASSET_LIST_REQ": 2112, "SYMBOLS_LIST_REQ": 2114, "SYMBOL_BY_ID_REQ": 2116,
+    "TRADER_REQ": 2121, "RECONCILE_REQ": 2124,
+    "DEAL_LIST_REQ": 2133, "GET_ACCOUNT_LIST_REQ": 2149,
+    "POSITION_PNL_REQ": 2187,
 }
 
 def _ctrader_host(is_live):
@@ -552,6 +555,194 @@ def _ctrader_discover_accounts(access_token):
             app.logger.info("cTrader %s account discovery unavailable: %s", "live" if is_live else "demo", exc)
     return accounts
 
+def _ctrader_selected_account(row):
+    try:
+        accounts=json.loads(row.get("account_ids_json") or "[]")
+    except Exception:
+        accounts=[]
+    selected=str(row.get("selected_account_id") or "")
+    account=next((a for a in accounts if str(a.get("id"))==selected), None)
+    if not account and accounts:
+        account=accounts[0]
+        selected=str(account.get("id"))
+    if not account:
+        raise RuntimeError("No cTrader account selected. Connect cTrader and choose an account first.")
+    return account, selected
+
+def _ctrader_refresh_token(row):
+    refresh_enc=row.get("refresh_token_enc") or ""
+    if not refresh_enc:
+        raise RuntimeError("cTrader access token expired and no refresh token is stored. Reconnect cTrader.")
+    refresh_token=_ctrader_fernet().decrypt(refresh_enc.encode()).decode()
+    client_id=_ctrader_client_id(); client_secret=_ctrader_client_secret()
+    if not client_id or not client_secret:
+        raise RuntimeError("cTrader application credentials are not configured on the server.")
+    response=requests.post(
+        CTRADER_TOKEN_URL,
+        params={"grant_type":"refresh_token","refresh_token":refresh_token,"client_id":client_id,"client_secret":client_secret},
+        headers={"Accept":"application/json","Content-Type":"application/json"},
+        timeout=15,
+    )
+    data=response.json()
+    if response.status_code>=400 or not data.get("accessToken"):
+        raise RuntimeError(data.get("description") or data.get("errorCode") or "cTrader token refresh failed. Reconnect cTrader.")
+    access_token=data["accessToken"]
+    new_refresh=data.get("refreshToken") or refresh_token
+    expires_in=int(data.get("expiresIn") or 0)
+    expires_at=(datetime.datetime.now(datetime.timezone.utc)+datetime.timedelta(seconds=expires_in)).isoformat() if expires_in else None
+    with DB_LOCK:
+        conn=db_conn()
+        db_execute(conn,"UPDATE ctrader_connections SET access_token_enc=?,refresh_token_enc=?,expires_at=?,status=?,last_error=NULL,updated_at=? WHERE id=?",
+                   (_ctrader_encrypt(access_token),_ctrader_encrypt(new_refresh),expires_at,"CONNECTED",_now_iso(),row["id"]))
+        conn.commit(); conn.close()
+    return access_token
+
+def _ctrader_access_token(row, force_refresh=False):
+    expires_at=row.get("expires_at")
+    if not force_refresh and expires_at:
+        try:
+            if datetime.datetime.fromisoformat(str(expires_at).replace("Z","+00:00")) > datetime.datetime.now(datetime.timezone.utc)+datetime.timedelta(minutes=2):
+                return _ctrader_fernet().decrypt(row["access_token_enc"].encode()).decode()
+        except Exception:
+            pass
+    return _ctrader_refresh_token(row)
+
+def _ctrader_account_snapshot(row, retry=True):
+    """Read the live cTrader account state used by the dashboard.
+
+    cTrader's Trader message is the source of the account balance. Reconcile
+    returns open positions, and the PnL request returns broker-calculated
+    unrealized P/L. Deal history is used for realized P/L today.
+    """
+    account, selected=_ctrader_selected_account(row)
+    is_live=bool(account.get("is_live"))
+    access_token=_ctrader_access_token(row)
+    now_utc=datetime.datetime.now(datetime.timezone.utc)
+    eat_now=now_utc.astimezone(EAT)
+    eat_start=eat_now.replace(hour=0,minute=0,second=0,microsecond=0)
+    from_ms=int(eat_start.astimezone(datetime.timezone.utc).timestamp()*1000)
+    to_ms=int(now_utc.timestamp()*1000)
+
+    async def run(token):
+        import websockets
+        async with websockets.connect(_ctrader_host(is_live),open_timeout=15,close_timeout=5,ping_interval=20,ping_timeout=20) as ws:
+            async def send(pt,payload):
+                await ws.send(json.dumps({"clientMsgId":str(uuid.uuid4()),"payloadType":pt,"payload":payload}))
+                for _ in range(12):
+                    d=json.loads(await asyncio.wait_for(ws.recv(),timeout=20))
+                    if d.get("payloadType")==51: continue
+                    return d
+                raise RuntimeError("cTrader response timeout")
+            r=await send(2100,{"clientId":_ctrader_client_id(),"clientSecret":_ctrader_client_secret()})
+            if r.get("payloadType")!=2101:
+                raise RuntimeError((r.get("payload") or {}).get("description") or "cTrader application authorization failed")
+            r=await send(2102,{"ctidTraderAccountId":int(selected),"accessToken":token})
+            if r.get("payloadType")!=2103:
+                payload=r.get("payload") or {}
+                raise RuntimeError(payload.get("description") or payload.get("errorCode") or "cTrader account authorization failed")
+            trader_res=await send(2121,{"ctidTraderAccountId":int(selected)})
+            recon_res=await send(2124,{"ctidTraderAccountId":int(selected),"returnProtectionOrders":False})
+            pnl_res=await send(2187,{"ctidTraderAccountId":int(selected)})
+            deal_res=await send(2133,{"ctidTraderAccountId":int(selected),"fromTimestamp":from_ms,"toTimestamp":to_ms,"maxRows":1000})
+            asset_res=await send(2112,{"ctidTraderAccountId":int(selected)})
+            return trader_res,recon_res,pnl_res,deal_res,asset_res
+
+    try:
+        responses=asyncio.run(run(access_token))
+    except RuntimeError as exc:
+        msg=str(exc)
+        if retry and any(x in msg.upper() for x in ("TOKEN", "AUTH", "INVALID")):
+            fresh_row=_ctrader_row_for_user(row["user_id"]) or row
+            new_token=_ctrader_access_token(fresh_row,force_refresh=True)
+            responses=asyncio.run(run(new_token))
+        else:
+            raise
+
+    trader_payload=(responses[0].get("payload") or {})
+    trader=trader_payload.get("trader") or {}
+    money_digits=int(trader.get("moneyDigits") or 0)
+    scale=10**money_digits
+    balance=_num(trader.get("balance"))/scale if scale else _num(trader.get("balance"))
+
+    recon_payload=(responses[1].get("payload") or {})
+    raw_positions=recon_payload.get("position") or []
+    pnl_payload=(responses[2].get("payload") or {})
+    pnl_digits=int(pnl_payload.get("moneyDigits") if pnl_payload.get("moneyDigits") is not None else money_digits)
+    pnl_scale=10**pnl_digits
+    pnl_by_id={str(x.get("positionId")): _num(x.get("netUnrealizedPnL"))/pnl_scale for x in (pnl_payload.get("positionUnrealizedPnL") or [])}
+
+    positions=[]; used_margin=0.0; unrealized=0.0
+    for pos in raw_positions:
+        td=pos.get("tradeData") or {}
+        pid=str(pos.get("positionId") or "")
+        net=pnl_by_id.get(pid,0.0)
+        pdigits=int(pos.get("moneyDigits") or money_digits)
+        pscale=10**pdigits
+        margin=_num(pos.get("usedMargin"))/pscale if pscale else _num(pos.get("usedMargin"))
+        used_margin+=margin; unrealized+=net
+        side="BUY" if int(td.get("tradeSide") or 0)==1 else "SELL" if int(td.get("tradeSide") or 0)==2 else "--"
+        positions.append({
+            "positionId":pid,
+            "symbolId":td.get("symbolId"),
+            "side":side,
+            "volume":_num(td.get("volume"))/100.0,
+            "volume_cents":int(_num(td.get("volume"))),
+            "entry_price":pos.get("price"),
+            "stop_loss":pos.get("stopLoss"),
+            "take_profit":pos.get("takeProfit"),
+            "unrealized_pnl":net,
+            "used_margin":margin,
+            "open_timestamp":td.get("openTimestamp"),
+            "label":td.get("label") or "",
+            "comment":td.get("comment") or "",
+        })
+
+    realized_today=0.0
+    deals=(responses[3].get("payload") or {}).get("deal") or []
+    for deal in deals:
+        if int(deal.get("dealStatus") or 0) not in (2,3):
+            continue
+        close=deal.get("closePositionDetail")
+        if not isinstance(close,dict):
+            continue
+        digits=int(close.get("moneyDigits") if close.get("moneyDigits") is not None else deal.get("moneyDigits") or money_digits)
+        div=10**digits
+        gross=_num(close.get("grossProfit"))/div
+        swap=_num(close.get("swap"))/div
+        commission=_num(close.get("commission"))/div
+        conversion=_num(close.get("pnlConversionFee"))/div
+        realized_today += gross + swap + commission + conversion
+
+    # Equity is balance plus broker-calculated open-position net P/L. Free
+    # margin is equity less the used margin reported on open positions.
+    equity=balance+unrealized
+    free_margin=equity-used_margin
+
+    assets=(responses[4].get("payload") or {}).get("asset") or []
+    deposit_id=str(trader.get("depositAssetId") or "")
+    currency="USD"
+    for asset in assets:
+        if str(asset.get("assetId"))==deposit_id:
+            currency=str(asset.get("name") or asset.get("displayName") or currency).upper()
+            break
+    if not currency or currency=="NONE": currency="USD"
+
+    return {
+        "selected_account_id":selected,
+        "account_login":next((a.get("login") or a.get("traderLogin") for a in [account] if a),None),
+        "account_type":"LIVE" if is_live else "DEMO",
+        "currency":currency,
+        "balance":balance,
+        "equity":equity,
+        "free_margin":free_margin,
+        "today_pnl":realized_today,
+        "realized_pnl":realized_today,
+        "unrealized_pnl":unrealized,
+        "used_margin":used_margin,
+        "positions":positions,
+        "server_time":_now_iso(),
+    }
+
 def _ctrader_execute_order(row, order):
     accounts=json.loads(row.get("account_ids_json") or "[]")
     selected=str(row.get("selected_account_id") or "")
@@ -584,9 +775,23 @@ def _ctrader_execute_order(row, order):
             if not sym:
                 sym=next((x for x in symbols if wanted in str(x.get("name","")).replace("/","").upper()),None)
             if not sym: raise RuntimeError(f"cTrader symbol {symbol_name} was not found on this account")
+            symbol_id=int(sym.get("symbolId"))
+            detail_res=await send(2116,{"ctidTraderAccountId":int(selected),"symbolId":symbol_id})
+            detail=(detail_res.get("payload") or {}).get("symbol") or []
+            detail=detail[0] if isinstance(detail,list) and detail else (detail if isinstance(detail,dict) else {})
+            lot_size_cents=int(detail.get("lotSize") or 0)
+            min_volume=int(detail.get("minVolume") or 0)
+            max_volume=int(detail.get("maxVolume") or 0)
+            step_volume=int(detail.get("stepVolume") or 0)
+            if lot_size_cents<=0: raise RuntimeError(f"cTrader did not return a valid lot size for {symbol_name}")
             side=1 if str(order.get("direction")).upper()=="BUY" else 2
             lot=max(0.01,float(order.get("volume") or 0.01))
-            payload={"ctidTraderAccountId":int(selected),"symbolId":int(sym.get("symbolId")),"orderType":1,"tradeSide":side,"volume":int(round(lot*10000)),"comment":"KETS low-risk auto entry"}
+            volume_cents=int(round(lot*lot_size_cents))
+            if min_volume>0: volume_cents=max(volume_cents,min_volume)
+            if max_volume>0: volume_cents=min(volume_cents,max_volume)
+            if step_volume>0 and volume_cents>min_volume:
+                volume_cents=min_volume+round((volume_cents-min_volume)/step_volume)*step_volume
+            payload={"ctidTraderAccountId":int(selected),"symbolId":symbol_id,"orderType":1,"tradeSide":side,"volume":int(volume_cents),"comment":"KETS low-risk auto entry"}
             if _num(order.get("stop_loss"))>0: payload["stopLoss"]=_num(order.get("stop_loss"))
             if _num(order.get("take_profit"))>0: payload["takeProfit"]=_num(order.get("take_profit"))
             return await send(2106,payload)
@@ -977,9 +1182,38 @@ def managed_status():
     if not user: return jsonify({"error":"Sign in required."}),401
     row=_ctrader_row_for_user(user["id"])
     if not row: return jsonify({"connected":False,"status":"NOT_CONNECTED","broker":"cTrader","positions":[]})
-    try: positions=json.loads(row.get("positions_json") or "[]")
+    connected=row.get("status") in ("AUTHORIZED","CONNECTED")
+    snapshot=None; live_error=""
+    if connected and row.get("selected_account_id"):
+        try:
+            snapshot=_ctrader_account_snapshot(row)
+            with DB_LOCK:
+                conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET balance=?,equity=?,free_margin=?,positions_json=?,last_error=NULL,status=?,updated_at=? WHERE id=?",
+                    (snapshot["balance"],snapshot["equity"],snapshot["free_margin"],json.dumps(snapshot["positions"]),"CONNECTED",_now_iso(),row["id"])); conn.commit(); conn.close()
+            row=_ctrader_row_for_user(user["id"]) or row
+        except Exception as exc:
+            live_error=str(exc)[:500]
+            with DB_LOCK:
+                conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET last_error=?,updated_at=? WHERE id=?",(live_error,_now_iso(),row["id"])); conn.commit(); conn.close()
+    try: positions=json.loads((row.get("positions_json") or "[]"))
     except Exception: positions=[]
-    return jsonify({"connected":row.get("status") in ("AUTHORIZED","CONNECTED"),"status":row.get("status"),"auto_enabled":bool(row.get("auto_enabled")),"broker":"cTrader","balance":row.get("balance",0),"equity":row.get("equity",0),"free_margin":row.get("free_margin",0),"positions":positions,"last_error":row.get("last_error") or ""})
+    return jsonify({
+        "connected":connected,
+        "status":row.get("status") or "NOT_CONNECTED",
+        "auto_enabled":bool(row.get("auto_enabled")),
+        "broker":"cTrader",
+        "selected_account_id":row.get("selected_account_id"),
+        "currency":(snapshot or {}).get("currency") or "USD",
+        "balance":(snapshot or {}).get("balance",row.get("balance",0)),
+        "equity":(snapshot or {}).get("equity",row.get("equity",0)),
+        "free_margin":(snapshot or {}).get("free_margin",row.get("free_margin",0)),
+        "today_pnl":(snapshot or {}).get("today_pnl",0),
+        "realized_pnl":(snapshot or {}).get("realized_pnl",0),
+        "unrealized_pnl":(snapshot or {}).get("unrealized_pnl",0),
+        "positions":(snapshot or {}).get("positions",positions),
+        "last_error":live_error or row.get("last_error") or "",
+        "server_time":(snapshot or {}).get("server_time") or _now_iso(),
+    })
 
 @app.route("/api/ctrader/select-account", methods=["POST"])
 def ctrader_select_account():
@@ -1085,12 +1319,11 @@ def _ctrader_close_all_positions(row):
             results=[]
             for pos in positions:
                 pid=pos.get("positionId") or pos.get("id")
-                vol=pos.get("volume")
+                vol=pos.get("volume_cents")
                 if not pid: continue
-                # cTrader volumes are expressed in 0.01-lot units in account position data.
                 volume=int(round(float(vol or 0)))
-                if volume<=0: volume=int(round(float(pos.get("lot",0.01))*10000))
-                results.append(await send(2107,{"ctidTraderAccountId":int(selected),"positionId":int(pid),"volume":volume}))
+                if volume<=0: volume=int(round(float(pos.get("volume",0))*100))
+                results.append(await send(2111,{"ctidTraderAccountId":int(selected),"positionId":int(pid),"volume":volume}))
             return results
     return asyncio.run(run())
 

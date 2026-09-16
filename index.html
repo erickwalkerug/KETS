@@ -157,8 +157,15 @@
   <section class="managed-grid">
     <article class="panel managed-balance-card">
       <div class="panel-title"><h3>Trading account</h3><span class="status-pill" id="managedConnectionStatus">NOT CONNECTED</span></div>
-      <div class="managed-balance"><span>Available trading balance</span><strong id="managedBalance">$0.00</strong></div>
-      <div class="managed-mini-grid"><div><span>Today's P/L</span><b id="managedTodayPnl">$0.00</b></div><div><span>Open trades</span><b id="managedOpenTrades">0</b></div><div><span>Profit withdrawn</span><b id="managedWithdrawn">$0.00</b></div></div>
+      <div class="managed-balance"><span>Current cTrader balance</span><strong id="managedBalance">$0.00</strong></div>
+      <div class="managed-mini-grid">
+        <div><span>Equity</span><b id="managedEquity">$0.00</b></div>
+        <div><span>Today's realized P/L</span><b id="managedTodayPnl">$0.00</b></div>
+        <div><span>Open P/L</span><b id="managedUnrealizedPnl">$0.00</b></div>
+        <div><span>Open trades</span><b id="managedOpenTrades">0</b></div>
+        <div><span>Realized P/L (today)</span><b id="managedRealizedPnl">$0.00</b></div>
+        <div><span>Free margin</span><b id="managedFreeMargin">$0.00</b></div>
+      </div>
       <p class="tiny managed-note" id="managedConnectionNote">Connect cTrader above, select an account, then enable automatic trading. KETS never receives your broker password or withdrawal credentials.</p>
     </article>
 
@@ -177,7 +184,7 @@
           <button class="ghost-btn" id="autoPauseBtn" disabled>⏸ Pause</button>
           <button class="danger-btn" id="autoStopBtn" disabled>⏹ Stop New Entries</button>
         </div>
-        <p class="tiny">Start allows the existing KETS automatic-entry system to execute qualifying signals. Pause/Stop prevent new automatic entries; existing trades are not closed by these buttons.</p>
+        <p class="tiny">Start allows the existing KETS automatic-entry system to execute qualifying signals. Pause/Stop prevent new automatic entries; existing trades are not closed by these buttons.</p><div id="managedActionMessage" class="managed-action-message" aria-live="polite"></div>
       </div>
       <div class="manual-trade-controls">
         <div class="panel-title"><h3>Manual Trade</h3><span class="muted">Uses your connected cTrader account</span></div>
