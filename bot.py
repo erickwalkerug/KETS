@@ -1,6 +1,6 @@
 import os, time, datetime, math, re, sqlite3, hashlib, base64, json, uuid, asyncio
 from threading import Thread, Lock
-from flask import Flask, jsonify, send_from_directory, request, redirect
+from flask import Flask, jsonify, send_from_directory, request, redirect, make_response
 import requests
 import secrets
 from itsdangerous import URLSafeTimedSerializer, BadSignature, SignatureExpired
@@ -202,7 +202,7 @@ def _db_sql(sql):
 def db_execute(conn, sql, params=()):
     return conn.execute(_db_sql(sql), params)
 
-def init_db():
+def _init_core_db():
     if USING_POSTGRES:
         with db_conn() as conn:
             conn.executescript("""
@@ -293,19 +293,31 @@ def init_db():
 
 COUNTRY_REQUIRED = True
 
+# One database adapter is used by every route.  The previous build defined a
+# second SQLite-only adapter later in this file, silently overriding the
+# PostgreSQL adapter and causing production login/dashboard failures.
 def using_postgres():
-    return False
+    return USING_POSTGRES
 
 def db_conn():
+    if USING_POSTGRES:
+        return PGConnection(DATABASE_URL)
+    os.makedirs(os.path.dirname(DB_PATH) or ".", exist_ok=True)
     conn = sqlite3.connect(DB_PATH, timeout=30, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
 
 def _db_sql(sql):
-    return sql
+    return _pg_sql(sql) if USING_POSTGRES else sql
 
 def db_execute(conn, sql, params=()):
-    return conn.execute(sql, params)
+    return conn.execute(_db_sql(sql), params)
+
+def _run_schema(conn, sql):
+    if USING_POSTGRES:
+        conn.executescript(sql)
+    else:
+        conn.executescript(sql)
 
 def init_db():
     global DB_PATH
@@ -314,114 +326,83 @@ def init_db():
     except OSError:
         DB_PATH = "/tmp/kets_website.db"
         os.makedirs("/tmp", exist_ok=True)
-    with db_conn() as conn:
-        conn.executescript("""
-        CREATE TABLE IF NOT EXISTS users (
-            id TEXT PRIMARY KEY,
-            email TEXT NOT NULL UNIQUE COLLATE NOCASE,
-            password_hash TEXT NOT NULL,
-            name TEXT NOT NULL,
-            country_name TEXT,
-            country_code TEXT NOT NULL,
-            profile_picture TEXT,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS payments (
-            id TEXT PRIMARY KEY,
-            user_id TEXT NOT NULL,
-            tx_ref TEXT NOT NULL UNIQUE,
-            tracking_id TEXT,
-            plan TEXT NOT NULL,
-            amount REAL NOT NULL,
-            currency TEXT NOT NULL,
-            status TEXT NOT NULL,
-            network TEXT,
-            email TEXT,
-            phone TEXT,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_payments_user_status ON payments(user_id, status, updated_at);
-        CREATE TABLE IF NOT EXISTS signals (
-            id TEXT PRIMARY KEY,
-            asset TEXT NOT NULL,
-            direction TEXT,
-            score REAL,
-            timestamp TEXT,
-            payload TEXT NOT NULL,
-            created_at TEXT NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_signals_timestamp ON signals(timestamp);
-        CREATE TABLE IF NOT EXISTS app_meta (key TEXT PRIMARY KEY, value TEXT);
-        CREATE TABLE IF NOT EXISTS managed_connectors (
-            id TEXT PRIMARY KEY, user_id TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE,
-            broker TEXT NOT NULL, mt5_login TEXT, mt5_server TEXT, status TEXT NOT NULL, auto_enabled INTEGER DEFAULT 0,
-            balance REAL DEFAULT 0, equity REAL DEFAULT 0, free_margin REAL DEFAULT 0,
-            positions_json TEXT DEFAULT '[]', last_signal_id TEXT, last_seen TEXT, created_at TEXT NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS managed_orders (
-            id TEXT PRIMARY KEY, connector_id TEXT NOT NULL, signal_id TEXT NOT NULL,
-            symbol TEXT NOT NULL, direction TEXT NOT NULL, volume REAL NOT NULL,
-            entry REAL, take_profit REAL, stop_loss REAL, status TEXT NOT NULL,
-            created_at TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE(connector_id, signal_id)
-        );
-        CREATE INDEX IF NOT EXISTS idx_managed_orders_connector_status ON managed_orders(connector_id, status);
-        CREATE TABLE IF NOT EXISTS ctrader_connections (
-            id TEXT PRIMARY KEY,
-            user_id TEXT NOT NULL UNIQUE,
-            broker TEXT,
-            account_ids_json TEXT DEFAULT '[]',
-            selected_account_id TEXT,
-            access_token_enc TEXT NOT NULL,
-            refresh_token_enc TEXT NOT NULL,
-            expires_at TEXT,
-            permission_scope TEXT,
-            status TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            updated_at TEXT NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS idx_ctrader_connections_user ON ctrader_connections(user_id);
-        """)
-    # Safe upgrades for existing KETS installations. These settings affect only
-    # the optional managed-trading execution layer, not the existing signal engine.
-    for col, definition in [
-        ("lot_size", "REAL DEFAULT 0.01"),
-        ("profit_target", "REAL DEFAULT 25"),
-        ("min_quality", "REAL DEFAULT 85"),
-        ("strong_only", "INTEGER DEFAULT 1"),
-        ("max_lot", "REAL DEFAULT 10.0"),
-        ("max_open_trades", "INTEGER DEFAULT 1"),
-        ("allocation_pct", "REAL DEFAULT 10")
-    ]:
+
+    # Core tables are created by the original, PostgreSQL-aware initializer.
+    _init_core_db()
+
+    # Tables used by cTrader and the managed-autotrading layer.  Keep this
+    # schema compatible with both SQLite fallback and Render PostgreSQL.
+    extra_schema = """
+    CREATE TABLE IF NOT EXISTS managed_connectors (
+        id TEXT PRIMARY KEY, user_id TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE,
+        broker TEXT NOT NULL, mt5_login TEXT, mt5_server TEXT, status TEXT NOT NULL,
+        auto_enabled INTEGER DEFAULT 0, balance DOUBLE PRECISION DEFAULT 0,
+        equity DOUBLE PRECISION DEFAULT 0, free_margin DOUBLE PRECISION DEFAULT 0,
+        positions_json TEXT DEFAULT '[]', last_signal_id TEXT, last_seen TEXT,
+        created_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS managed_orders (
+        id TEXT PRIMARY KEY, connector_id TEXT NOT NULL, signal_id TEXT NOT NULL,
+        symbol TEXT NOT NULL, direction TEXT NOT NULL, volume DOUBLE PRECISION NOT NULL,
+        entry DOUBLE PRECISION, take_profit DOUBLE PRECISION, stop_loss DOUBLE PRECISION,
+        status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+        UNIQUE(connector_id, signal_id)
+    );
+    CREATE INDEX IF NOT EXISTS idx_managed_orders_connector_status
+      ON managed_orders(connector_id, status);
+    CREATE TABLE IF NOT EXISTS ctrader_connections (
+        id TEXT PRIMARY KEY, user_id TEXT NOT NULL UNIQUE, broker TEXT,
+        account_ids_json TEXT DEFAULT '[]', selected_account_id TEXT,
+        access_token_enc TEXT NOT NULL, refresh_token_enc TEXT NOT NULL,
+        expires_at TEXT, permission_scope TEXT, status TEXT NOT NULL,
+        created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_ctrader_connections_user
+      ON ctrader_connections(user_id);
+    """
+    with DB_LOCK:
+        conn = db_conn()
         try:
-            db_execute(conn, f"ALTER TABLE managed_connectors ADD COLUMN {col} {definition}")
-        except Exception:
-            pass
-        conn.commit()
-    # cTrader managed-trading settings and live account state.
-    for col, definition in [
-        ("auto_enabled", "INTEGER DEFAULT 0"),
-        ("lot_size", "REAL DEFAULT 0.01"),
-        ("profit_target", "REAL DEFAULT 25"),
-        ("min_quality", "REAL DEFAULT 40"),
-        ("strong_only", "INTEGER DEFAULT 0"),
-        ("max_lot", "REAL DEFAULT 10.0"),
-        ("max_open_trades", "INTEGER DEFAULT 1"),
-        ("allocation_pct", "REAL DEFAULT 10"),
-        ("balance", "REAL DEFAULT 0"),
-        ("equity", "REAL DEFAULT 0"),
-        ("free_margin", "REAL DEFAULT 0"),
-        ("positions_json", "TEXT DEFAULT '[]'"),
-        ("last_signal_id", "TEXT"),
-        ("last_error", "TEXT")
-    ]:
-        try:
-            db_execute(conn, f"ALTER TABLE ctrader_connections ADD COLUMN {col} {definition}")
-        except Exception:
-            pass
-        conn.commit()
-    print(f"✅ KETS Render persistent storage: {DB_PATH}")
+            _run_schema(conn, extra_schema)
+            # Safe, idempotent upgrades for databases created by older builds.
+            upgrades = {
+                "managed_connectors": [
+                    ("lot_size", "DOUBLE PRECISION DEFAULT 0.01"),
+                    ("profit_target", "DOUBLE PRECISION DEFAULT 25"),
+                    ("min_quality", "DOUBLE PRECISION DEFAULT 40"),
+                    ("strong_only", "INTEGER DEFAULT 0"),
+                    ("max_lot", "DOUBLE PRECISION DEFAULT 10.0"),
+                    ("max_open_trades", "INTEGER DEFAULT 1"),
+                    ("allocation_pct", "DOUBLE PRECISION DEFAULT 10"),
+                ],
+                "ctrader_connections": [
+                    ("auto_enabled", "INTEGER DEFAULT 0"),
+                    ("lot_size", "DOUBLE PRECISION DEFAULT 0.01"),
+                    ("profit_target", "DOUBLE PRECISION DEFAULT 25"),
+                    ("min_quality", "DOUBLE PRECISION DEFAULT 40"),
+                    ("strong_only", "INTEGER DEFAULT 0"),
+                    ("max_lot", "DOUBLE PRECISION DEFAULT 10.0"),
+                    ("max_open_trades", "INTEGER DEFAULT 1"),
+                    ("allocation_pct", "DOUBLE PRECISION DEFAULT 10"),
+                    ("balance", "DOUBLE PRECISION DEFAULT 0"),
+                    ("equity", "DOUBLE PRECISION DEFAULT 0"),
+                    ("free_margin", "DOUBLE PRECISION DEFAULT 0"),
+                    ("positions_json", "TEXT DEFAULT '[]'"),
+                    ("last_signal_id", "TEXT"),
+                    ("last_error", "TEXT"),
+                ],
+            }
+            for table, columns in upgrades.items():
+                for col, definition in columns:
+                    try:
+                        db_execute(conn, f"ALTER TABLE {table} ADD COLUMN {col} {definition}")
+                    except Exception:
+                        # Duplicate-column errors are expected on repeat boots.
+                        pass
+            conn.commit()
+        finally:
+            conn.close()
+    print(f"✅ KETS persistent storage ready: {'Render PostgreSQL' if USING_POSTGRES else DB_PATH}")
 
 init_db()
 

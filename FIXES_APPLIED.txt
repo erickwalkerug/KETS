@@ -46,3 +46,11 @@ DEPLOYMENT FIX — 2026-09-07
 - Live Markets moved to its own dedicated page.
 - Added page navigation and dashboard shortcuts.
 - Existing trading signal setup, schedule, calculations, payment API, and authentication flow were not changed.
+
+2026-09-16 HOTFIX — developer sign-in / production storage
+- Imported Flask make_response, which was missing and caused successful developer logins to return HTTP 500 when creating the auth cookie.
+- Removed the later SQLite-only database adapter override that disabled Render PostgreSQL unintentionally.
+- Unified SQLite/PostgreSQL database access through one adapter.
+- Made initialization create the cTrader and managed-autotrading tables on both storage backends.
+- Made schema upgrades idempotent and safe across restarts.
+- Preserved developer free access, cTrader, payment plans, signal engine, source bridge, and Android APK.
