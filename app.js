@@ -879,6 +879,7 @@ async function refreshManagedStatus(){
   const connected=!!d.connected, enabled=!!d.auto_enabled, currency=String(d.currency||"USD").toUpperCase();
   if($("managedConnectionStatus"))$("managedConnectionStatus").textContent=d.status||"NOT CONNECTED";
   if($("managedAutoTrade")){ $("managedAutoTrade").disabled=!connected; $("managedAutoTrade").checked=enabled; }
+   if($("managedStrongOnly")) $("managedStrongOnly").disabled=!connected;
   const ats=$("managedAutoTradeStatus");
   if(ats){ats.textContent=!connected?"NOT CONNECTED":(enabled?"RUNNING":"PAUSED / STOPPED");ats.className=enabled?"running":(connected?"paused":"");}
   if($("autoStartBtn"))$("autoStartBtn").disabled=!connected||enabled;
@@ -928,6 +929,32 @@ async function setAutoTradeControl(enabled,label){
  finally{buttons.forEach(b=>{b.textContent=b.dataset.oldText||b.textContent;});}
 }
 if($("managedAutoTrade")) $("managedAutoTrade").onchange=async()=>{await setAutoTradeControl($("managedAutoTrade").checked,"toggle");};
+async function setStrongOnlyControl(enabled){
+ const el=$("managedStrongOnly");
+ try{
+  if(el)el.disabled=true;
+  setManagedActionMessage(enabled?"Strong Reversal Only is being enabled…":"Strong Reversal Only is being disabled…","busy");
+  await api("/api/managed/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+   strong_only:!!enabled,
+   lot_size:Number($("managedLotSize")?.value||0.01),
+   profit_target:Number($("managedProfitTarget")?.value||25),
+   min_quality:Number($("managedMinQuality")?.value||40),
+   max_lot:10,
+   max_open_trades:Number($("managedMaxTrades")?.value||1),
+   allocation_pct:Number($("managedAllocation")?.value||10)
+  })});
+  setManagedActionMessage(enabled
+   ?"Strong Reversal Only is ON — automatic entries will require a KETS STRONG REVERSAL ENTRY."
+   :"Strong Reversal Only is OFF — automatic entries may use qualifying low-risk KETS signals.","ok");
+  await refreshManagedStatus();
+ }catch(e){
+  setManagedActionMessage(e.message||"Could not change Strong Reversal Only.","error");
+  await refreshManagedStatus();
+ }finally{
+  if(el)el.disabled=false;
+ }
+}
+if($("managedStrongOnly")) $("managedStrongOnly").onchange=async()=>{await setStrongOnlyControl($("managedStrongOnly").checked);};
 if($("autoStartBtn")) $("autoStartBtn").onclick=async()=>{await setAutoTradeControl(true,"start");};
 if($("autoPauseBtn")) $("autoPauseBtn").onclick=async()=>{await setAutoTradeControl(false,"pause");};
 if($("autoStopBtn")) $("autoStopBtn").onclick=async()=>{await setAutoTradeControl(false,"stop");};

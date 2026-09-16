@@ -54,3 +54,6 @@ DEPLOYMENT FIX — 2026-09-07
 - Made initialization create the cTrader and managed-autotrading tables on both storage backends.
 - Made schema upgrades idempotent and safe across restarts.
 - Preserved developer free access, cTrader, payment plans, signal engine, source bridge, and Android APK.
+
+- Fixed cTrader manual/automatic order execution: implemented _ctrader_execute_order with broker-specific symbol/contract resolution, real market order submission, SL/TP, volume validation, and token refresh.
+- Fixed Require strong reversal only: toggle now saves immediately and auto-trading skips every signal that is not explicitly classified as STRONG REVERSAL ENTRY.

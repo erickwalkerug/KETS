@@ -1348,6 +1348,214 @@ def managed_settings():
         row=_ctrader_row_for_user(user["id"])
     return jsonify({"ok":True,"lot_size":_num(row.get("lot_size")) or .01,"profit_target":_num(row.get("profit_target")) if row.get("profit_target") is not None else 25,"min_quality":_num(row.get("min_quality")) if row.get("min_quality") is not None else 40,"strong_only":bool(row.get("strong_only")),"max_lot":_num(row.get("max_lot")) or 10,"max_open_trades":int(row.get("max_open_trades") or 1),"allocation_pct":_num(row.get("allocation_pct")) or 10})
 
+def _ctrader_symbol_for_order(symbols, requested):
+    """Resolve the broker-specific cTrader symbol ID.
+
+    cTrader symbol IDs are broker/server specific, so KETS must discover the
+    symbol on the selected account instead of assuming a universal ID.
+    """
+    req = str(requested or "").replace("/", "").replace("_", "").replace("-", "").upper()
+    aliases = {
+        "XAUUSD": {"XAUUSD", "GOLD", "XAUUS D".replace(" ", "")},
+        "BTCUSD": {"BTCUSD", "BTCUSD."},
+    }
+    candidates = aliases.get(req, {req})
+    exact = []
+    for s in symbols or []:
+        name = str(s.get("symbolName") or s.get("name") or "")
+        norm = name.replace("/", "").replace("_", "").replace("-", "").replace(".", "").upper()
+        if norm in candidates or norm == req:
+            exact.append(s)
+    if not exact:
+        # Be tolerant of broker suffixes such as XAUUSDm / BTCUSD.r.
+        for s in symbols or []:
+            name = str(s.get("symbolName") or s.get("name") or "")
+            norm = name.replace("/", "").replace("_", "").replace("-", "").replace(".", "").upper()
+            if norm.startswith(req) or req.startswith(norm):
+                exact.append(s)
+    if not exact:
+        raise RuntimeError(
+            f"cTrader does not expose a tradable {requested} symbol on the selected account."
+        )
+    # Prefer enabled symbols and the shortest broker suffix.
+    exact.sort(key=lambda s: (not bool(s.get("enabled", True)),
+                              len(str(s.get("symbolName") or ""))))
+    return exact[0]
+
+
+def _ctrader_execute_order(row, order):
+    """Execute a real market order through the user's selected cTrader account.
+
+    KETS volume fields are displayed as lots (0.01, 0.02, ...). cTrader's
+    Open API expects volume in cents of the symbol's base units, so the
+    broker-provided lotSize is used rather than assuming every CFD/FX symbol
+    has the same contract size.
+    """
+    account, selected = _ctrader_selected_account(row)
+    is_live = bool(account.get("is_live"))
+    token = _ctrader_access_token(row)
+
+    requested_symbol = str(order.get("symbol") or "XAUUSD").upper()
+    direction = str(order.get("direction") or "").upper()
+    if direction not in ("BUY", "SELL"):
+        raise RuntimeError("Choose BUY or SELL.")
+    try:
+        lots = float(order.get("volume") or 0.01)
+    except Exception:
+        lots = 0.01
+    if not math.isfinite(lots) or lots <= 0:
+        raise RuntimeError("Lot size must be greater than 0.")
+
+    async def run(access_token):
+        import websockets
+
+        async with websockets.connect(
+            _ctrader_host(is_live),
+            open_timeout=15,
+            close_timeout=5,
+            ping_interval=20,
+            ping_timeout=20,
+        ) as ws:
+            async def send(pt, payload, expected=None, label="cTrader request"):
+                client_msg_id = str(uuid.uuid4())
+                await ws.send(json.dumps({
+                    "clientMsgId": client_msg_id,
+                    "payloadType": pt,
+                    "payload": payload,
+                }))
+                for _ in range(40):
+                    d = json.loads(await asyncio.wait_for(ws.recv(), timeout=20))
+                    if d.get("payloadType") == 51:
+                        continue
+                    if d.get("clientMsgId") not in (None, client_msg_id):
+                        continue
+                    if d.get("payloadType") == 2142:
+                        ep = d.get("payload") or {}
+                        raise RuntimeError(
+                            ep.get("description") or ep.get("errorCode") or f"{label} failed"
+                        )
+                    if expected and d.get("payloadType") != expected:
+                        continue
+                    return d
+                raise RuntimeError(f"cTrader did not return the expected {label} response.")
+
+            await send(
+                CTRADER_PAYLOAD["APP_AUTH_REQ"],
+                {"clientId": _ctrader_client_id(), "clientSecret": _ctrader_client_secret()},
+                2101,
+                "application authorization",
+            )
+            await send(
+                CTRADER_PAYLOAD["ACCOUNT_AUTH_REQ"],
+                {"ctidTraderAccountId": int(selected), "accessToken": access_token},
+                2103,
+                "account authorization",
+            )
+
+            # Symbol IDs and contract sizes are specific to the broker/server.
+            symbols_res = await send(
+                CTRADER_PAYLOAD["SYMBOLS_LIST_REQ"],
+                {"ctidTraderAccountId": int(selected)},
+                2115,
+                "symbol list",
+            )
+            payload = symbols_res.get("payload") or {}
+            symbols = payload.get("symbol") or []
+            symbol = _ctrader_symbol_for_order(symbols, requested_symbol)
+            symbol_id = int(symbol.get("symbolId"))
+            if not bool(symbol.get("enabled", True)):
+                raise RuntimeError(f"{symbol.get('symbolName') or requested_symbol} is disabled for trading.")
+
+            lot_size_cents = int(_num(symbol.get("lotSize")) or 0)
+            min_volume = int(_num(symbol.get("minVolume")) or 0)
+            max_volume = int(_num(symbol.get("maxVolume")) or 0)
+            step_volume = int(_num(symbol.get("stepVolume")) or 0)
+            if lot_size_cents <= 0:
+                # A broker must normally provide lotSize. Do not guess a
+                # contract size for gold/CFDs because that could create the
+                # wrong position size.
+                raise RuntimeError(
+                    f"cTrader did not provide the contract lot size for {symbol.get('symbolName') or requested_symbol}."
+                )
+
+            # 1 lot = symbol.lotSize (already expressed in cTrader volume cents).
+            volume = int(round(lots * lot_size_cents))
+            if step_volume > 0:
+                volume = (volume // step_volume) * step_volume
+            if min_volume > 0 and volume < min_volume:
+                volume = min_volume
+            if max_volume > 0 and volume > max_volume:
+                raise RuntimeError(
+                    f"Lot size {lots:g} exceeds the broker's maximum volume for {symbol.get('symbolName') or requested_symbol}."
+                )
+            if volume <= 0:
+                raise RuntimeError("The selected lot size is below the broker's minimum trade volume.")
+
+            trade_side = 1 if direction == "BUY" else 2
+            payload = {
+                "ctidTraderAccountId": int(selected),
+                "symbolId": symbol_id,
+                "orderType": 1,       # MARKET
+                "tradeSide": trade_side,
+                "volume": volume,
+                "label": "KETS",
+                "comment": "KETS manual/automatic trade",
+            }
+
+            sl = order.get("stop_loss")
+            tp = order.get("take_profit")
+            if sl not in (None, "", 0):
+                payload["stopLoss"] = float(sl)
+            if tp not in (None, "", 0):
+                payload["takeProfit"] = float(tp)
+
+            response = await send(
+                CTRADER_PAYLOAD["NEW_ORDER_REQ"],
+                payload,
+                None,
+                "market order",
+            )
+            rp = response.get("payload") or {}
+            # A successful cTrader response can contain an order/position/deal
+            # depending on broker execution timing. Return the useful details.
+            return {
+                "symbol": symbol.get("symbolName") or requested_symbol,
+                "symbol_id": symbol_id,
+                "direction": direction,
+                "lots": lots,
+                "volume_cents": volume,
+                "order_id": rp.get("orderId") or (rp.get("order") or {}).get("orderId"),
+                "position_id": rp.get("positionId") or (rp.get("position") or {}).get("positionId"),
+                "execution_type": rp.get("executionType"),
+                "execution_price": rp.get("executionPrice") or (rp.get("deal") or {}).get("executionPrice"),
+                "raw": rp,
+            }
+
+    try:
+        return asyncio.run(run(token)), selected
+    except RuntimeError as exc:
+        msg = str(exc)
+        if any(x in msg.upper() for x in ("TOKEN", "AUTH", "ACCESS", "EXPIRED")):
+            fresh_row = _ctrader_row_for_user(row["user_id"]) or row
+            fresh_token = _ctrader_access_token(fresh_row, force_refresh=True)
+            return asyncio.run(run(fresh_token)), selected
+        raise
+
+
+def _signal_is_strong_reversal(sig):
+    """Return True only for signals explicitly classified by KETS as strong reversals."""
+    if not isinstance(sig, dict):
+        return False
+    raw = sig.get("strong_reversal", sig.get("reversal_signal", False))
+    if raw is True or str(raw).lower() == "true":
+        return True
+    text = " ".join(
+        str(sig.get(k) or "")
+        for k in ("signal_type", "classification", "setup")
+    ).upper()
+    return "STRONG REVERSAL" in text
+
+
 def _queue_and_execute_ctrader(row, sig):
     direction=str(sig.get("direction") or sig.get("signal") or "").upper()
     if direction not in {"BUY","SELL"}: raise RuntimeError("Signal is not a BUY/SELL entry.")
@@ -1376,6 +1584,9 @@ def _ctrader_autotrade_once():
             age=_signal_age_seconds(sig)
             if age is not None and age>900: continue
             if not _signal_is_low_risk(sig,min_quality): continue
+            if bool(row.get("strong_only")) and not _signal_is_strong_reversal(sig):
+                app.logger.info("cTrader auto-trade skipped: strong reversal only is enabled.")
+                continue
             _queue_and_execute_ctrader(row,sig)
         except Exception as exc:
             app.logger.warning("cTrader auto-trade skipped: %s",exc)
