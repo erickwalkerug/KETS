@@ -386,6 +386,7 @@ def init_db():
                     ("max_lot", "DOUBLE PRECISION DEFAULT 10.0"),
                     ("max_open_trades", "INTEGER DEFAULT 1"),
                     ("allocation_pct", "DOUBLE PRECISION DEFAULT 10"),
+                    ("auto_symbol", "TEXT DEFAULT 'XAUUSD'"),
                     ("balance", "DOUBLE PRECISION DEFAULT 0"),
                     ("equity", "DOUBLE PRECISION DEFAULT 0"),
                     ("free_margin", "DOUBLE PRECISION DEFAULT 0"),
@@ -1232,8 +1233,18 @@ def _signal_age_seconds(sig):
         return max(0.0,(get_eat_time()-dt.astimezone(EAT)).total_seconds())
     except Exception: return None
 
-def _current_signal():
+def _current_signal(requested_symbol=None):
     signals=_latest_signal_map(_history_items())
+    requested=str(requested_symbol or "").replace("/","").replace("_","").replace("-","").upper()
+    if requested:
+        if requested in {"XAUUSD","GOLD","XAU"}:
+            for key in ("GOLD","XAUUSD","XAU"):
+                if signals.get(key): return signals[key]
+        elif requested in {"BTCUSD","BTC"}:
+            for key in ("BTC","BTCUSD"):
+                if signals.get(key): return signals[key]
+        else:
+            return signals.get(requested)
     market="GOLD" if get_eat_time().weekday()<5 else "BTC"
     return signals.get(market) or signals.get("XAUUSD" if market=="GOLD" else "BTCUSD")
 
@@ -1266,6 +1277,10 @@ def managed_toggle():
     if not user: return jsonify({"error":"Sign in required."}),401
     body=request.get_json(silent=True) or {}; enabled=bool(body.get("enabled")); row=_ctrader_row_for_user(user["id"])
     if not row: return jsonify({"error":"Connect cTrader first."}),400
+    if row.get("status") not in ("AUTHORIZED","CONNECTED"):
+        return jsonify({"error":"cTrader is not connected."}),400
+    if enabled and not row.get("selected_account_id"):
+        return jsonify({"error":"Select a cTrader trading account before turning Auto-Trade ON."}),400
     with DB_LOCK:
         conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET auto_enabled=?,last_error=NULL,updated_at=? WHERE id=?",(1 if enabled else 0,_now_iso(),row["id"])); conn.commit(); conn.close()
     return jsonify({"ok":True,"auto_enabled":enabled})
@@ -1295,6 +1310,7 @@ def managed_status():
         "connected":connected,
         "status":row.get("status") or "NOT_CONNECTED",
         "auto_enabled":bool(row.get("auto_enabled")),
+        "auto_symbol":str(row.get("auto_symbol") or "XAUUSD").upper(),
         "broker":"cTrader",
         "selected_account_id":row.get("selected_account_id"),
         "currency":(snapshot or {}).get("currency") or "USD",
@@ -1337,6 +1353,8 @@ def managed_settings():
         try: quality=max(0,min(float(body.get("min_quality",row.get("min_quality") if row.get("min_quality") is not None else 40)),100))
         except Exception: quality=40
         strong=1 if bool(body.get("strong_only",row.get("strong_only") or 0)) else 0
+        auto_symbol=str(body.get("auto_symbol",row.get("auto_symbol") or "XAUUSD")).replace("/","").replace("_","").replace("-","").upper()
+        if auto_symbol not in {"XAUUSD","BTCUSD"}: auto_symbol="XAUUSD"
         try: max_lot=max(lot,min(float(body.get("max_lot",row.get("max_lot") or 10)),10))
         except Exception: max_lot=max(lot,10)
         try: max_open=max(1,min(int(body.get("max_open_trades",row.get("max_open_trades") or 1)),10))
@@ -1344,9 +1362,9 @@ def managed_settings():
         try: allocation=max(1,min(float(body.get("allocation_pct",row.get("allocation_pct") or 10)),100))
         except Exception: allocation=10
         with DB_LOCK:
-            conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET lot_size=?,profit_target=?,min_quality=?,strong_only=?,max_lot=?,max_open_trades=?,allocation_pct=?,updated_at=? WHERE id=?",(lot,target,quality,strong,max_lot,max_open,allocation,_now_iso(),row["id"])); conn.commit(); conn.close()
+            conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET lot_size=?,profit_target=?,min_quality=?,strong_only=?,max_lot=?,max_open_trades=?,allocation_pct=?,auto_symbol=?,updated_at=? WHERE id=?",(lot,target,quality,strong,max_lot,max_open,allocation,auto_symbol,_now_iso(),row["id"])); conn.commit(); conn.close()
         row=_ctrader_row_for_user(user["id"])
-    return jsonify({"ok":True,"lot_size":_num(row.get("lot_size")) or .01,"profit_target":_num(row.get("profit_target")) if row.get("profit_target") is not None else 25,"min_quality":_num(row.get("min_quality")) if row.get("min_quality") is not None else 40,"strong_only":bool(row.get("strong_only")),"max_lot":_num(row.get("max_lot")) or 10,"max_open_trades":int(row.get("max_open_trades") or 1),"allocation_pct":_num(row.get("allocation_pct")) or 10})
+    return jsonify({"ok":True,"lot_size":_num(row.get("lot_size")) or .01,"profit_target":_num(row.get("profit_target")) if row.get("profit_target") is not None else 25,"min_quality":_num(row.get("min_quality")) if row.get("min_quality") is not None else 40,"strong_only":bool(row.get("strong_only")),"max_lot":_num(row.get("max_lot")) or 10,"max_open_trades":int(row.get("max_open_trades") or 1),"allocation_pct":_num(row.get("allocation_pct")) or 10,"auto_symbol":str(row.get("auto_symbol") or "XAUUSD").upper()})
 
 def _ctrader_symbol_for_order(symbols, requested):
     """Resolve the broker-specific cTrader symbol ID.
@@ -1599,20 +1617,22 @@ def _queue_and_execute_ctrader(row, sig):
     if not entry or not tp or not sl: raise RuntimeError("The current signal has no complete entry, target and stop-loss plan.")
     sid=str(sig.get("id") or (str(sig.get("asset"))+"-"+str(sig.get("timestamp"))))
     lot=max(.01,min(_num(row.get("lot_size")) or .01,_num(row.get("max_lot")) or 10))
-    order={"symbol":str(sig.get("symbol") or ("XAUUSD" if str(sig.get("asset")).upper() in ("GOLD","XAUUSD") else "BTCUSD")),"direction":direction,"volume":lot,"entry":entry,"take_profit":tp,"stop_loss":sl}
+    order={"symbol":str(row.get("auto_symbol") or sig.get("symbol") or ("XAUUSD" if str(sig.get("asset")).upper() in ("GOLD","XAUUSD") else "BTCUSD")),"direction":direction,"volume":lot,"entry":entry,"take_profit":tp,"stop_loss":sl}
     result,selected=_ctrader_execute_order(row,order)
     with DB_LOCK:
         conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET selected_account_id=?,last_signal_id=?,last_error=NULL,status=?,updated_at=? WHERE id=?",(selected,sid,"CONNECTED",_now_iso(),row["id"])); conn.commit(); conn.close()
     return result
 
 def _ctrader_autotrade_once():
-    sig=_current_signal()
-    if not sig: return
     with DB_LOCK:
         conn=db_conn(); rows=db_execute(conn,"SELECT * FROM ctrader_connections WHERE auto_enabled=1 AND status IN ('AUTHORIZED','CONNECTED')").fetchall(); conn.close()
+    if not rows: return
     for rr in rows:
         row=dict(rr)
         try:
+            auto_symbol=str(row.get("auto_symbol") or "XAUUSD").upper()
+            sig=_current_signal(auto_symbol)
+            if not sig: continue
             min_quality=_num(row.get("min_quality")) if row.get("min_quality") is not None else 40
             if str(row.get("last_signal_id") or "") == str(sig.get("id") or (str(sig.get("asset"))+"-"+str(sig.get("timestamp")))): continue
             age=_signal_age_seconds(sig)

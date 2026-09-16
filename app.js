@@ -879,6 +879,7 @@ async function refreshManagedStatus(){
   const connected=!!d.connected, enabled=!!d.auto_enabled, currency=String(d.currency||"USD").toUpperCase();
   if($("managedConnectionStatus"))$("managedConnectionStatus").textContent=d.status||"NOT CONNECTED";
   if($("managedAutoTrade")){ $("managedAutoTrade").disabled=!connected; $("managedAutoTrade").checked=enabled; }
+  if($("autoTradeSymbol")){ $("autoTradeSymbol").disabled=!connected; if(document.activeElement!==$("autoTradeSymbol")) $("autoTradeSymbol").value=String(d.auto_symbol||"XAUUSD").toUpperCase(); }
    if($("managedStrongOnly")) $("managedStrongOnly").disabled=!connected;
   const ats=$("managedAutoTradeStatus");
   if(ats){ats.textContent=!connected?"NOT CONNECTED":(enabled?"RUNNING":"PAUSED / STOPPED");ats.className=enabled?"running":(connected?"paused":"");}
@@ -914,6 +915,7 @@ async function refreshManagedStatus(){
   if($("managedStrongOnly"))$("managedStrongOnly").checked=!!st.strong_only;
   if($("managedMaxTrades"))$("managedMaxTrades").value=String(st.max_open_trades||1);
   if($("managedAllocation"))$("managedAllocation").value=String(st.allocation_pct||10);
+  if($("autoTradeSymbol")&&document.activeElement!==$("autoTradeSymbol"))$("autoTradeSymbol").value=String(st.auto_symbol||"XAUUSD").toUpperCase();
  }catch(e){setManagedActionMessage(e.message||"Unable to refresh cTrader status.","error");}
 }
 setInterval(()=>{if(!$('managedTradingPage')?.classList.contains('hidden')){refreshManagedStatus();refreshCTraderStatus();}},5000);
@@ -941,7 +943,8 @@ async function setStrongOnlyControl(enabled){
    min_quality:Number($("managedMinQuality")?.value||40),
    max_lot:10,
    max_open_trades:Number($("managedMaxTrades")?.value||1),
-   allocation_pct:Number($("managedAllocation")?.value||10)
+   allocation_pct:Number($("managedAllocation")?.value||10),
+   auto_symbol:String($("autoTradeSymbol")?.value||"XAUUSD")
   })});
   setManagedActionMessage(enabled
    ?"Strong Reversal Only is ON — automatic entries will require a KETS STRONG REVERSAL ENTRY."
@@ -954,6 +957,27 @@ async function setStrongOnlyControl(enabled){
   if(el)el.disabled=false;
  }
 }
+if($("autoTradeSymbol")) $("autoTradeSymbol").onchange=async()=>{
+ const el=$("autoTradeSymbol");
+ try{
+  el.disabled=true;
+  setManagedActionMessage(`Saving auto-trade symbol: ${el.value === "BTCUSD" ? "BTC/USD" : "XAU/USD"}…`,"busy");
+  await api("/api/managed/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+   lot_size:Number($("managedLotSize")?.value||0.01),
+   profit_target:Number($("managedProfitTarget")?.value||25),
+   min_quality:Number($("managedMinQuality")?.value||40),
+   strong_only:!!$("managedStrongOnly")?.checked,
+   max_lot:10,
+   max_open_trades:Number($("managedMaxTrades")?.value||1),
+   allocation_pct:Number($("managedAllocation")?.value||10),
+   auto_symbol:String(el.value||"XAUUSD")
+  })});
+  setManagedActionMessage(`Auto-trade symbol set to ${el.value === "BTCUSD" ? "BTC/USD" : "XAU/USD"}.` ,"ok");
+ }catch(e){
+  setManagedActionMessage(e.message||"Could not change the auto-trade symbol.","error");
+  await refreshManagedStatus();
+ }finally{el.disabled=false;}
+};
 if($("managedStrongOnly")) $("managedStrongOnly").onchange=async()=>{await setStrongOnlyControl($("managedStrongOnly").checked);};
 if($("autoStartBtn")) $("autoStartBtn").onclick=async()=>{await setAutoTradeControl(true,"start");};
 if($("autoPauseBtn")) $("autoPauseBtn").onclick=async()=>{await setAutoTradeControl(false,"pause");};
@@ -991,7 +1015,7 @@ if($("saveManagedSettings"))$("saveManagedSettings").onclick=async()=>{
  const btn=$("saveManagedSettings");
  try{
   btn.disabled=true;btn.dataset.oldText=btn.textContent;btn.textContent="Saving…";setManagedActionMessage("Saving trading controls…","busy");
-  await api("/api/managed/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({lot_size:Number($("managedLotSize").value||0.01),profit_target:Number($("managedProfitTarget").value||25),min_quality:Number($("managedMinQuality").value||85),strong_only:$("managedStrongOnly").checked,max_lot:10,max_open_trades:Number($("managedMaxTrades").value||1),allocation_pct:Number($("managedAllocation").value||10)})});
+  await api("/api/managed/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({lot_size:Number($("managedLotSize").value||0.01),profit_target:Number($("managedProfitTarget").value||25),min_quality:Number($("managedMinQuality").value||85),strong_only:$("managedStrongOnly").checked,max_lot:10,max_open_trades:Number($("managedMaxTrades").value||1),allocation_pct:Number($("managedAllocation").value||10),auto_symbol:String($("autoTradeSymbol")?.value||"XAUUSD")})});
   setManagedActionMessage("Trading settings saved successfully.","ok");await refreshManagedStatus();
  }catch(e){setManagedActionMessage(e.message||"Settings could not be saved.","error");}
  finally{btn.disabled=false;btn.textContent=btn.dataset.oldText||"Save trading settings";}
