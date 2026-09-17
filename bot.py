@@ -69,6 +69,33 @@ def api_health():
     except Exception:
         return jsonify({"ok":False,"service":"KETS","database_configured":False,"database_mode":"render_postgres" if USING_POSTGRES else "sqlite","storage":"render_postgres" if USING_POSTGRES else "local_temp","storage_path":"DATABASE_URL" if USING_POSTGRES else DB_PATH}),503
 
+@app.route("/api/integration-status", methods=["GET"])
+def api_integration_status():
+    """Fast health check for the actual production connection path.
+
+    Signal flow is intentionally one-way and local to this KETS service:
+    trading bot -> POST /api/signals -> Signal History -> Auto-Trade -> cTrader.
+    This endpoint never polls the bot or cTrader, so the dashboard cannot
+    time out while checking connection status.
+    """
+    history = _history_items()
+    latest = history[-1] if history else None
+    return jsonify({
+        "ok": True,
+        "website": {"ok": True},
+        "signal_feed": {
+            "mode": "website-local-history",
+            "configured": True,
+            "history_count": len(history),
+            "latest_signal_id": str((latest or {}).get("id") or ""),
+            "latest_signal_time": (latest or {}).get("timestamp") or "",
+        },
+        "ctrader": {
+            "app_credentials_configured": bool(_ctrader_client_id() and _ctrader_client_secret()),
+            "auto_worker": bool(globals().get("autotrade_worker_started", False)),
+        },
+    })
+
 @app.route("/api/diagnostics", methods=["GET"])
 def api_diagnostics():
     try:
@@ -543,8 +570,8 @@ async def _ctrader_json_call(access_token, is_live, requests_list):
         async def send(payload_type, payload):
             msg={"clientMsgId":str(uuid.uuid4()),"payloadType":payload_type,"payload":payload}
             await ws.send(json.dumps(msg))
-            for _ in range(8):
-                raw=await asyncio.wait_for(ws.recv(), timeout=10)
+            for _ in range(12):
+                raw=await asyncio.wait_for(ws.recv(), timeout=2.5)
                 data=json.loads(raw)
                 # Heartbeats/events may arrive between request and response.
                 if data.get("payloadType") == 51:
@@ -678,8 +705,8 @@ def _ctrader_account_snapshot(row, retry=True):
                     "payloadType":pt,
                     "payload":payload
                 }))
-                for _ in range(30):
-                    d=json.loads(await asyncio.wait_for(ws.recv(),timeout=20))
+                for _ in range(12):
+                    d=json.loads(await asyncio.wait_for(ws.recv(),timeout=2.5))
                     # Heartbeats/events can arrive on the same connection.
                     if d.get("payloadType")==51:
                         continue
@@ -1538,8 +1565,8 @@ def _ctrader_execute_order(row, order, auto_label=False):
                     "payloadType": pt,
                     "payload": payload,
                 }))
-                for _ in range(40):
-                    d = json.loads(await asyncio.wait_for(ws.recv(), timeout=20))
+                for _ in range(12):
+                    d = json.loads(await asyncio.wait_for(ws.recv(), timeout=2.5))
                     if d.get("payloadType") == 51:
                         continue
                     if d.get("clientMsgId") not in (None, client_msg_id):
@@ -1744,9 +1771,24 @@ def _signal_execution_ready(sig, allow_history=False):
         age=_signal_age_seconds(sig)
         if age is not None and age > 180:
             return False
-    status=str(sig.get("status") or sig.get("execution_status") or sig.get("entry_exit_status") or "").strip().upper()
+    # The existing trading bot sends qualifying signals with status=ACTIVE.
+    # For website auto-trading, a complete bot signal is execution-ready even
+    # when its display status remains ACTIVE. Prefer the explicit execution
+    # status when present so the website can keep display and execution state
+    # separate.
+    execution_status=str(sig.get("execution_status") or sig.get("entry_exit_status") or "").strip().upper()
+    if execution_status:
+        return execution_status == "READY"
+    status=str(sig.get("status") or "").strip().upper()
     if status:
-        return status == "READY"
+        if status == "READY":
+            return True
+        if status == "ACTIVE":
+            entry=_num(sig.get("market_price") or sig.get("price") or sig.get("entry"))
+            tp=_num(sig.get("take_profit") or sig.get("tp") or sig.get("target"))
+            sl=_num(sig.get("stop_loss") or sig.get("sl") or sig.get("stop"))
+            return bool(entry and tp and sl)
+        return False
     entry=_num(sig.get("market_price") or sig.get("price") or sig.get("entry"))
     tp=_num(sig.get("take_profit") or sig.get("tp") or sig.get("target"))
     sl=_num(sig.get("stop_loss") or sig.get("sl") or sig.get("stop"))
@@ -1839,8 +1881,9 @@ def _ctrader_autotrade_once():
         row=dict(rr)
         try:
             auto_symbol=str(row.get("auto_symbol") or "XAUUSD").upper()
-            # Auto-Trade uses the trading-bot signal feed represented in Signal
-            # History as a fallback/primary execution source. The entry/exit
+            # Auto-Trade uses only the trading-bot signals already stored in this
+            # website's Signal History. No external signal URL is polled.
+            # The entry/exit
             # rules do not change: only READY BUY/SELL signals are actionable,
             # repeated same-direction signals are ignored, and an opposite
             # signal closes the existing automatic position before the new one.
@@ -1912,10 +1955,15 @@ def _ctrader_autotrade_once():
 
 
 def _ctrader_autotrade_loop():
+    # The browser never owns this loop. It runs continuously in the KETS web
+    # service and consumes the same READY signals stored in Signal History.
     while True:
-        try: _ctrader_autotrade_once()
-        except Exception: app.logger.exception("cTrader auto-trade loop error")
-        time.sleep(1)
+        try:
+            _ctrader_autotrade_once()
+            time.sleep(1)
+        except Exception:
+            app.logger.exception("cTrader auto-trade loop error")
+            time.sleep(3)
 
 def _ctrader_close_positions(row, auto_only=False):
     accounts=json.loads(row.get("account_ids_json") or "[]")
@@ -1940,8 +1988,8 @@ def _ctrader_close_positions(row, auto_only=False):
         async with websockets.connect(_ctrader_host(is_live),open_timeout=15,close_timeout=5,ping_interval=20,ping_timeout=20) as ws:
             async def send(pt,payload):
                 await ws.send(json.dumps({"clientMsgId":str(uuid.uuid4()),"payloadType":pt,"payload":payload}))
-                for _ in range(10):
-                    d=json.loads(await asyncio.wait_for(ws.recv(),timeout=20))
+                for _ in range(12):
+                    d=json.loads(await asyncio.wait_for(ws.recv(),timeout=2.5))
                     if d.get("payloadType")==51: continue
                     if d.get("payloadType") in (2132,2142):
                         ep=d.get("payload") or {}
@@ -3026,6 +3074,15 @@ def normalize_signal_payload(item, asset=None):
         tp=_num(item.get("take_profit") or item.get("tp") or item.get("target"))
         sl=_num(item.get("stop_loss") or item.get("sl") or item.get("stop"))
         item["status"]="READY" if item["direction"] in {"BUY","SELL"} and entry and tp and sl else "WAITING"
+    # Keep the bot's original display status (normally ACTIVE), while giving
+    # the execution worker an explicit state. A complete BUY/SELL signal from
+    # the existing bot is ready for Auto-Trade without requiring a bot update.
+    if item["direction"] in {"BUY","SELL"}:
+        entry=_num(item.get("market_price") or item.get("price") or item.get("entry"))
+        tp=_num(item.get("take_profit") or item.get("tp") or item.get("target"))
+        sl=_num(item.get("stop_loss") or item.get("sl") or item.get("stop"))
+        if item.get("execution_status") in (None, ""):
+            item["execution_status"]="READY" if entry and tp and sl else "WAITING"
     item["score"]=_num(item.get("score",item.get("strength",item.get("signal_strength",item.get("confidence",0)))))
     item["strength"]=item.get("strength",item["score"])
     aliases={
@@ -3716,56 +3773,14 @@ def build_startup_messages():
 
 
 def run_signal_source_bridge():
-    """Continuously mirror signals from the separate KETS trading-bot service.
-    This keeps the website dashboard synchronized with the same payload used
-    for Telegram, including STRONG REVERSAL ENTRY fields."""
-    global last_signal
+    """Legacy compatibility stub.
+
+    Production no longer needs a signal bridge because the trading bot sends
+    signals directly to POST /api/signals on this website. Kept only so older
+    imports/configurations do not fail if they reference the function.
+    """
     while True:
-        try:
-            source_url, source_key = _source_config()
-            if source_url:
-                headers={"Accept":"application/json"}
-                if source_key:
-                    headers["X-KETS-API-KEY"]=source_key
-                r=requests.get(source_url + "/api/source/signals", headers=headers, timeout=8)
-                if r.status_code in (404, 405):
-                    r=requests.get(source_url + "/api/signals", headers=headers, timeout=8)
-                if r.status_code == 200:
-                    data=r.json() if r.content else {}
-                    incoming=[]
-                    sigs=data.get("signals") if isinstance(data,dict) else {}
-                    if isinstance(sigs,dict):
-                        incoming.extend(v for v in sigs.values() if isinstance(v,dict))
-                    hist=data.get("history") if isinstance(data,dict) else []
-                    if isinstance(hist,list):
-                        incoming.extend(v for v in hist if isinstance(v,dict))
-                    for item in incoming:
-                        asset=str(item.get("asset") or item.get("market") or "").upper()
-                        direction=str(item.get("direction") or "").upper()
-                        if asset and direction in {"BUY","SELL"}:
-                            normalized=normalize_signal_payload(item, asset)
-                            normalized["asset"]=asset
-                            normalized["market"]=normalized.get("market") or asset
-                            normalized["direction"]=direction
-                            if not normalized.get("id"):
-                                normalized["id"]=f"{asset}-{direction}-{normalized.get('timestamp') or normalized.get('timestamp_utc') or time.time()}"
-                            with API_LOCK:
-                                # Keep the newest copy by id and avoid growing
-                                # memory indefinitely from repeated source polls.
-                                existing_ids={str(x.get("id")) for x in SIGNAL_HISTORY}
-                                if str(normalized["id"]) not in existing_ids:
-                                    SIGNAL_HISTORY.append(normalized)
-                                else:
-                                    for idx,x in enumerate(SIGNAL_HISTORY):
-                                        if str(x.get("id"))==str(normalized["id"]):
-                                            SIGNAL_HISTORY[idx]=normalized
-                                            break
-                                cutoff=get_eat_time()-datetime.timedelta(days=SIGNAL_HISTORY_DAYS)
-                                SIGNAL_HISTORY[:]=[x for x in SIGNAL_HISTORY if _signal_dt(x) >= cutoff]
-                            _persist_signal(normalized)
-        except Exception as exc:
-            print(f"⚠️ Signal source bridge: {str(exc)[:250]}")
-        time.sleep(2)
+        time.sleep(3600)
 
 
 def _signal_dt(item):
@@ -3818,13 +3833,13 @@ if os.environ.get("KETS_DISABLE_ENGINE", "1") != "1":
     engine_started = True
     Thread(target=run_strategy, daemon=True, name="kets-strategy-engine").start()
 
-# Always run the source bridge unless explicitly disabled. This is independent
-# of browser traffic and guarantees the website actively requests source signals.
+# The trading bot POSTs signals directly to this website. There is therefore
+# no polling bridge in the production path; disabling it removes the extra
+# connection that previously caused needless latency/timeouts.
 source_bridge_started = False
-if os.environ.get("KETS_DISABLE_SOURCE_BRIDGE", "0") != "1":
-    source_bridge_started = True
-    Thread(target=run_signal_source_bridge, daemon=True, name="kets-signal-source-bridge").start()
+autotrade_worker_started = False
 if os.environ.get("KETS_DISABLE_AUTOTRADE", "0") != "1":
+    autotrade_worker_started = True
     Thread(target=_ctrader_autotrade_loop, daemon=True, name="kets-ctrader-autotrade").start()
 
 if __name__ == "__main__":

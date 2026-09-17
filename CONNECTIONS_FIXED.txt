@@ -1,0 +1,44 @@
+KETS SIMPLE CONNECTION ARCHITECTURE
+===================================
+
+Production flow:
+    Trading bot
+        -> POST https://<your-kets-site>/api/signals
+        -> KETS Signal History (persistent database)
+        -> KETS Auto-Trade background worker
+        -> cTrader Open API
+        -> cTrader account
+
+Website/dashboard:
+    Browser -> KETS website/backend
+    The browser only controls Auto-Trade and reads status/history.
+    It does NOT execute the automatic trade and does NOT poll the trading bot.
+
+Important:
+- Auto-Trade reads READY BUY/SELL signals from the same Signal History that the
+  website displays.
+- No KETS_SIGNAL_SOURCE_URL is required for automatic trading.
+- The old signal-source polling bridge is disabled.
+- Repeated same-direction READY signals do not create duplicate auto entries.
+- An opposite READY signal closes the existing KETS_AUTO position and then
+  opens the new direction.
+- Auto-Trade runs in the KETS server background worker, not in the phone/browser.
+- Dashboard connection checks are lightweight and do not wait for cTrader.
+
+Trading bot -> website:
+POST /api/signals
+Content-Type: application/json
+
+Example body:
+{"asset":"XAUUSD","direction":"BUY","status":"READY","entry":...,"take_profit":...,"stop_loss":...}
+
+If KETS_REQUIRE_SIGNAL_AUTH=1 is enabled, the bot must also send:
+X-KETS-API-KEY: <same value as KETS_SIGNAL_RECEIVER_KEY>
+
+cTrader:
+Set CTRADER_CLIENT_ID, CTRADER_CLIENT_SECRET and CTRADER_REDIRECT_URI in Render.
+The user must connect cTrader and select the account in the KETS website before
+enabling Auto-Trade.
+
+Render:
+gunicorn app:app --workers 1 --threads 4 --timeout 120

@@ -883,7 +883,7 @@ if($("disconnectCTraderBtn")) $("disconnectCTraderBtn").onclick=async()=>{
 };
 async function refreshManagedStatus(){
  try{
-  const d=await api("/api/managed/status",{timeoutMs:45000});
+  const d=await api("/api/managed/status",{timeoutMs:8000});
   const connected=!!d.connected, enabled=!!d.auto_enabled, currency=String(d.currency||"USD").toUpperCase();
   if($("managedConnectionStatus"))$("managedConnectionStatus").textContent=d.status||"NOT CONNECTED";
   if($("managedAutoTrade")){ $("managedAutoTrade").disabled=!connected; $("managedAutoTrade").checked=enabled; }
@@ -926,7 +926,17 @@ async function refreshManagedStatus(){
   if($("autoTradeSymbol")&&document.activeElement!==$("autoTradeSymbol"))$("autoTradeSymbol").value=String(d.auto_symbol||"XAUUSD").toUpperCase();
  }catch(e){setManagedActionMessage(e.message||"Unable to refresh cTrader status.","error");}
 }
-setInterval(()=>{if(!$('managedTradingPage')?.classList.contains('hidden')){refreshManagedStatus();refreshCTraderStatus();}},3000);
+async function refreshIntegrationStatus(){
+  try{
+    const d=await api("/api/integration-status",{timeoutMs:4000});
+    const el=$("managedConnectionNote");
+    if(el && d?.ctrader?.auto_worker && !el.textContent.includes("balance update failed")){
+      el.dataset.ketsIntegration=`Website OK · Signal history ${d.signal_feed?.history_count??0} · Auto worker OK`;
+    }
+  }catch(e){}
+}
+
+setInterval(()=>{if(!$('managedTradingPage')?.classList.contains('hidden')){refreshManagedStatus();refreshCTraderStatus();refreshIntegrationStatus();}},3000);
 async function setAutoTradeControl(enabled,label){
  const buttons=[$("autoStartBtn"),$("autoPauseBtn"),$("autoStopBtn")].filter(Boolean);
  try{
