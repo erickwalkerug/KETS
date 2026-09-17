@@ -191,13 +191,13 @@
           <button class="ghost-btn" id="autoPauseBtn" disabled>⏸ Pause</button>
           <button class="danger-btn" id="autoStopBtn" disabled>⏹ Stop New Entries</button>
         </div>
-        <p class="tiny">Start allows the existing KETS automatic-entry system to execute qualifying signals. Pause/Stop prevent new automatic entries; existing trades are not closed by these buttons.</p><div id="managedActionMessage" class="managed-action-message" aria-live="polite"></div>
+        <p class="tiny">Start immediately checks for the newest qualifying KETS signal and keeps checking for new signals. Pause/Stop prevent new automatic entries; existing trades are not closed by these buttons.</p><div id="managedActionMessage" class="managed-action-message" aria-live="polite"></div>
       </div>
       <div class="manual-trade-controls">
         <div class="panel-title"><h3>Manual Trade</h3><span class="muted">Uses your connected cTrader account</span></div>
         <div class="manual-trade-grid">
           <label>Symbol <select id="manualTradeSymbol"><option value="XAUUSD">XAU/USD</option><option value="BTCUSD">BTC/USD</option></select></label>
-          <label>Lot size <input id="manualTradeLot" type="number" min="0.01" max="10" step="0.01" value="0.01" inputmode="decimal" readonly></label>
+          <label>Lot size <input id="manualTradeLot" type="number" min="0.01" max="10" step="0.01" value="0.01" inputmode="decimal"></label>
           <label>Stop Loss <input id="manualTradeSL" type="number" step="any" placeholder="Optional"></label>
           <label>Take Profit <input id="manualTradeTP" type="number" step="any" placeholder="Optional"></label>
         </div>
@@ -206,7 +206,7 @@
           <button class="sell-btn" id="manualSellBtn" disabled>🔴 SELL</button>
           <button class="ghost-btn" id="manualCloseAllBtn" disabled>✕ Close All Manual Trades</button>
         </div>
-        <p class="tiny">Manual orders use the same saved lot size selected above as KETS automatic entries. Optional SL/TP can be entered before placing the order.</p>
+        <p class="tiny">Manual orders use the lot size entered here. Automatic entries use the separate Selected lot size above. Optional SL/TP can be entered before placing the order.</p>
       </div>
       <div class="managed-toggle-row"><div><strong>Require strong reversal only</strong><small>Optional. Turn this on if you want fewer entries; leave off to allow any low-risk KETS entry.</small></div><label class="switch"><input id="managedStrongOnly" type="checkbox"><span></span></label></div>
       <button class="primary-btn full" id="saveManagedSettings">Save trading settings</button>

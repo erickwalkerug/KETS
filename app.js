@@ -908,17 +908,17 @@ async function refreshManagedStatus(){
   } else if(d.data_warning){
     setManagedActionMessage(`cTrader balance is live. Secondary data warning: ${d.data_warning}`,"busy");
   }
-  const st=await api("/api/managed/settings",{timeoutMs:8000});
+  const st=d.settings||{};
   if($("managedLotSize")&&document.activeElement!==$("managedLotSize"))$("managedLotSize").value=Number(st.lot_size||0.01).toFixed(2);
   if($("managedProfitTarget")&&document.activeElement!==$("managedProfitTarget"))$("managedProfitTarget").value=Number(st.profit_target??25).toFixed(0);
   if($("managedMinQuality"))$("managedMinQuality").value=String(st.min_quality||40);
   if($("managedStrongOnly"))$("managedStrongOnly").checked=!!st.strong_only;
   if($("managedMaxTrades"))$("managedMaxTrades").value=String(st.max_open_trades||1);
   if($("managedAllocation"))$("managedAllocation").value=String(st.allocation_pct||10);
-  if($("autoTradeSymbol")&&document.activeElement!==$("autoTradeSymbol"))$("autoTradeSymbol").value=String(st.auto_symbol||"XAUUSD").toUpperCase();
+  if($("autoTradeSymbol")&&document.activeElement!==$("autoTradeSymbol"))$("autoTradeSymbol").value=String(d.auto_symbol||"XAUUSD").toUpperCase();
  }catch(e){setManagedActionMessage(e.message||"Unable to refresh cTrader status.","error");}
 }
-setInterval(()=>{if(!$('managedTradingPage')?.classList.contains('hidden')){refreshManagedStatus();refreshCTraderStatus();}},5000);
+setInterval(()=>{if(!$('managedTradingPage')?.classList.contains('hidden')){refreshManagedStatus();refreshCTraderStatus();}},3000);
 async function setAutoTradeControl(enabled,label){
  const buttons=[$("autoStartBtn"),$("autoPauseBtn"),$("autoStopBtn")].filter(Boolean);
  try{
@@ -985,7 +985,11 @@ if($("autoStopBtn")) $("autoStopBtn").onclick=async()=>{await setAutoTradeContro
 async function manualTrade(direction){
  const btn=direction==="BUY"?$("manualBuyBtn"):$("manualSellBtn");
  try{
-  const selectedLot=Number($("managedLotSize")?.value||$("manualTradeLot")?.value||0.01);
+  const selectedLot=Number($("manualTradeLot")?.value||0.01);
+  if(!Number.isFinite(selectedLot)||selectedLot<0.01||selectedLot>10){
+    setManagedActionMessage("Manual lot size must be between 0.01 and 10 lots.","error");
+    return;
+  }
   const body={direction,symbol:$("manualTradeSymbol").value,volume:selectedLot};
   const sl=$("manualTradeSL").value,tp=$("manualTradeTP").value;
   if(sl)body.stop_loss=Number(sl);if(tp)body.take_profit=Number(tp);

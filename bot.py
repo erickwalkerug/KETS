@@ -505,6 +505,16 @@ def _ctrader_row_for_user(user_id):
         conn.close()
     return dict(row) if row else None
 
+CTRADER_SYMBOL_CACHE_LOCK = Lock()
+CTRADER_SYMBOL_CACHE = {}
+CTRADER_SYMBOL_CACHE_TTL = 900.0
+
+# Short-lived account snapshot cache keeps the dashboard responsive without
+# hammering cTrader every time the browser polls. Orders invalidate it.
+CTRADER_SNAPSHOT_CACHE_LOCK = Lock()
+CTRADER_SNAPSHOT_CACHE = {}
+CTRADER_SNAPSHOT_CACHE_TTL = 2.0
+
 CTRADER_PAYLOAD = {
     "APP_AUTH_REQ": 2100, "ACCOUNT_AUTH_REQ": 2102,
     "NEW_ORDER_REQ": 2106, "CLOSE_POSITION_REQ": 2111,
@@ -527,7 +537,7 @@ async def _ctrader_json_call(access_token, is_live, requests_list):
             msg={"clientMsgId":str(uuid.uuid4()),"payloadType":payload_type,"payload":payload}
             await ws.send(json.dumps(msg))
             for _ in range(8):
-                raw=await asyncio.wait_for(ws.recv(), timeout=20)
+                raw=await asyncio.wait_for(ws.recv(), timeout=10)
                 data=json.loads(raw)
                 # Heartbeats/events may arrive between request and response.
                 if data.get("payloadType") == 51:
@@ -608,6 +618,25 @@ def _ctrader_access_token(row, force_refresh=False):
             pass
     return _ctrader_refresh_token(row)
 
+def _ctrader_snapshot_cached(row):
+    key=(str(row.get("selected_account_id") or ""), str(row.get("user_id") or ""))
+    now=time.time()
+    with CTRADER_SNAPSHOT_CACHE_LOCK:
+        item=CTRADER_SNAPSHOT_CACHE.get(key)
+        if item and now-item["cached_at"] < CTRADER_SNAPSHOT_CACHE_TTL:
+            return dict(item["snapshot"])
+    return None
+
+def _ctrader_cache_snapshot(row, snapshot):
+    key=(str(row.get("selected_account_id") or ""), str(row.get("user_id") or ""))
+    with CTRADER_SNAPSHOT_CACHE_LOCK:
+        CTRADER_SNAPSHOT_CACHE[key]={"cached_at":time.time(),"snapshot":dict(snapshot)}
+
+def _ctrader_invalidate_snapshot(row):
+    key=(str(row.get("selected_account_id") or ""), str(row.get("user_id") or ""))
+    with CTRADER_SNAPSHOT_CACHE_LOCK:
+        CTRADER_SNAPSHOT_CACHE.pop(key, None)
+
 def _ctrader_account_snapshot(row, retry=True):
     """Read the live cTrader account state used by the dashboard.
 
@@ -629,10 +658,10 @@ def _ctrader_account_snapshot(row, retry=True):
         import websockets
         async with websockets.connect(
             _ctrader_host(is_live),
-            open_timeout=15,
-            close_timeout=5,
+            open_timeout=8,
+            close_timeout=3,
             ping_interval=20,
-            ping_timeout=20,
+            ping_timeout=10,
         ) as ws:
 
             async def send(pt,payload,expected=None,label="cTrader request",required=True):
@@ -1283,6 +1312,11 @@ def managed_toggle():
         return jsonify({"error":"Select a cTrader trading account before turning Auto-Trade ON."}),400
     with DB_LOCK:
         conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET auto_enabled=?,last_error=NULL,updated_at=? WHERE id=?",(1 if enabled else 0,_now_iso(),row["id"])); conn.commit(); conn.close()
+    # Do not make the browser wait for the broker. Kick the execution worker
+    # immediately; the worker also performs an atomic signal claim so multiple
+    # web workers cannot submit the same signal twice.
+    if enabled:
+        Thread(target=_ctrader_autotrade_once, daemon=True, name="kets-ctrader-immediate-check").start()
     return jsonify({"ok":True,"auto_enabled":enabled})
 
 @app.route("/api/managed/status")
@@ -1295,7 +1329,10 @@ def managed_status():
     snapshot=None; live_error=""
     if connected and row.get("selected_account_id"):
         try:
-            snapshot=_ctrader_account_snapshot(row)
+            snapshot=_ctrader_snapshot_cached(row)
+            if snapshot is None:
+                snapshot=_ctrader_account_snapshot(row)
+                _ctrader_cache_snapshot(row, snapshot)
             with DB_LOCK:
                 conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET balance=?,equity=?,free_margin=?,positions_json=?,last_error=NULL,status=?,updated_at=? WHERE id=?",
                     (snapshot["balance"],snapshot["equity"],snapshot["free_margin"],json.dumps(snapshot["positions"]),"CONNECTED",_now_iso(),row["id"])); conn.commit(); conn.close()
@@ -1324,6 +1361,15 @@ def managed_status():
         "last_error":live_error or row.get("last_error") or "",
         "data_warning":(snapshot or {}).get("data_warning") or "",
         "server_time":(snapshot or {}).get("server_time") or _now_iso(),
+        "settings":{
+            "lot_size":_num(row.get("lot_size")) or .01,
+            "profit_target":_num(row.get("profit_target")) if row.get("profit_target") is not None else 25,
+            "min_quality":_num(row.get("min_quality")) if row.get("min_quality") is not None else 40,
+            "strong_only":bool(row.get("strong_only")),
+            "max_lot":_num(row.get("max_lot")) or 10,
+            "max_open_trades":int(row.get("max_open_trades") or 1),
+            "allocation_pct":_num(row.get("allocation_pct")) or 10,
+        },
     })
 
 @app.route("/api/ctrader/select-account", methods=["POST"])
@@ -1401,6 +1447,20 @@ def _ctrader_symbol_for_order(symbols, requested):
     return exact[0]
 
 
+def _ctrader_cached_symbol(account_id, requested_symbol):
+    key=(str(account_id), str(requested_symbol).upper())
+    now=time.time()
+    with CTRADER_SYMBOL_CACHE_LOCK:
+        item=CTRADER_SYMBOL_CACHE.get(key)
+        if item and now-item["cached_at"] < CTRADER_SYMBOL_CACHE_TTL:
+            return dict(item["symbol"])
+    return None
+
+def _ctrader_cache_symbol(account_id, requested_symbol, symbol):
+    key=(str(account_id), str(requested_symbol).upper())
+    with CTRADER_SYMBOL_CACHE_LOCK:
+        CTRADER_SYMBOL_CACHE[key]={"cached_at":time.time(),"symbol":dict(symbol)}
+
 def _ctrader_execute_order(row, order):
     """Execute a real market order through the user's selected cTrader account.
 
@@ -1470,40 +1530,43 @@ def _ctrader_execute_order(row, order):
                 "account authorization",
             )
 
-            # Symbol IDs and contract sizes are specific to the broker/server.
-            symbols_res = await send(
-                CTRADER_PAYLOAD["SYMBOLS_LIST_REQ"],
-                {"ctidTraderAccountId": int(selected)},
-                2115,
-                "symbol list",
-            )
-            payload = symbols_res.get("payload") or {}
-            symbols = payload.get("symbol") or []
-            symbol = _ctrader_symbol_for_order(symbols, requested_symbol)
+            # Symbol IDs and contract sizes are broker/server specific. Cache
+            # the resolved full symbol briefly so every order does not spend two
+            # extra round trips fetching the same metadata.
+            symbol = _ctrader_cached_symbol(selected, requested_symbol)
+            if symbol is None:
+                symbols_res = await send(
+                    CTRADER_PAYLOAD["SYMBOLS_LIST_REQ"],
+                    {"ctidTraderAccountId": int(selected)},
+                    2115,
+                    "symbol list",
+                )
+                payload = symbols_res.get("payload") or {}
+                symbols = payload.get("symbol") or []
+                symbol = _ctrader_symbol_for_order(symbols, requested_symbol)
+                symbol_id = int(symbol.get("symbolId"))
+                if not bool(symbol.get("enabled", True)):
+                    raise RuntimeError(f"{symbol.get('symbolName') or requested_symbol} is disabled for trading.")
+                symbol_details_res = await send(
+                    CTRADER_PAYLOAD["SYMBOL_BY_ID_REQ"],
+                    {"ctidTraderAccountId": int(selected), "symbolId": [symbol_id]},
+                    2117,
+                    "full symbol details",
+                )
+                full_symbols = (symbol_details_res.get("payload") or {}).get("symbol") or []
+                full_symbol = next(
+                    (s for s in full_symbols if int(s.get("symbolId") or -1) == symbol_id),
+                    None,
+                )
+                if not full_symbol:
+                    raise RuntimeError(
+                        f"cTrader did not return full symbol details for {symbol.get('symbolName') or requested_symbol}."
+                    )
+                symbol = {**symbol, **full_symbol}
+                _ctrader_cache_symbol(selected, requested_symbol, symbol)
             symbol_id = int(symbol.get("symbolId"))
             if not bool(symbol.get("enabled", True)):
                 raise RuntimeError(f"{symbol.get('symbolName') or requested_symbol} is disabled for trading.")
-
-            # ProtoOASymbolsListRes returns ProtoOALightSymbol entries only.
-            # lotSize/minVolume/maxVolume/stepVolume are full ProtoOASymbol
-            # fields, so fetch the selected symbol by ID before converting
-            # the website lot setting into cTrader protocol volume.
-            symbol_details_res = await send(
-                CTRADER_PAYLOAD["SYMBOL_BY_ID_REQ"],
-                {"ctidTraderAccountId": int(selected), "symbolId": [symbol_id]},
-                2117,
-                "full symbol details",
-            )
-            full_symbols = (symbol_details_res.get("payload") or {}).get("symbol") or []
-            full_symbol = next(
-                (s for s in full_symbols if int(s.get("symbolId") or -1) == symbol_id),
-                None,
-            )
-            if not full_symbol:
-                raise RuntimeError(
-                    f"cTrader did not return full symbol details for {symbol.get('symbolName') or requested_symbol}."
-                )
-            symbol = {**symbol, **full_symbol}
 
             lot_size_cents = int(_num(symbol.get("lotSize")) or 0)
             min_volume = int(_num(symbol.get("minVolume")) or 0)
@@ -1522,10 +1585,13 @@ def _ctrader_execute_order(row, order):
             volume = requested_volume
 
             if step_volume > 0 and volume % step_volume:
-                # Never silently reduce the user's selected lot size.
-                lower = (volume // step_volume) * step_volume
-                upper = lower + step_volume
-                volume = upper if (volume - lower) >= (upper - volume) else lower
+                # Never silently change the trader's requested lot size.
+                # Reject values that the broker cannot represent exactly.
+                step_lots = step_volume / lot_size_cents
+                raise RuntimeError(
+                    f"Lot size {lots:g} does not match the broker volume step "
+                    f"({step_lots:g} lot) for {symbol.get('symbolName') or requested_symbol}."
+                )
 
             if min_volume > 0 and volume < min_volume:
                 raise RuntimeError(
@@ -1621,6 +1687,7 @@ def _queue_and_execute_ctrader(row, sig):
     result,selected=_ctrader_execute_order(row,order)
     with DB_LOCK:
         conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET selected_account_id=?,last_signal_id=?,last_error=NULL,status=?,updated_at=? WHERE id=?",(selected,sid,"CONNECTED",_now_iso(),row["id"])); conn.commit(); conn.close()
+    _ctrader_invalidate_snapshot(row)
     return result
 
 def _ctrader_autotrade_once():
@@ -1641,7 +1708,23 @@ def _ctrader_autotrade_once():
             if bool(row.get("strong_only")) and not _signal_is_strong_reversal(sig):
                 app.logger.info("cTrader auto-trade skipped: strong reversal only is enabled.")
                 continue
-            _queue_and_execute_ctrader(row,sig)
+            sid=str(sig.get("id") or (str(sig.get("asset"))+"-"+str(sig.get("timestamp"))))
+            # Gunicorn can run multiple workers. Atomically claim the signal
+            # before sending the broker order so two workers cannot execute the
+            # same signal at the same time. A failed order releases the claim.
+            claim=f"__EXECUTING__:{sid}"
+            with DB_LOCK:
+                conn=db_conn()
+                cur=db_execute(conn,"UPDATE ctrader_connections SET last_signal_id=?,updated_at=? WHERE id=? AND (last_signal_id IS NULL OR (last_signal_id<>? AND last_signal_id<>?))",(claim,_now_iso(),row["id"],sid,claim))
+                claimed=getattr(cur,"rowcount",1) > 0
+                conn.commit(); conn.close()
+            if not claimed: continue
+            try:
+                _queue_and_execute_ctrader(row,sig)
+            except Exception as exec_exc:
+                with DB_LOCK:
+                    conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET last_signal_id=NULL,last_error=?,updated_at=? WHERE id=? AND last_signal_id=?",("Auto-trade execution failed; retrying: "+str(exec_exc)[:420],_now_iso(),row["id"],claim)); conn.commit(); conn.close()
+                raise
         except Exception as exc:
             app.logger.warning("cTrader auto-trade skipped: %s",exc)
             with DB_LOCK:
@@ -1651,7 +1734,7 @@ def _ctrader_autotrade_loop():
     while True:
         try: _ctrader_autotrade_once()
         except Exception: app.logger.exception("cTrader auto-trade loop error")
-        time.sleep(15)
+        time.sleep(1)
 
 def _ctrader_close_all_positions(row):
     accounts=json.loads(row.get("account_ids_json") or "[]")
@@ -1698,15 +1781,18 @@ def managed_manual_order():
     symbol=str(body.get("symbol") or "XAUUSD").replace("/","").upper()
     if direction not in ("BUY","SELL"): return jsonify({"error":"Choose BUY or SELL."}),400
     if symbol not in ("XAUUSD","BTCUSD"): return jsonify({"error":"Unsupported symbol."}),400
-    # The saved website lot size is the single source of truth for both
-    # automatic and manual cTrader orders.
-    try: volume=max(.01,min(float(row.get("lot_size") or .01),10))
-    except Exception: volume=.01
+    # Manual lot size is intentionally independent from the automatic-entry
+    # lot size. The browser sends the value the trader entered in Manual Trade.
+    try: volume=float(body.get("volume"))
+    except Exception: volume=_num(row.get("lot_size")) or .01
+    if not math.isfinite(volume) or volume < 0.01 or volume > 10:
+        return jsonify({"error":"Manual lot size must be between 0.01 and 10 lots."}),400
     order={"symbol":symbol,"direction":direction,"volume":volume,"stop_loss":body.get("stop_loss"),"take_profit":body.get("take_profit")}
     try:
         result,selected=_ctrader_execute_order(row,order)
         with DB_LOCK:
             conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET selected_account_id=?,last_error=NULL,updated_at=? WHERE id=?",(selected,_now_iso(),row["id"])); conn.commit(); conn.close()
+        _ctrader_invalidate_snapshot(row)
         return jsonify({"ok":True,"broker":"cTrader","result":result})
     except Exception as exc:
         return jsonify({"error":str(exc)}),400
@@ -3469,7 +3555,7 @@ def run_signal_source_bridge():
                             _persist_signal(normalized)
         except Exception as exc:
             print(f"⚠️ Signal source bridge: {str(exc)[:250]}")
-        time.sleep(10)
+        time.sleep(2)
 
 
 def _signal_dt(item):
@@ -3528,6 +3614,7 @@ source_bridge_started = False
 if os.environ.get("KETS_DISABLE_SOURCE_BRIDGE", "0") != "1":
     source_bridge_started = True
     Thread(target=run_signal_source_bridge, daemon=True, name="kets-signal-source-bridge").start()
+if os.environ.get("KETS_DISABLE_AUTOTRADE", "0") != "1":
     Thread(target=_ctrader_autotrade_loop, daemon=True, name="kets-ctrader-autotrade").start()
 
 if __name__ == "__main__":
