@@ -1,0 +1,9 @@
+KETS cTrader lot-size fix
+
+- cTrader SymbolsList returns lightweight symbols. The order path now requests the full
+  ProtoOASymbol by ID (2116/2117) before reading lotSize/minVolume/maxVolume/stepVolume.
+- The saved KETS website lot size is the single source of truth for automatic and manual
+  cTrader orders.
+- The manual lot field mirrors the saved website lot size and is read-only.
+- Lot size is converted using the broker's actual cTrader lotSize and checked against
+  broker min/max/step constraints.

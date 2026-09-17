@@ -1,0 +1,4 @@
+KETS cTrader Balance Display Build
+Build: 2026-09-16
+Purpose: Ensure the live cTrader ProtoOATrader balance cannot be replaced by a USD 0 fallback because a secondary request failed.
+Existing KETS signal/strategy logic is preserved.
