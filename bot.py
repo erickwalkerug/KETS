@@ -518,7 +518,7 @@ CTRADER_SYMBOL_CACHE_TTL = 900.0
 # hammering cTrader every time the browser polls. Orders invalidate it.
 CTRADER_SNAPSHOT_CACHE_LOCK = Lock()
 CTRADER_SNAPSHOT_CACHE = {}
-CTRADER_SNAPSHOT_CACHE_TTL = 2.0
+CTRADER_SNAPSHOT_CACHE_TTL = 10.0
 
 CTRADER_PAYLOAD = {
     "APP_AUTH_REQ": 2100, "ACCOUNT_AUTH_REQ": 2102,
@@ -1521,12 +1521,27 @@ def _ctrader_execute_order(row, order, auto_label=False):
                         continue
                     if d.get("clientMsgId") not in (None, client_msg_id):
                         continue
-                    if d.get("payloadType") == 2142:
+                    payload_type = d.get("payloadType")
+                    # cTrader order validation failures are reported as
+                    # ProtoOAOrderErrorEvent (2132), not only generic 2142.
+                    if payload_type in (2132, 2142):
                         ep = d.get("payload") or {}
                         raise RuntimeError(
-                            ep.get("description") or ep.get("errorCode") or f"{label} failed"
+                            ep.get("description")
+                            or ep.get("errorCode")
+                            or f"{label} failed"
                         )
-                    if expected and d.get("payloadType") != expected:
+                    # New-order/close requests return ProtoOAExecutionEvent
+                    # (2126). Surface rejected/cancel-rejected execution events.
+                    if payload_type == 2126:
+                        ep = d.get("payload") or {}
+                        execution_type = int(ep.get("executionType") or 0)
+                        if execution_type in (7, 8):
+                            raise RuntimeError(
+                                ep.get("description")
+                                or f"cTrader rejected the {label}."
+                            )
+                    if expected and payload_type != expected:
                         continue
                     return d
                 raise RuntimeError(f"cTrader did not return the expected {label} response.")
@@ -1640,7 +1655,7 @@ def _ctrader_execute_order(row, order, auto_label=False):
             response = await send(
                 CTRADER_PAYLOAD["NEW_ORDER_REQ"],
                 payload,
-                None,
+                2126,
                 "market order",
             )
             rp = response.get("payload") or {}
@@ -1694,6 +1709,11 @@ def _signal_execution_ready(sig):
         return False
     direction=str(sig.get("direction") or sig.get("signal") or "").upper()
     if direction not in {"BUY","SELL"}:
+        return False
+    # Current KETS means a recent signal, not an old signal loaded from the
+    # seven-day history. Allow a small source/network delay.
+    age=_signal_age_seconds(sig)
+    if age is not None and age > 180:
         return False
     status=str(sig.get("status") or sig.get("execution_status") or sig.get("entry_exit_status") or "").strip().upper()
     # Older KETS payloads did not carry a status field. A complete Current KETS
@@ -1797,9 +1817,11 @@ def _ctrader_autotrade_once():
                 app.logger.info("cTrader auto-trade target total reached: %.2f / %.2f",progress,target)
                 continue
 
-            # One automatic entry per new Current KETS signal. A repeated API
-            # poll of the same signal cannot duplicate the order.
-            if direction == previous_direction and sid == previous_sid:
+            # Current KETS rule: one automatic entry for the active direction.
+            # Repeated same-direction signals do not open duplicate positions.
+            # Only an opposite READY signal closes the active auto position and
+            # starts the new direction.
+            if direction == previous_direction:
                 continue
 
             claim=f"__EXECUTING__:{sid}"
@@ -1853,6 +1875,14 @@ def _ctrader_close_positions(row, auto_only=False):
                 for _ in range(10):
                     d=json.loads(await asyncio.wait_for(ws.recv(),timeout=20))
                     if d.get("payloadType")==51: continue
+                    if d.get("payloadType") in (2132,2142):
+                        ep=d.get("payload") or {}
+                        raise RuntimeError(ep.get("description") or ep.get("errorCode") or "cTrader request failed")
+                    if d.get("payloadType")==2126:
+                        ep=d.get("payload") or {}
+                        execution_type=int(ep.get("executionType") or 0)
+                        if execution_type in (7,8):
+                            raise RuntimeError(ep.get("description") or "cTrader rejected the request.")
                     return d
                 raise RuntimeError("cTrader response timeout")
             r=await send(2100,{"clientId":_ctrader_client_id(),"clientSecret":_ctrader_client_secret()})

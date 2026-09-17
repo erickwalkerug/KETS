@@ -19,7 +19,7 @@ async function api(path,opts={}){
   if(!r.ok) throw Error(d.error||`HTTP ${r.status}`);
   return d;
  }catch(e){
-  if(e.name==="AbortError") throw Error("KETS server is waking up or taking too long. Please wait a moment and try again.");
+  if(e.name==="AbortError") throw Error("KETS server response timed out. Auto-trade runs on the server; retry the dashboard check shortly.");
   if(e instanceof TypeError && /fetch/i.test(e.message||"")) throw Error("Cannot reach the KETS server. Check that the deployed Render service is running, then try again.");
   throw e;
  }finally{clearTimeout(timeout);}
@@ -883,7 +883,7 @@ if($("disconnectCTraderBtn")) $("disconnectCTraderBtn").onclick=async()=>{
 };
 async function refreshManagedStatus(){
  try{
-  const d=await api("/api/managed/status",{timeoutMs:20000});
+  const d=await api("/api/managed/status",{timeoutMs:45000});
   const connected=!!d.connected, enabled=!!d.auto_enabled, currency=String(d.currency||"USD").toUpperCase();
   if($("managedConnectionStatus"))$("managedConnectionStatus").textContent=d.status||"NOT CONNECTED";
   if($("managedAutoTrade")){ $("managedAutoTrade").disabled=!connected; $("managedAutoTrade").checked=enabled; }
