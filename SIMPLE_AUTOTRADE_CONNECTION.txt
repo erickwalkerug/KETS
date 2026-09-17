@@ -1,0 +1,18 @@
+SIMPLE AUTO-TRADE CONNECTION
+
+The trading bot is the signal producer. It sends READY BUY/SELL signals directly
+to this KETS website at /api/signals.
+
+KETS then stores the signal in Signal History. The server-side Auto-Trade worker
+reads that same history and sends orders to the connected cTrader account.
+
+No separate signal server or KETS_SIGNAL_SOURCE_URL is required.
+
+Expected flow:
+Trading bot -> KETS website -> Signal History -> Auto-Trade -> cTrader
+
+Manual trading remains separate and continues to use the website's manual-order
+endpoint.
+
+The auto worker is enabled by default in Render and the legacy source bridge is
+disabled by default.

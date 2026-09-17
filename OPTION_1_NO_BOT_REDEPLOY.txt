@@ -1,0 +1,27 @@
+OPTION 1 — KEEP THE EXISTING TRADING BOT
+
+The existing trading bot already POSTs its generated signals to:
+  https://kets.onrender.com/api/signals
+
+This KETS build was adjusted so you do NOT need to deploy a new trading-bot ZIP.
+
+What changed:
+- KETS accepts the existing bot payload format.
+- The bot's normal display status (ACTIVE) is preserved.
+- A complete BUY/SELL signal gets execution_status=READY for Auto-Trade.
+- Auto-Trade reads the same website Signal History.
+- Auto-Trade does not poll a separate signal server.
+- Duplicate same-direction entries are ignored.
+- An opposite signal closes the automatic position and opens the new direction.
+
+Deployment:
+1. Deploy this KETS ZIP.
+2. Keep the existing trading bot deployed as-is.
+3. Ensure the KETS website has KETS_SIGNAL_RECEIVER_KEY only if you enable
+   KETS_REQUIRE_SIGNAL_AUTH=1. Otherwise the existing bot connection remains
+   compatible without changing the bot.
+4. Keep cTrader credentials configured on KETS.
+
+Important: a live cTrader order still requires a valid connected cTrader account
+and Auto-Trade enabled on the KETS dashboard. This build does not guarantee
+profit or bypass broker rejection/risk controls.
