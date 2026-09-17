@@ -519,6 +519,8 @@ CTRADER_SYMBOL_CACHE_TTL = 900.0
 CTRADER_SNAPSHOT_CACHE_LOCK = Lock()
 CTRADER_SNAPSHOT_CACHE = {}
 CTRADER_SNAPSHOT_CACHE_TTL = 10.0
+CTRADER_SNAPSHOT_REFRESH_LOCK = Lock()
+CTRADER_SNAPSHOT_REFRESH_IN_FLIGHT = set()
 
 CTRADER_PAYLOAD = {
     "APP_AUTH_REQ": 2100, "ACCOUNT_AUTH_REQ": 2102,
@@ -1337,21 +1339,42 @@ def managed_status():
     row=_ctrader_row_for_user(user["id"])
     if not row: return jsonify({"connected":False,"status":"NOT_CONNECTED","broker":"cTrader","positions":[]})
     connected=row.get("status") in ("AUTHORIZED","CONNECTED")
-    snapshot=None; live_error=""
+    snapshot=_ctrader_snapshot_cached(row) if connected and row.get("selected_account_id") else None
+    live_error=row.get("last_error") or ""
+    # IMPORTANT: never make the dashboard request wait for a full cTrader
+    # websocket/account reconciliation. Manual trading can remain fast while
+    # the status endpoint responds immediately from the last known state.
+    # A background refresh updates balance/positions without blocking the web UI.
+    if connected and row.get("selected_account_id") and snapshot is None:
+        snapshot={
+            "balance":_num(row.get("balance")),
+            "equity":_num(row.get("equity")),
+            "free_margin":_num(row.get("free_margin")),
+            "positions":positions if "positions" in locals() else [],
+            "today_pnl":0, "realized_pnl":0, "unrealized_pnl":0,
+            "currency":"USD", "server_time":_now_iso()
+        }
     if connected and row.get("selected_account_id"):
-        try:
-            snapshot=_ctrader_snapshot_cached(row)
-            if snapshot is None:
-                snapshot=_ctrader_account_snapshot(row)
-                _ctrader_cache_snapshot(row, snapshot)
-            with DB_LOCK:
-                conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET balance=?,equity=?,free_margin=?,positions_json=?,last_error=NULL,status=?,updated_at=? WHERE id=?",
-                    (snapshot["balance"],snapshot["equity"],snapshot["free_margin"],json.dumps(snapshot["positions"]),"CONNECTED",_now_iso(),row["id"])); conn.commit(); conn.close()
-            row=_ctrader_row_for_user(user["id"]) or row
-        except Exception as exc:
-            live_error=str(exc)[:500]
-            with DB_LOCK:
-                conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET last_error=?,updated_at=? WHERE id=?",(live_error,_now_iso(),row["id"])); conn.commit(); conn.close()
+        def _refresh_status_async(r, uid):
+            key=(str(r.get("selected_account_id") or ""), str(r.get("user_id") or ""))
+            with CTRADER_SNAPSHOT_REFRESH_LOCK:
+                if key in CTRADER_SNAPSHOT_REFRESH_IN_FLIGHT:
+                    return
+                CTRADER_SNAPSHOT_REFRESH_IN_FLIGHT.add(key)
+            try:
+                snap=_ctrader_account_snapshot(r)
+                _ctrader_cache_snapshot(r,snap)
+                with DB_LOCK:
+                    conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET balance=?,equity=?,free_margin=?,positions_json=?,last_error=NULL,status=?,updated_at=? WHERE id=?",
+                        (snap.get("balance",0),snap.get("equity",0),snap.get("free_margin",0),json.dumps(snap.get("positions",[])),"CONNECTED",_now_iso(),r["id"])); conn.commit(); conn.close()
+            except Exception as exc:
+                msg=str(exc)[:500]
+                with DB_LOCK:
+                    conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET last_error=?,updated_at=? WHERE id=?",(msg,_now_iso(),r["id"])); conn.commit(); conn.close()
+            finally:
+                with CTRADER_SNAPSHOT_REFRESH_LOCK:
+                    CTRADER_SNAPSHOT_REFRESH_IN_FLIGHT.discard(key)
+        Thread(target=_refresh_status_async,args=(dict(row),user["id"]),daemon=True,name="kets-ctrader-status-refresh").start()
     try: positions=json.loads((row.get("positions_json") or "[]"))
     except Exception: positions=[]
     return jsonify({
