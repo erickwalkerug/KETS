@@ -1,8 +1,0 @@
-KETS cTrader account selection
-
-- KETS discovers all cTrader accounts authorized by the user.
-- The user must explicitly choose an account and press "Use selected account for trading".
-- KETS never silently selects the first account.
-- Automatic and manual trading use only the selected account.
-- Balance/equity/P&L dashboard data also uses the selected account.
-- To add a newly created cTrader account, authorize KETS again through cTrader so the new account is included.
