@@ -1703,27 +1703,67 @@ def _signal_is_strong_reversal(sig):
     return "STRONG REVERSAL" in text
 
 
-def _signal_execution_ready(sig):
-    """Only signals shown as READY by the Current KETS entry/exit plan may auto-trade."""
+def _signal_execution_ready(sig, allow_history=False):
+    """Return True only for a complete BUY/SELL signal in READY state.
+
+    The live Current KETS card is intentionally time-limited, but Auto-Trade
+    may also consume a READY signal that came from the trading-bot feed and is
+    visible in Signal History.  That lets the execution worker keep working
+    even when the Current KETS endpoint/card is temporarily unavailable.
+    """
     if not isinstance(sig, dict):
         return False
     direction=str(sig.get("direction") or sig.get("signal") or "").upper()
     if direction not in {"BUY","SELL"}:
         return False
-    # Current KETS means a recent signal, not an old signal loaded from the
-    # seven-day history. Allow a small source/network delay.
-    age=_signal_age_seconds(sig)
-    if age is not None and age > 180:
-        return False
+    if not allow_history:
+        # Current KETS is a live plan, so reject an excessively old live copy.
+        age=_signal_age_seconds(sig)
+        if age is not None and age > 180:
+            return False
     status=str(sig.get("status") or sig.get("execution_status") or sig.get("entry_exit_status") or "").strip().upper()
-    # Older KETS payloads did not carry a status field. A complete Current KETS
-    # plan is the same READY state displayed by the dashboard in those builds.
     if status:
         return status == "READY"
     entry=_num(sig.get("market_price") or sig.get("price") or sig.get("entry"))
     tp=_num(sig.get("take_profit") or sig.get("tp") or sig.get("target"))
     sl=_num(sig.get("stop_loss") or sig.get("sl") or sig.get("stop"))
     return bool(entry and tp and sl)
+
+
+def _signal_matches_symbol(sig, requested_symbol):
+    requested=str(requested_symbol or "").replace("/","").replace("_","").replace("-","").upper()
+    asset=str((sig or {}).get("asset") or (sig or {}).get("market") or "").replace("/","").replace("_","").replace("-","").upper()
+    if requested in {"XAUUSD","GOLD","XAU"}:
+        return asset in {"XAUUSD","GOLD","XAU"}
+    if requested in {"BTCUSD","BTC"}:
+        return asset in {"BTCUSD","BTC"}
+    return asset == requested
+
+
+def _latest_ready_history_signal(requested_symbol=None):
+    """Get the newest READY trading-bot signal visible in Signal History.
+
+    This is deliberately separate from _current_signal(): the latter powers
+    the live dashboard and can require a very recent signal, while Auto-Trade
+    needs the trading-bot history as a resilient execution source.
+    """
+    candidates=[]
+    for sig in _history_items():
+        if not _signal_matches_symbol(sig, requested_symbol):
+            continue
+        if _signal_execution_ready(sig, allow_history=True):
+            candidates.append(sig)
+    if not candidates:
+        return None
+    def stamp(sig):
+        raw=sig.get("timestamp") or sig.get("timestamp_utc") or sig.get("created_at")
+        try:
+            dt=datetime.datetime.fromisoformat(str(raw).replace("Z","+00:00"))
+            if dt.tzinfo is None: dt=dt.replace(tzinfo=EAT)
+            return dt.timestamp()
+        except Exception:
+            return 0.0
+    return max(candidates, key=stamp)
 
 
 def _signal_id(sig):
@@ -1776,8 +1816,13 @@ def _ctrader_autotrade_once():
         row=dict(rr)
         try:
             auto_symbol=str(row.get("auto_symbol") or "XAUUSD").upper()
-            sig=_current_signal(auto_symbol)
-            if not sig or not _signal_execution_ready(sig):
+            # Auto-Trade uses the trading-bot signal feed represented in Signal
+            # History as a fallback/primary execution source. The entry/exit
+            # rules do not change: only READY BUY/SELL signals are actionable,
+            # repeated same-direction signals are ignored, and an opposite
+            # signal closes the existing automatic position before the new one.
+            sig=_latest_ready_history_signal(auto_symbol)
+            if not sig:
                 continue
             sid=_signal_id(sig)
             direction=str(sig.get("direction") or sig.get("signal") or "").upper()
