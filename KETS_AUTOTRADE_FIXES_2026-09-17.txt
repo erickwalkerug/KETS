@@ -1,0 +1,30 @@
+KETS AUTO-TRADE FIXES — 2026-09-17
+
+Fixed in this build:
+1. cTrader order rejection handling
+   - Detects ProtoOAOrderErrorEvent (2132), not only generic errors.
+   - Detects rejected/cancel-rejected execution events (2126).
+   - New market orders now wait for the cTrader execution event instead of
+     accepting an unrelated response as success.
+
+2. Faster/more stable dashboard
+   - cTrader account snapshot cache increased from 2s to 10s.
+   - This reduces repeated cTrader websocket calls caused by the dashboard
+     polling every 3 seconds and helps prevent timeout messages.
+
+3. Auto-trade behavior
+   - Only recent/current KETS BUY/SELL signals are eligible.
+   - READY status is required (legacy complete entry/TP/SL signals are normalized
+     to READY by the existing KETS code).
+   - One automatic entry is opened for the active direction.
+   - Repeated same-direction signals do not create duplicate entries.
+   - An opposite READY signal closes KETS_AUTO positions before opening the
+     new direction.
+
+4. Dashboard error message
+   - Replaced the misleading "KETS server is waking up" message with a
+     response-timeout message.
+
+No live trade is placed by creating this ZIP. Live execution still requires a
+connected cTrader account, selected trading account, valid cTrader application
+credentials on the deployed server, and trading permission on the account.
