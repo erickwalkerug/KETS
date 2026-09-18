@@ -1874,6 +1874,12 @@ def _queue_and_execute_ctrader(row, sig, automatic=True):
 
 
 def _ctrader_autotrade_once():
+    # Auto-Trade is strictly limited to 06:00-18:00 EAT. Outside this window
+    # the worker remains alive but performs no automatic entries or exits.
+    # It resumes automatically at 06:00 EAT and continues the same target
+    # profit cycle until the configured total target is reached.
+    if not trading_hours_open():
+        return
     with DB_LOCK:
         conn=db_conn(); rows=db_execute(conn,"SELECT * FROM ctrader_connections WHERE auto_enabled=1 AND status IN ('AUTHORIZED','CONNECTED')").fetchall(); conn.close()
     if not rows: return
