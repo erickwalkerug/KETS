@@ -18,7 +18,7 @@ Fixed in this build:
      to READY by the existing KETS code).
    - One automatic entry is opened for the active direction.
    - Repeated same-direction signals do not create duplicate entries.
-   - An opposite READY signal closes KETS_AUTO positions before opening the
+   - An opposite signal closes KETS_AUTO positions before opening the
      new direction.
 
 4. Dashboard error message

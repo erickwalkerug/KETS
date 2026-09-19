@@ -192,7 +192,7 @@
           <button class="ghost-btn" id="autoPauseBtn" disabled>⏸ Pause</button>
           <button class="danger-btn" id="autoStopBtn" disabled>⏹ Stop New Entries</button>
         </div>
-        <p class="tiny">Start immediately checks the trading-bot signals shown in Signal History and keeps checking for new READY signals. The existing rules remain unchanged: BUY/SELL entries only, opposite signal exits, and no duplicate same-direction entries. Pause/Stop prevent new automatic entries; existing trades are not closed by these buttons. Auto-Trade operates only from 06:00 to 18:00 EAT and resumes at 06:00 if the total target profit has not yet been reached.</p><div id="managedActionMessage" class="managed-action-message" aria-live="polite"></div>
+        <p class="tiny">Start immediately checks the trading-bot signals shown in Signal History and keeps checking for new BUY/SELL signals. The existing rules remain unchanged: BUY/SELL entries only, opposite signal exits, and no duplicate same-direction entries. Pause/Stop prevent new automatic entries; existing trades are not closed by these buttons. Auto-Trade operates only from 06:00 to 18:00 EAT and resumes at 06:00 if the total target profit has not yet been reached.</p><div id="managedActionMessage" class="managed-action-message" aria-live="polite"></div>
       </div>
       <div class="manual-trade-controls">
         <div class="panel-title"><h3>Manual Trade</h3><span class="muted">Uses your connected cTrader account</span></div>
@@ -209,7 +209,7 @@
         </div>
         <p class="tiny">Manual orders use the lot size entered here. Automatic entries use the separate Selected lot size above. Optional SL/TP can be entered before placing the order.</p>
       </div>
-      <div class="managed-toggle-row"><div><strong>Current KETS rules</strong><small>Auto-trade uses only: Current KETS status READY, the displayed BUY/SELL direction, exit on the opposite signal, and Target profit total. Quality/strong-reversal filters do not control auto-trade.</small></div><label class="switch"><input id="managedStrongOnly" type="checkbox" disabled><span></span></label></div>
+      <div class="managed-toggle-row"><div><strong>Current KETS rules</strong><small>Auto-trade uses Signal History BUY/SELL directions, exits on the opposite signal, ignores repeated same-direction signals, and follows Target profit total. Quality/strong-reversal filters do not control auto-trade.</small></div><label class="switch"><input id="managedStrongOnly" type="checkbox" disabled><span></span></label></div>
       <button class="primary-btn full" id="saveManagedSettings">Save trading settings</button>
       <p class="tiny">Target profit total stops new automatic entries when the current Auto-Trade run reaches the amount. It is not a profit guarantee; actual P/L depends on market conditions, lot size, spread, slippage and broker execution.</p>
       <div class="managed-action-row"><button class="ghost-btn" id="managedDepositBtn">View deposit instructions</button><button class="ghost-btn" id="managedWithdrawBtn">Withdraw profits</button></div>
