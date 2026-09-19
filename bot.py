@@ -400,6 +400,8 @@ def init_db():
                     ("profit_target", "DOUBLE PRECISION DEFAULT 25"),
                     ("min_quality", "DOUBLE PRECISION DEFAULT 40"),
                     ("strong_only", "INTEGER DEFAULT 0"),
+                    ("low_stability_entry", "INTEGER DEFAULT 0"),
+                    ("high_stability_entry", "INTEGER DEFAULT 0"),
                     ("max_lot", "DOUBLE PRECISION DEFAULT 10.0"),
                     ("max_open_trades", "INTEGER DEFAULT 1"),
                     ("allocation_pct", "DOUBLE PRECISION DEFAULT 10"),
@@ -410,6 +412,8 @@ def init_db():
                     ("profit_target", "DOUBLE PRECISION DEFAULT 25"),
                     ("min_quality", "DOUBLE PRECISION DEFAULT 40"),
                     ("strong_only", "INTEGER DEFAULT 0"),
+                    ("low_stability_entry", "INTEGER DEFAULT 0"),
+                    ("high_stability_entry", "INTEGER DEFAULT 0"),
                     ("max_lot", "DOUBLE PRECISION DEFAULT 10.0"),
                     ("max_open_trades", "INTEGER DEFAULT 1"),
                     ("allocation_pct", "DOUBLE PRECISION DEFAULT 10"),
@@ -1430,6 +1434,8 @@ def managed_status():
             "auto_profit_total":_num(row.get("auto_profit_total")),
             "min_quality":_num(row.get("min_quality")) if row.get("min_quality") is not None else 40,
             "strong_only":bool(row.get("strong_only")),
+            "low_stability_entry":bool(row.get("low_stability_entry")),
+            "high_stability_entry":bool(row.get("high_stability_entry")),
             "max_lot":_num(row.get("max_lot")) or 10,
             "max_open_trades":int(row.get("max_open_trades") or 1),
             "allocation_pct":_num(row.get("allocation_pct")) or 10,
@@ -1463,6 +1469,8 @@ def managed_settings():
         try: quality=max(0,min(float(body.get("min_quality",row.get("min_quality") if row.get("min_quality") is not None else 40)),100))
         except Exception: quality=40
         strong=1 if bool(body.get("strong_only",row.get("strong_only") or 0)) else 0
+        low_stability=1 if bool(body.get("low_stability_entry",row.get("low_stability_entry") or 0)) else 0
+        high_stability=1 if bool(body.get("high_stability_entry",row.get("high_stability_entry") or 0)) else 0
         auto_symbol=str(body.get("auto_symbol",row.get("auto_symbol") or "XAUUSD")).replace("/","").replace("_","").replace("-","").upper()
         if auto_symbol not in {"XAUUSD","BTCUSD"}: auto_symbol="XAUUSD"
         try: max_lot=max(lot,min(float(body.get("max_lot",row.get("max_lot") or 10)),10))
@@ -1472,9 +1480,9 @@ def managed_settings():
         try: allocation=max(1,min(float(body.get("allocation_pct",row.get("allocation_pct") or 10)),100))
         except Exception: allocation=10
         with DB_LOCK:
-            conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET lot_size=?,profit_target=?,target_profit_total=?,min_quality=?,strong_only=?,max_lot=?,max_open_trades=?,allocation_pct=?,auto_symbol=?,updated_at=? WHERE id=?",(lot,target,target,quality,strong,max_lot,max_open,allocation,auto_symbol,_now_iso(),row["id"])); conn.commit(); conn.close()
+            conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET lot_size=?,profit_target=?,target_profit_total=?,min_quality=?,strong_only=?,low_stability_entry=?,high_stability_entry=?,max_lot=?,max_open_trades=?,allocation_pct=?,auto_symbol=?,updated_at=? WHERE id=?",(lot,target,target,quality,strong,low_stability,high_stability,max_lot,max_open,allocation,auto_symbol,_now_iso(),row["id"])); conn.commit(); conn.close()
         row=_ctrader_row_for_user(user["id"])
-    return jsonify({"ok":True,"lot_size":_num(row.get("lot_size")) or .01,"profit_target":_num(row.get("target_profit_total")) if row.get("target_profit_total") is not None else (_num(row.get("profit_target")) if row.get("profit_target") is not None else 25),"target_profit_total":_num(row.get("target_profit_total")) if row.get("target_profit_total") is not None else (_num(row.get("profit_target")) if row.get("profit_target") is not None else 25),"min_quality":_num(row.get("min_quality")) if row.get("min_quality") is not None else 40,"strong_only":bool(row.get("strong_only")),"max_lot":_num(row.get("max_lot")) or 10,"max_open_trades":int(row.get("max_open_trades") or 1),"allocation_pct":_num(row.get("allocation_pct")) or 10,"auto_symbol":str(row.get("auto_symbol") or "XAUUSD").upper()})
+    return jsonify({"ok":True,"lot_size":_num(row.get("lot_size")) or .01,"profit_target":_num(row.get("target_profit_total")) if row.get("target_profit_total") is not None else (_num(row.get("profit_target")) if row.get("profit_target") is not None else 25),"target_profit_total":_num(row.get("target_profit_total")) if row.get("target_profit_total") is not None else (_num(row.get("profit_target")) if row.get("profit_target") is not None else 25),"min_quality":_num(row.get("min_quality")) if row.get("min_quality") is not None else 40,"strong_only":bool(row.get("strong_only")),"low_stability_entry":bool(row.get("low_stability_entry")),"high_stability_entry":bool(row.get("high_stability_entry")),"max_lot":_num(row.get("max_lot")) or 10,"max_open_trades":int(row.get("max_open_trades") or 1),"allocation_pct":_num(row.get("allocation_pct")) or 10,"auto_symbol":str(row.get("auto_symbol") or "XAUUSD").upper()})
 
 def _ctrader_symbol_for_order(symbols, requested):
     """Resolve the broker-specific cTrader symbol ID.
@@ -1763,6 +1771,33 @@ def _signal_matches_symbol(sig, requested_symbol):
     return asset == requested
 
 
+def _current_stability_label():
+    """Return the current 7-day KETS stability state used by the dashboard.
+
+    The state is based on the same STRONG REVERSAL history counts displayed in
+    the Bullish/Bearish Stability section, so the Auto-Trade requirement and
+    the dashboard use one definition.
+    """
+    reversals=[sig for sig in _history_items() if _signal_is_strong_reversal(sig)]
+    bullish=sum(1 for sig in reversals if str(sig.get("direction") or sig.get("signal") or "").upper()=="BUY")
+    bearish=sum(1 for sig in reversals if str(sig.get("direction") or sig.get("signal") or "").upper()=="SELL")
+    difference=abs(bullish-bearish)
+    if difference <= 4:
+        return "HIGH STABILITY"
+    if difference <= 9:
+        return "MODERATE STABILITY"
+    return "LOW STABILITY"
+
+
+def _stability_entry_allowed(row):
+    """Apply the optional Low/High Stability Auto-Trade entry requirement."""
+    low=bool(row.get("low_stability_entry"))
+    high=bool(row.get("high_stability_entry"))
+    if not low and not high:
+        return True
+    current=_current_stability_label()
+    return (low and current == "LOW STABILITY") or (high and current == "HIGH STABILITY")
+
 def _latest_history_signal(requested_symbol=None):
     """Get the newest BUY/SELL trading-bot signal visible in Signal History.
 
@@ -1894,6 +1929,12 @@ def _ctrader_autotrade_once():
                 # Target total reached: stop NEW automatic entries. Existing
                 # auto positions remain open until the KETS direction changes.
                 app.logger.info("cTrader auto-trade target total reached: %.2f / %.2f",progress,target)
+                continue
+
+            # Optional stability requirement: it only controls NEW automatic
+            # entries. Existing positions and opposite-signal exits keep the
+            # existing KETS behavior.
+            if direction != previous_direction and not _stability_entry_allowed(row):
                 continue
 
             # Current KETS rule: one automatic entry for the active direction.

@@ -901,6 +901,8 @@ async function refreshManagedStatus(){
   if($("managedAutoTrade")){ $("managedAutoTrade").disabled=!connected; $("managedAutoTrade").checked=enabled; }
   if($("autoTradeSymbol")){ $("autoTradeSymbol").disabled=!connected; if(document.activeElement!==$("autoTradeSymbol")) $("autoTradeSymbol").value=String(d.auto_symbol||"XAUUSD").toUpperCase(); }
    if($("managedStrongOnly")) $("managedStrongOnly").disabled=!connected;
+  if($("managedLowStability")) $("managedLowStability").disabled=!connected;
+  if($("managedHighStability")) $("managedHighStability").disabled=!connected;
   const ats=$("managedAutoTradeStatus");
   if(ats){ats.textContent=!connected?"NOT CONNECTED":(enabled?"RUNNING":"PAUSED / STOPPED");ats.className=enabled?"running":(connected?"paused":"");}
   if($("autoStartBtn"))$("autoStartBtn").disabled=!connected||enabled;
@@ -933,10 +935,21 @@ async function refreshManagedStatus(){
   if($("managedProfitTarget")&&document.activeElement!==$("managedProfitTarget"))$("managedProfitTarget").value=Number(st.target_profit_total??st.profit_target??25).toFixed(0);
   if($("managedMinQuality"))$("managedMinQuality").value=String(st.min_quality||40);
   if($("managedStrongOnly"))$("managedStrongOnly").checked=!!st.strong_only;
+  if($("managedLowStability"))$("managedLowStability").checked=!!st.low_stability_entry;
+  if($("managedHighStability"))$("managedHighStability").checked=!!st.high_stability_entry;
   if($("managedMaxTrades"))$("managedMaxTrades").value=String(st.max_open_trades||1);
   if($("managedAllocation"))$("managedAllocation").value=String(st.allocation_pct||10);
   if($("autoTradeSymbol")&&document.activeElement!==$("autoTradeSymbol"))$("autoTradeSymbol").value=String(d.auto_symbol||"XAUUSD").toUpperCase();
- }catch(e){setManagedActionMessage(e.message||"Unable to refresh cTrader status.","error");}
+ }catch(e){
+  // Background dashboard refresh failures are silent so a temporary
+  // Render/network delay does not cover the trading controls with red errors.
+  // Explicit button actions still show their own errors.
+  if(/timed out|Cannot reach the KETS server/i.test(e.message||"")){
+    setManagedActionMessage("","");
+    return;
+  }
+  setManagedActionMessage(e.message||"Unable to refresh cTrader status.","error");
+ }
 }
 async function refreshIntegrationStatus(){
   try{
@@ -997,6 +1010,8 @@ if($("autoTradeSymbol")) $("autoTradeSymbol").onchange=async()=>{
    target_profit_total:Number($("managedProfitTarget")?.value||25),
    min_quality:Number($("managedMinQuality")?.value||40),
    strong_only:!!$("managedStrongOnly")?.checked,
+   low_stability_entry:!!$("managedLowStability")?.checked,
+   high_stability_entry:!!$("managedHighStability")?.checked,
    max_lot:10,
    max_open_trades:Number($("managedMaxTrades")?.value||1),
    allocation_pct:Number($("managedAllocation")?.value||10),
@@ -1009,6 +1024,35 @@ if($("autoTradeSymbol")) $("autoTradeSymbol").onchange=async()=>{
  }finally{el.disabled=false;}
 };
 if($("managedStrongOnly")) $("managedStrongOnly").onchange=async()=>{await setStrongOnlyControl($("managedStrongOnly").checked);};
+async function setStabilityRequirements(){
+ const low=$("managedLowStability"), high=$("managedHighStability");
+ try{
+  if(low)low.disabled=true; if(high)high.disabled=true;
+  setManagedActionMessage("Saving stability entry requirements…","busy");
+  await api("/api/managed/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+   low_stability_entry:!!low?.checked,
+   high_stability_entry:!!high?.checked,
+   strong_only:!!$("managedStrongOnly")?.checked,
+   lot_size:Number($("managedLotSize")?.value||0.01),
+   target_profit_total:Number($("managedProfitTarget")?.value||25),
+   min_quality:Number($("managedMinQuality")?.value||40),
+   max_lot:10,
+   max_open_trades:Number($("managedMaxTrades")?.value||1),
+   allocation_pct:Number($("managedAllocation")?.value||10),
+   auto_symbol:String($("autoTradeSymbol")?.value||"XAUUSD")
+  })});
+  const parts=[]; if(low?.checked)parts.push("LOW STABILITY"); if(high?.checked)parts.push("HIGH STABILITY");
+  setManagedActionMessage(parts.length?`Auto-Trade stability requirement: ${parts.join(" + ")}.`:`Auto-Trade stability requirement is OFF.`,"ok");
+  await refreshManagedStatus();
+ }catch(e){
+  setManagedActionMessage(e.message||"Could not change stability entry requirements.","error");
+  await refreshManagedStatus();
+ }finally{
+  if(low)low.disabled=false; if(high)high.disabled=false;
+ }
+}
+if($("managedLowStability"))$("managedLowStability").onchange=()=>setStabilityRequirements();
+if($("managedHighStability"))$("managedHighStability").onchange=()=>setStabilityRequirements();
 if($("autoStartBtn")) $("autoStartBtn").onclick=async()=>{await setAutoTradeControl(true,"start");};
 if($("autoPauseBtn")) $("autoPauseBtn").onclick=async()=>{await setAutoTradeControl(false,"pause");};
 if($("autoStopBtn")) $("autoStopBtn").onclick=async()=>{await setAutoTradeControl(false,"stop");};
@@ -1049,7 +1093,7 @@ if($("saveManagedSettings"))$("saveManagedSettings").onclick=async()=>{
  const btn=$("saveManagedSettings");
  try{
   btn.disabled=true;btn.dataset.oldText=btn.textContent;btn.textContent="Saving…";setManagedActionMessage("Saving trading controls…","busy");
-  await api("/api/managed/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({lot_size:Number($("managedLotSize").value||0.01),target_profit_total:Number($("managedProfitTarget").value||25),min_quality:Number($("managedMinQuality").value||85),strong_only:$("managedStrongOnly").checked,max_lot:10,max_open_trades:Number($("managedMaxTrades").value||1),allocation_pct:Number($("managedAllocation").value||10),auto_symbol:String($("autoTradeSymbol")?.value||"XAUUSD")})});
+  await api("/api/managed/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({lot_size:Number($("managedLotSize").value||0.01),target_profit_total:Number($("managedProfitTarget").value||25),min_quality:Number($("managedMinQuality").value||85),strong_only:$("managedStrongOnly").checked,low_stability_entry:$("managedLowStability").checked,high_stability_entry:$("managedHighStability").checked,max_lot:10,max_open_trades:Number($("managedMaxTrades").value||1),allocation_pct:Number($("managedAllocation").value||10),auto_symbol:String($("autoTradeSymbol")?.value||"XAUUSD")})});
   setManagedActionMessage("Trading settings saved successfully.","ok");await refreshManagedStatus();
  }catch(e){setManagedActionMessage(e.message||"Settings could not be saved.","error");}
  finally{btn.disabled=false;btn.textContent=btn.dataset.oldText||"Save trading settings";}
