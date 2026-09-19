@@ -406,6 +406,7 @@
 .managed-toggle-row{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:14px;border:1px solid var(--line);border-radius:14px;background:#07101d;margin-top:4px}
 .managed-toggle-row strong,.managed-toggle-row small{display:block}.managed-toggle-row small{color:var(--muted);font-size:9px;line-height:1.45;margin-top:4px}
 .switch{position:relative;width:52px;height:30px;flex:0 0 52px}.switch input{position:absolute;opacity:0;width:1px;height:1px}.switch span{position:absolute;inset:0;border-radius:20px;background:#263247;cursor:pointer;transition:background .18s ease}.switch span:after{content:'';position:absolute;width:22px;height:22px;left:4px;top:4px;border-radius:50%;background:#8e9db3;transition:transform .18s ease,background .18s ease}.switch input:checked + span{background:var(--good)}.switch input:checked + span:after{transform:translateX(22px);background:#fff}.switch input:disabled + span{cursor:not-allowed;opacity:.55}.switch input:focus-visible + span{outline:2px solid var(--accent);outline-offset:3px}.auto-trade-symbol-label{margin-top:12px}.auto-trade-symbol-label select{display:block;width:100%;margin-top:6px}
+.stability-requirement-row{margin-top:8px}.stability-requirement-note{margin-top:8px}
 .managed-action-row{display:flex;gap:8px;margin-top:13px}.managed-action-row button{flex:1}
 .managed-section-head{margin-top:25px}
 .managed-trade-card{padding:20px}

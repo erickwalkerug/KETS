@@ -1,0 +1,6 @@
+KETS UI FIX
+============
+The automatic background cTrader/auto-trade dashboard refresh no longer displays
+red timeout/network error messages. Temporary refresh delays are handled silently.
+Manual/explicit trading button failures still display their own actionable errors.
+No trading logic, controls, symbols, schedules, or manual-entry behavior was changed.
