@@ -735,30 +735,18 @@ function renderManagedTrading(){
  if(status) status.textContent='NOT CONNECTED';
  if(note) note.textContent='Broker connection is not configured yet. This page will not move or hold money by itself.';
  const markets=state.signals||{};
- const activeMarkets=Array.isArray(state.status?.markets)?state.status.markets.map(x=>String(x).toUpperCase()):[];
- const weekend=(()=>{const t=Date.parse(state.status?.server_time||state.status?.time_eat||""); const d=Number.isFinite(t)?new Date(t).getUTCDay():new Date().getDay(); return d===0||d===6;})();
- const preferredKeys=weekend
-   ? ["BTC","BTCUSD"]
-   : ["GOLD","XAUUSD","XAU"];
- let raw=null;
- for(const key of preferredKeys){ if(markets[key]){ raw=markets[key]; break; } }
- if(!raw){
-   const selectedAutoSymbol=String($("autoTradeSymbol")?.value||"XAUUSD").toUpperCase();
-   raw=selectedAutoSymbol==="BTCUSD"?(markets.BTC||markets.BTCUSD):(markets.GOLD||markets.XAUUSD||markets.XAU);
- }
- const s=raw?normalizeDashboardSignal(raw):null;
+ const selectedAutoSymbol=String($("autoTradeSymbol")?.value||"XAUUSD").toUpperCase();
+ const s=selectedAutoSymbol==="BTCUSD"
+   ? (markets.BTC||markets.BTCUSD)
+   : (markets.GOLD||markets.XAUUSD||markets.XAU);
  const el=$('managedTradePlan');
  if(!el)return;
- const direction=String(s?.direction||s?.signal||'').toUpperCase();
- const price=s?.market_price??s?.price??s?.entry??s?.entry_price;
- const tp=s?.take_profit??s?.tp??s?.target??s?.target_price;
- const sl=s?.stop_loss??s?.sl??s?.stop??s?.stop_price;
- const ready=(direction==="BUY"||direction==="SELL") && Number(price)>0 && Number(tp)>0 && Number(sl)>0;
- if(!s || !ready){
-   el.innerHTML='<div class="empty">No Current KETS signal is ready right now. When KETS status is READY, this table will show the manual entry, take profit and stop loss levels.</div>';
-   return;
- }
- const market=String(s.asset||s.market||s.symbol||(weekend?"BTC":"GOLD")).toUpperCase();
+ if(!s){el.innerHTML='<div class="empty">No BUY/SELL signal is available in Signal History yet. Auto-Trade watches Signal History directly.</div>';return;}
+ const direction=String(s.direction||s.signal||'WAIT').toUpperCase();
+ const price=s.market_price??s.price??s.entry??s.entry_price;
+ const tp=s.take_profit??s.tp??s.target??s.target_price;
+ const sl=s.stop_loss??s.sl??s.stop??s.stop_price;
+ const market=String(s.asset||s.market||s.symbol||'GOLD').toUpperCase();
  const score=s.score==null?'--':Number(s.score).toFixed(0);
  const lot=Number($("managedLotSize")?.value||0.01);
  const move=Math.abs(Number(tp)-Number(price));
@@ -766,7 +754,7 @@ function renderManagedTrading(){
  const projected=Number(s.profit_per_lot_usd||0)>0?Number(s.profit_per_lot_usd)*lot:move*contract*lot;
  const target=Number($("managedProfitTarget")?.value||25);
  const targetText=Number.isFinite(projected)?`Projected at ${lot.toFixed(2)} lot: ${money(projected,"USD")} · Target profit total: ${money(target,"USD")}`:"Projected profit depends on broker contract size";
- el.innerHTML=`<div class="managed-trade-head"><div><span class="eyebrow">${esc(market)}</span><h3>${direction==='BUY'?'🟢 BUY / LONG':'🔴 SELL / SHORT'}</h3></div><span class="managed-quality">Signal strength ${esc(score)}%</span></div><div class="managed-level-grid"><div><span>ENTRY</span><b>${signalMoney(price)}</b></div><div><span>TAKE PROFIT</span><b>${signalMoney(tp)}</b></div><div><span>STOP LOSS</span><b>${signalMoney(sl)}</b></div><div><span>STATUS</span><b>READY</b></div></div><p class="managed-execution-note"><strong>${esc(targetText)}</strong><br>This is the current KETS manual-trading plan. Use these levels only when the status shows READY. Automatic trading uses its separate Signal History flow.</p>`;
+ el.innerHTML=`<div class="managed-trade-head"><div><span class="eyebrow">${esc(market)}</span><h3>${direction==='BUY'?'🟢 BUY / LONG':direction==='SELL'?'🔴 SELL / SHORT':'WAIT'}</h3></div><span class="managed-quality">Signal strength ${esc(score)}%</span></div><div class="managed-level-grid"><div><span>ENTRY</span><b>${signalMoney(price)}</b></div><div><span>TAKE PROFIT</span><b>${signalMoney(tp)}</b></div><div><span>STOP LOSS</span><b>${signalMoney(sl)}</b></div><div><span>STATUS</span><b>${esc(String(s.status||"WAITING").toUpperCase())}</b></div></div><p class="managed-execution-note"><strong>${esc(targetText)}</strong><br>This is a projection, not a profit guarantee. KETS uses the signal's TP/SL and your custom lot size; spreads, slippage and broker contract specifications can change the result.</p>`;
 }
 
 const PAGE_IDS={dashboard:"dashboardHome",live:"liveMarketsPage",plans:"accessPlansPage",payments:"paymentHistoryPage",stop:"stopLossPage",history:"bullBearHistoryPage",managed:"managedTradingPage"};
@@ -948,7 +936,7 @@ async function refreshIntegrationStatus(){
   }catch(e){}
 }
 
-setInterval(()=>{if(!$('managedTradingPage')?.classList.contains('hidden')){renderManagedTrading();refreshManagedStatus();refreshCTraderStatus();refreshIntegrationStatus();}},3000);
+setInterval(()=>{if(!$('managedTradingPage')?.classList.contains('hidden')){refreshManagedStatus();refreshCTraderStatus();refreshIntegrationStatus();}},3000);
 async function setAutoTradeControl(enabled,label){
  const buttons=[$("autoStartBtn"),$("autoPauseBtn"),$("autoStopBtn")].filter(Boolean);
  try{
@@ -1120,7 +1108,6 @@ async function refreshDisplayedSignals(){
   renderStatus();
   renderAccess();
   renderSignals();
-  renderManagedTrading();
   renderStopManagement();
   renderHistory();
 

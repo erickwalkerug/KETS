@@ -1753,48 +1753,6 @@ def _signal_is_strong_reversal(sig):
     return "STRONG REVERSAL" in text
 
 
-def _signal_execution_ready(sig, allow_history=False):
-    """Return True only for a complete BUY/SELL signal in READY state.
-
-    The live Current KETS card is intentionally time-limited, but Auto-Trade
-    may also consume a READY signal that came from the trading-bot feed and is
-    visible in Signal History.  That lets the execution worker keep working
-    even when the Current KETS endpoint/card is temporarily unavailable.
-    """
-    if not isinstance(sig, dict):
-        return False
-    direction=str(sig.get("direction") or sig.get("signal") or "").upper()
-    if direction not in {"BUY","SELL"}:
-        return False
-    if not allow_history:
-        # Current KETS is a live plan, so reject an excessively old live copy.
-        age=_signal_age_seconds(sig)
-        if age is not None and age > 180:
-            return False
-    # The existing trading bot sends qualifying signals with status=ACTIVE.
-    # For website auto-trading, a complete bot signal is execution-ready even
-    # when its display status remains ACTIVE. Prefer the explicit execution
-    # status when present so the website can keep display and execution state
-    # separate.
-    execution_status=str(sig.get("execution_status") or sig.get("entry_exit_status") or "").strip().upper()
-    if execution_status:
-        return execution_status == "READY"
-    status=str(sig.get("status") or "").strip().upper()
-    if status:
-        if status == "READY":
-            return True
-        if status == "ACTIVE":
-            entry=_num(sig.get("market_price") or sig.get("price") or sig.get("entry"))
-            tp=_num(sig.get("take_profit") or sig.get("tp") or sig.get("target"))
-            sl=_num(sig.get("stop_loss") or sig.get("sl") or sig.get("stop"))
-            return bool(entry and tp and sl)
-        return False
-    entry=_num(sig.get("market_price") or sig.get("price") or sig.get("entry"))
-    tp=_num(sig.get("take_profit") or sig.get("tp") or sig.get("target"))
-    sl=_num(sig.get("stop_loss") or sig.get("sl") or sig.get("stop"))
-    return bool(entry and tp and sl)
-
-
 def _signal_matches_symbol(sig, requested_symbol):
     requested=str(requested_symbol or "").replace("/","").replace("_","").replace("-","").upper()
     asset=str((sig or {}).get("asset") or (sig or {}).get("market") or "").replace("/","").replace("_","").replace("-","").upper()
@@ -1805,31 +1763,35 @@ def _signal_matches_symbol(sig, requested_symbol):
     return asset == requested
 
 
-def _latest_ready_history_signal(requested_symbol=None):
-    """Get the newest READY trading-bot signal visible in Signal History.
+def _latest_history_signal(requested_symbol=None):
+    """Get the newest BUY/SELL trading-bot signal visible in Signal History.
 
-    This is deliberately separate from _current_signal(): the latter powers
-    the live dashboard and can require a very recent signal, while Auto-Trade
-    needs the trading-bot history as a resilient execution source.
+    Auto-Trade intentionally does not require the dashboard's READY display
+    state. Signal History is the execution feed: any actual BUY/SELL signal
+    recorded there can trigger the existing auto-trade rules.
     """
     candidates=[]
     for sig in _history_items():
         if not _signal_matches_symbol(sig, requested_symbol):
             continue
-        if _signal_execution_ready(sig, allow_history=True):
-            candidates.append(sig)
+        direction=str(sig.get("direction") or sig.get("signal") or "").upper()
+        if direction not in {"BUY","SELL"}:
+            continue
+        candidates.append(sig)
     if not candidates:
         return None
+
     def stamp(sig):
         raw=sig.get("timestamp") or sig.get("timestamp_utc") or sig.get("created_at")
         try:
             dt=datetime.datetime.fromisoformat(str(raw).replace("Z","+00:00"))
-            if dt.tzinfo is None: dt=dt.replace(tzinfo=EAT)
+            if dt.tzinfo is None:
+                dt=dt.replace(tzinfo=EAT)
             return dt.timestamp()
         except Exception:
             return 0.0
-    return max(candidates, key=stamp)
 
+    return max(candidates, key=stamp)
 
 def _signal_id(sig):
     return str(sig.get("id") or (str(sig.get("asset"))+"-"+str(sig.get("timestamp"))))
@@ -1890,10 +1852,10 @@ def _ctrader_autotrade_once():
             # Auto-Trade uses only the trading-bot signals already stored in this
             # website's Signal History. No external signal URL is polled.
             # The entry/exit
-            # rules do not change: only READY BUY/SELL signals are actionable,
+            # rules do not change: BUY/SELL signals in Signal History are actionable,
             # repeated same-direction signals are ignored, and an opposite
             # signal closes the existing automatic position before the new one.
-            sig=_latest_ready_history_signal(auto_symbol)
+            sig=_latest_history_signal(auto_symbol)
             if not sig:
                 continue
             sid=_signal_id(sig)
@@ -1936,7 +1898,7 @@ def _ctrader_autotrade_once():
 
             # Current KETS rule: one automatic entry for the active direction.
             # Repeated same-direction signals do not open duplicate positions.
-            # Only an opposite READY signal closes the active auto position and
+            # Only an opposite signal closes the active auto position and
             # starts the new direction.
             if direction == previous_direction:
                 continue
@@ -1962,7 +1924,7 @@ def _ctrader_autotrade_once():
 
 def _ctrader_autotrade_loop():
     # The browser never owns this loop. It runs continuously in the KETS web
-    # service and consumes the same READY signals stored in Signal History.
+    # service and consumes the same BUY/SELL signals stored in Signal History.
     while True:
         try:
             _ctrader_autotrade_once()
