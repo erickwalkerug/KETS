@@ -943,6 +943,7 @@ async function refreshManagedStatus(){
   if($("atLowStability"))$("atLowStability").checked=!!st.low_stability_entry;
   if($("atHighStability"))$("atHighStability").checked=!!st.high_stability_entry;
   if($("atStrongReversal"))$("atStrongReversal").checked=!!st.strong_only;
+  if($("atSMC"))$("atSMC").checked=!!st.smc_only;
   if($("managedLowStability"))$("managedLowStability").checked=!!st.low_stability_entry;
   if($("managedHighStability"))$("managedHighStability").checked=!!st.high_stability_entry;
   if($("managedMaxTrades"))$("managedMaxTrades").value=String(st.max_open_trades||1);
@@ -1106,6 +1107,7 @@ const AUTO_TRADER_CONTROL_IDS={
   lowStability:"atLowStability",
   highStability:"atHighStability",
   strongReversal:"atStrongReversal",
+  smc:"atSMC",
   stopLoss:"atStopLoss",
   takeProfit:"atTakeProfit",
   breakEven:"atBreakEven",
@@ -1161,12 +1163,13 @@ function initAutoTraderControls(){
         opposite_signal_confirmation:!!el.checked,
         low_stability_entry:!!$("atLowStability")?.checked,
         high_stability_entry:!!$("atHighStability")?.checked,
-        strong_only:!!$("atStrongReversal")?.checked
+        strong_only:!!$("atStrongReversal")?.checked,
+        smc_only:!!$("atSMC")?.checked
       })});
       setManagedActionMessage("2-SIGNAL DIRECTION CHANGE CONFIRMATION saved.","ok");
     }catch(e){setManagedActionMessage(e.message||"Could not save the control.","error");}
   };
-  ["atLowStability","atHighStability","atStrongReversal"].forEach(id=>{
+  ["atLowStability","atHighStability","atStrongReversal","atSMC"].forEach(id=>{
     const el=$(id); if(!el)return;
     el.addEventListener("change",async()=>{
       saveAutoTraderControlState();
@@ -1175,9 +1178,10 @@ function initAutoTraderControls(){
           opposite_signal_confirmation:!!$("atTwoSignal")?.checked,
           low_stability_entry:!!$("atLowStability")?.checked,
           high_stability_entry:!!$("atHighStability")?.checked,
-          strong_only:!!$("atStrongReversal")?.checked
+          strong_only:!!$("atStrongReversal")?.checked,
+          smc_only:!!$("atSMC")?.checked
         })});
-        setManagedActionMessage(`${el.parentElement?.parentElement?.querySelector(".auto-control-name")?.textContent||"Entry control"} saved.`,"ok");
+        setManagedActionMessage(id==="atSMC" ? (el.checked ? "SMC Strategy is ON — Auto-Trader will require SMC confirmation." : "SMC Strategy is OFF — Auto-Trader uses the existing entry rules.") : `${el.parentElement?.parentElement?.querySelector(".auto-control-name")?.textContent||"Entry control"} saved.`,"ok");
       }catch(e){setManagedActionMessage(e.message||"Could not save the control.","error");}
     });
   });
