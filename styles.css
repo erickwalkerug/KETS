@@ -430,3 +430,14 @@
 .ctrader-account-picker select{width:100%;margin-bottom:8px}
 .ctrader-account-picker .primary-btn{margin-top:10px;width:100%}
 .gb-tracking-title{font-size:42px;font-weight:1000;letter-spacing:2.5px;line-height:1;text-transform:uppercase;margin:0 0 22px;color:var(--text);text-align:center}.gb-tracking-title-inside{text-align:left;margin:0 0 14px;font-size:38px}.
+.auto-trader-controls-page{display:grid;gap:14px;max-width:900px;margin:0 auto}
+.auto-control-section{padding:20px}
+.auto-control-row{display:flex;align-items:center;justify-content:space-between;gap:18px;padding:16px 0;border-bottom:1px solid #17253a}
+.auto-control-row:last-child{border-bottom:0;padding-bottom:2px}
+.auto-control-name{font-weight:850;font-size:13px;letter-spacing:.1px}
+.auto-position-actions{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:14px}
+.auto-position-btn{min-height:52px;width:100%}
+@media(max-width:680px){
+  .auto-position-actions{grid-template-columns:1fr}
+  .auto-control-name{font-size:12px;line-height:1.45}
+}

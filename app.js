@@ -769,7 +769,7 @@ function renderManagedTrading(){
  el.innerHTML=`<div class="managed-trade-head"><div><span class="eyebrow">${esc(market)}</span><h3>${direction==='BUY'?'🟢 BUY / LONG':'🔴 SELL / SHORT'}</h3></div><span class="managed-quality">Signal strength ${esc(score)}%</span></div><div class="managed-level-grid"><div><span>ENTRY</span><b>${signalMoney(price)}</b></div><div><span>TAKE PROFIT</span><b>${signalMoney(tp)}</b></div><div><span>STOP LOSS</span><b>${signalMoney(sl)}</b></div><div><span>STATUS</span><b>READY</b></div></div><p class="managed-execution-note"><strong>${esc(targetText)}</strong><br>This is the current KETS manual-trading plan. Use these levels only when the status shows READY. Automatic trading uses its separate Signal History flow.</p>`;
 }
 
-const PAGE_IDS={dashboard:"dashboardHome",live:"liveMarketsPage",plans:"accessPlansPage",payments:"paymentHistoryPage",stop:"stopLossPage",history:"bullBearHistoryPage",managed:"managedTradingPage"};
+const PAGE_IDS={dashboard:"dashboardHome",live:"liveMarketsPage",plans:"accessPlansPage",payments:"paymentHistoryPage",stop:"stopLossPage",history:"bullBearHistoryPage",managed:"managedTradingPage",autoTrader:"autoTraderPage"};
 function showPage(name,updateHash=true){
  Object.values(PAGE_IDS).forEach(id=>$(id)?.classList.add("hidden"));
  const target=$(PAGE_IDS[name]||PAGE_IDS.dashboard);
@@ -778,7 +778,7 @@ function showPage(name,updateHash=true){
  if(name==="stop")renderStopManagement();
  if(name==="managed"){renderManagedTrading();refreshCTraderStatus();}
  if(updateHash){
-   const hash={live:"#live-markets",plans:"#access-plans",payments:"#payment-history",stop:"#stop-loss-management",history:"#bullish-bearish-history",managed:"#managed-trading",dashboard:""}[name]||"";
+   const hash={live:"#live-markets",plans:"#access-plans",payments:"#payment-history",stop:"#stop-loss-management",history:"#bullish-bearish-history",managed:"#managed-trading",autoTrader:"#auto-trader",dashboard:""}[name]||"";
    try{history.replaceState({},document.title,location.pathname+location.search+hash);}catch(e){}
  }
  window.scrollTo({top:0,behavior:"smooth"});
@@ -793,6 +793,7 @@ function handleHistoryRoute(){
  else if(h==="#payment-history")showPage("payments",false);
  else if(h==="#stop-loss-management")showPage("stop",false);
  else if(h==="#managed-trading")showPage("managed",false);
+ else if(h==="#auto-trader")showPage("autoTrader",false);
  else showPage("dashboard",false);
 }
 
@@ -804,6 +805,7 @@ if($("paymentHistoryBtn")) $("paymentHistoryBtn").onclick=()=>showPage("payments
 if($("stopLossBtn")) $("stopLossBtn").onclick=()=>showPage("stop");
 if($("bullBearHistoryBtn")) $("bullBearHistoryBtn").onclick=showBullBearHistoryPage;
 if($("managedTradingBtn")) $("managedTradingBtn").onclick=()=>showPage("managed");
+if($("autoTraderBtn")) $("autoTraderBtn").onclick=()=>showPage("autoTrader");
 if($("dashboardLiveMarkets")) $("dashboardLiveMarkets").onclick=()=>showPage("live");
 if($("dashboardStopLoss")) $("dashboardStopLoss").onclick=()=>showPage("stop");
 if($("dashboardAccessPlans")) $("dashboardAccessPlans").onclick=()=>showPage("plans");
@@ -936,6 +938,11 @@ async function refreshManagedStatus(){
   if($("managedProfitTarget")&&document.activeElement!==$("managedProfitTarget"))$("managedProfitTarget").value=Number(st.target_profit_total??st.profit_target??25).toFixed(0);
   if($("managedMinQuality"))$("managedMinQuality").value=String(st.min_quality||40);
   if($("managedStrongOnly"))$("managedStrongOnly").checked=!!st.strong_only;
+  if($("atAutoTrade"))$("atAutoTrade").checked=!!d.auto_enabled;
+  if($("atTwoSignal"))$("atTwoSignal").checked=!!st.opposite_signal_confirmation;
+  if($("atLowStability"))$("atLowStability").checked=!!st.low_stability_entry;
+  if($("atHighStability"))$("atHighStability").checked=!!st.high_stability_entry;
+  if($("atStrongReversal"))$("atStrongReversal").checked=!!st.strong_only;
   if($("managedLowStability"))$("managedLowStability").checked=!!st.low_stability_entry;
   if($("managedHighStability"))$("managedHighStability").checked=!!st.high_stability_entry;
   if($("managedMaxTrades"))$("managedMaxTrades").value=String(st.max_open_trades||1);
@@ -1091,6 +1098,92 @@ if($("managedOppositeConfirmation"))$("managedOppositeConfirmation").onchange=()
 if($("autoStartBtn")) $("autoStartBtn").onclick=async()=>{await setAutoTradeControl(true,"start");};
 if($("autoPauseBtn")) $("autoPauseBtn").onclick=async()=>{await setAutoTradeControl(false,"pause");};
 if($("autoStopBtn")) $("autoStopBtn").onclick=async()=>{await setAutoTradeControl(false,"stop");};
+
+const AUTO_TRADER_CONTROL_KEY="kets_auto_trader_controls";
+const AUTO_TRADER_CONTROL_IDS={
+  autoTrade:"atAutoTrade",
+  twoSignal:"atTwoSignal",
+  lowStability:"atLowStability",
+  highStability:"atHighStability",
+  strongReversal:"atStrongReversal",
+  stopLoss:"atStopLoss",
+  takeProfit:"atTakeProfit",
+  breakEven:"atBreakEven",
+  trailingStop:"atTrailingStop",
+  profitProtection:"atProfitProtection",
+  maxLossProtection:"atMaxLossProtection"
+};
+function loadAutoTraderControlState(){
+  try{return JSON.parse(localStorage.getItem(AUTO_TRADER_CONTROL_KEY)||"{}")||{};}catch(e){return {};}
+}
+function saveAutoTraderControlState(){
+  const out={};
+  Object.entries(AUTO_TRADER_CONTROL_IDS).forEach(([key,id])=>{const el=$(id);if(el)out[key]=!!el.checked;});
+  try{localStorage.setItem(AUTO_TRADER_CONTROL_KEY,JSON.stringify(out));}catch(e){}
+}
+function renderAutoTraderControls(){
+  const s=loadAutoTraderControlState();
+  Object.entries(AUTO_TRADER_CONTROL_IDS).forEach(([key,id])=>{
+    const el=$(id); if(el)el.checked=!!s[key];
+  });
+}
+function initAutoTraderControls(){
+  Object.values(AUTO_TRADER_CONTROL_IDS).forEach(id=>{
+    const el=$(id);
+    if(el)el.onchange=saveAutoTraderControlState;
+  });
+  if($("atCloseAll"))$("atCloseAll").onclick=async()=>{
+    if(!confirm("Close all trades?"))return;
+    try{
+      await api("/api/managed/close-all",{method:"POST"});
+      setManagedActionMessage("Close-all request sent.","ok");
+    }catch(e){setManagedActionMessage(e.message||"Close-all failed.","error");}
+  };
+  if($("atEmergencyStop"))$("atEmergencyStop").onclick=async()=>{
+    if(!confirm("Stop automatic trading?"))return;
+    try{
+      await api("/api/managed/toggle",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({enabled:false})});
+      const el=$("atAutoTrade"); if(el){el.checked=false;saveAutoTraderControlState();}
+      setManagedActionMessage("Automatic trading is OFF.","ok");
+    }catch(e){setManagedActionMessage(e.message||"Emergency stop failed.","error");}
+  };
+  if($("atMoveBreakEven"))$("atMoveBreakEven").onclick=()=>setManagedActionMessage("MOVE SL TO BREAK-EVEN is selected.","ok");
+  if($("atPartialClose"))$("atPartialClose").onclick=()=>setManagedActionMessage("PARTIAL CLOSE is selected.","ok");
+  if($("atAutoTrade"))$("atAutoTrade").onchange=async()=>{
+    saveAutoTraderControlState();
+    await setAutoTradeControl($("atAutoTrade").checked,"auto trader");
+  };
+  if($("atTwoSignal"))$("atTwoSignal").onchange=async()=>{
+    saveAutoTraderControlState();
+    const el=$("atTwoSignal");
+    try{
+      await api("/api/managed/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+        opposite_signal_confirmation:!!el.checked,
+        low_stability_entry:!!$("atLowStability")?.checked,
+        high_stability_entry:!!$("atHighStability")?.checked,
+        strong_only:!!$("atStrongReversal")?.checked
+      })});
+      setManagedActionMessage("2-SIGNAL DIRECTION CHANGE CONFIRMATION saved.","ok");
+    }catch(e){setManagedActionMessage(e.message||"Could not save the control.","error");}
+  };
+  ["atLowStability","atHighStability","atStrongReversal"].forEach(id=>{
+    const el=$(id); if(!el)return;
+    el.addEventListener("change",async()=>{
+      saveAutoTraderControlState();
+      try{
+        await api("/api/managed/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+          opposite_signal_confirmation:!!$("atTwoSignal")?.checked,
+          low_stability_entry:!!$("atLowStability")?.checked,
+          high_stability_entry:!!$("atHighStability")?.checked,
+          strong_only:!!$("atStrongReversal")?.checked
+        })});
+        setManagedActionMessage(`${el.parentElement?.parentElement?.querySelector(".auto-control-name")?.textContent||"Entry control"} saved.`,"ok");
+      }catch(e){setManagedActionMessage(e.message||"Could not save the control.","error");}
+    });
+  });
+}
+initAutoTraderControls();
+
 async function manualTrade(direction){
  const btn=direction==="BUY"?$("manualBuyBtn"):$("manualSellBtn");
  try{

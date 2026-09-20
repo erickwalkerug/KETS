@@ -64,7 +64,7 @@
 <div id="app" class="hidden">
 <header class="topbar">
   <div class="brand"><div><strong>KETS</strong><span>Market Signal Intelligence</span></div></div>
-  <div class="header-actions"><span class="header-status"><i></i><span id="engineStatus">Connecting...</span></span><div class="page-nav" aria-label="KETS pages"><button class="ghost-btn page-nav-btn" id="liveMarketsBtn">Live Markets</button><button class="ghost-btn page-nav-btn" id="accessPlansBtn">Access Plans</button><button class="ghost-btn page-nav-btn" id="paymentHistoryBtn">Payment History</button><button class="ghost-btn page-nav-btn" id="stopLossBtn">Stop Loss</button><button class="ghost-btn page-nav-btn" id="bullBearHistoryBtn">Bullish / Bearish History</button><button class="ghost-btn page-nav-btn" id="managedTradingBtn">G&B Tracking System</button></div><button class="profile-mini" id="profileBtn"><span id="miniName">Profile</span></button></div>
+  <div class="header-actions"><span class="header-status"><i></i><span id="engineStatus">Connecting...</span></span><div class="page-nav" aria-label="KETS pages"><button class="ghost-btn page-nav-btn" id="liveMarketsBtn">Live Markets</button><button class="ghost-btn page-nav-btn" id="accessPlansBtn">Access Plans</button><button class="ghost-btn page-nav-btn" id="paymentHistoryBtn">Payment History</button><button class="ghost-btn page-nav-btn" id="stopLossBtn">Stop Loss</button><button class="ghost-btn page-nav-btn" id="bullBearHistoryBtn">Bullish / Bearish History</button><button class="ghost-btn page-nav-btn" id="managedTradingBtn">G&B Tracking System</button><button class="ghost-btn page-nav-btn" id="autoTraderBtn">🤖 Auto Trader</button></div><button class="profile-mini" id="profileBtn"><span id="miniName">Profile</span></button></div>
 </header>
 
 <main>
@@ -226,6 +226,86 @@
 
   <section class="section-head managed-section-head"><div><span class="eyebrow">TRADE HISTORY</span><h2>Entries, exits &amp; P/L</h2></div></section>
   <section class="history-card" id="managedTradeHistory"><div class="empty">No managed trades recorded yet.</div></section>
+</section>
+
+
+<section id="autoTraderPage" class="history-page hidden">
+  <div class="history-page-head">
+    <div>
+      <span class="eyebrow">KETS AUTO TRADER</span>
+      <h2>🤖 KETS AUTO TRADER</h2>
+      <p class="muted">Auto Trader controls.</p>
+    </div>
+    <button class="ghost-btn page-back-btn" data-page="dashboard">← Dashboard</button>
+  </div>
+
+  <section class="auto-trader-controls-page">
+    <article class="panel auto-control-section">
+      <div class="panel-title"><h3>🎛️ MAIN CONTROL</h3></div>
+      <div class="auto-control-row">
+        <div class="auto-control-name">🟢 AUTO TRADE — ON / OFF</div>
+        <label class="switch" title="AUTO TRADE — ON / OFF"><input id="atAutoTrade" type="checkbox"><span></span></label>
+      </div>
+    </article>
+
+    <article class="panel auto-control-section">
+      <div class="panel-title"><h3>📊 ENTRY REQUIREMENTS</h3></div>
+      <div class="auto-control-row">
+        <div class="auto-control-name">🔄 2-SIGNAL DIRECTION CHANGE CONFIRMATION — ON / OFF</div>
+        <label class="switch" title="2-SIGNAL DIRECTION CHANGE CONFIRMATION — ON / OFF"><input id="atTwoSignal" type="checkbox"><span></span></label>
+      </div>
+      <div class="auto-control-row">
+        <div class="auto-control-name">📉 LOW STABILITY ENTRY — ON / OFF</div>
+        <label class="switch" title="LOW STABILITY ENTRY — ON / OFF"><input id="atLowStability" type="checkbox"><span></span></label>
+      </div>
+      <div class="auto-control-row">
+        <div class="auto-control-name">📈 HIGH STABILITY ENTRY — ON / OFF</div>
+        <label class="switch" title="HIGH STABILITY ENTRY — ON / OFF"><input id="atHighStability" type="checkbox"><span></span></label>
+      </div>
+      <div class="auto-control-row">
+        <div class="auto-control-name">🔥 STRONG REVERSAL ENTRY — ON / OFF</div>
+        <label class="switch" title="STRONG REVERSAL ENTRY — ON / OFF"><input id="atStrongReversal" type="checkbox"><span></span></label>
+      </div>
+    </article>
+
+    <article class="panel auto-control-section">
+      <div class="panel-title"><h3>🛡️ RISK MANAGEMENT</h3></div>
+      <div class="auto-control-row">
+        <div class="auto-control-name">🛑 STOP LOSS — ON / OFF</div>
+        <label class="switch"><input id="atStopLoss" type="checkbox"><span></span></label>
+      </div>
+      <div class="auto-control-row">
+        <div class="auto-control-name">🎯 TAKE PROFIT — ON / OFF</div>
+        <label class="switch"><input id="atTakeProfit" type="checkbox"><span></span></label>
+      </div>
+      <div class="auto-control-row">
+        <div class="auto-control-name">🛡️ BREAK-EVEN — ON / OFF</div>
+        <label class="switch"><input id="atBreakEven" type="checkbox"><span></span></label>
+      </div>
+      <div class="auto-control-row">
+        <div class="auto-control-name">📈 TRAILING STOP — ON / OFF</div>
+        <label class="switch"><input id="atTrailingStop" type="checkbox"><span></span></label>
+      </div>
+      <div class="auto-control-row">
+        <div class="auto-control-name">💰 PROFIT PROTECTION — ON / OFF</div>
+        <label class="switch"><input id="atProfitProtection" type="checkbox"><span></span></label>
+      </div>
+      <div class="auto-control-row">
+        <div class="auto-control-name">⚠️ MAXIMUM LOSS PROTECTION — ON / OFF</div>
+        <label class="switch"><input id="atMaxLossProtection" type="checkbox"><span></span></label>
+      </div>
+    </article>
+
+    <article class="panel auto-control-section">
+      <div class="panel-title"><h3>💼 POSITION MANAGEMENT</h3></div>
+      <div class="auto-position-actions">
+        <button class="ghost-btn auto-position-btn" id="atMoveBreakEven">🔒 MOVE SL TO BREAK-EVEN</button>
+        <button class="ghost-btn auto-position-btn" id="atPartialClose">✂️ PARTIAL CLOSE</button>
+        <button class="danger-btn auto-position-btn" id="atCloseAll">🚨 CLOSE ALL TRADES</button>
+        <button class="danger-btn auto-position-btn" id="atEmergencyStop">⛔ EMERGENCY STOP</button>
+      </div>
+    </article>
+  </section>
 </section>
 
 <section id="bullBearHistoryPage" class="history-page hidden">
