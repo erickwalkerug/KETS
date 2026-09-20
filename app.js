@@ -903,6 +903,7 @@ async function refreshManagedStatus(){
    if($("managedStrongOnly")) $("managedStrongOnly").disabled=!connected;
   if($("managedLowStability")) $("managedLowStability").disabled=!connected;
   if($("managedHighStability")) $("managedHighStability").disabled=!connected;
+  if($("managedOppositeConfirmation")) $("managedOppositeConfirmation").disabled=!connected;
   const ats=$("managedAutoTradeStatus");
   if(ats){ats.textContent=!connected?"NOT CONNECTED":(enabled?"RUNNING":"PAUSED / STOPPED");ats.className=enabled?"running":(connected?"paused":"");}
   if($("autoStartBtn"))$("autoStartBtn").disabled=!connected||enabled;
@@ -1012,6 +1013,7 @@ if($("autoTradeSymbol")) $("autoTradeSymbol").onchange=async()=>{
    strong_only:!!$("managedStrongOnly")?.checked,
    low_stability_entry:!!$("managedLowStability")?.checked,
    high_stability_entry:!!$("managedHighStability")?.checked,
+   opposite_signal_confirmation:!!$("managedOppositeConfirmation")?.checked,
    max_lot:10,
    max_open_trades:Number($("managedMaxTrades")?.value||1),
    allocation_pct:Number($("managedAllocation")?.value||10),
@@ -1032,6 +1034,7 @@ async function setStabilityRequirements(){
   await api("/api/managed/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
    low_stability_entry:!!low?.checked,
    high_stability_entry:!!high?.checked,
+   opposite_signal_confirmation:!!$("managedOppositeConfirmation")?.checked,
    strong_only:!!$("managedStrongOnly")?.checked,
    lot_size:Number($("managedLotSize")?.value||0.01),
    target_profit_total:Number($("managedProfitTarget")?.value||25),
@@ -1053,6 +1056,38 @@ async function setStabilityRequirements(){
 }
 if($("managedLowStability"))$("managedLowStability").onchange=()=>setStabilityRequirements();
 if($("managedHighStability"))$("managedHighStability").onchange=()=>setStabilityRequirements();
+async function setOppositeSignalConfirmation(){
+ const el=$("managedOppositeConfirmation");
+ try{
+  if(el)el.disabled=true;
+  setManagedActionMessage(el?.checked
+   ?"Saving Opposite Signal Confirmation…"
+   :"Disabling Opposite Signal Confirmation…","busy");
+  await api("/api/managed/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+   opposite_signal_confirmation:!!el?.checked,
+   low_stability_entry:!!$("managedLowStability")?.checked,
+   high_stability_entry:!!$("managedHighStability")?.checked,
+   strong_only:!!$("managedStrongOnly")?.checked,
+   lot_size:Number($("managedLotSize")?.value||0.01),
+   target_profit_total:Number($("managedProfitTarget")?.value||25),
+   min_quality:Number($("managedMinQuality")?.value||40),
+   max_lot:10,
+   max_open_trades:Number($("managedMaxTrades")?.value||1),
+   allocation_pct:Number($("managedAllocation")?.value||10),
+   auto_symbol:String($("autoTradeSymbol")?.value||"XAUUSD")
+  })});
+  setManagedActionMessage(el?.checked
+   ?"Opposite Signal Confirmation is ON — KETS waits for a second distinct opposite signal before reversing."
+   :"Opposite Signal Confirmation is OFF — KETS may reverse on the first opposite signal.","ok");
+  await refreshManagedStatus();
+ }catch(e){
+  setManagedActionMessage(e.message||"Could not change Opposite Signal Confirmation.","error");
+  await refreshManagedStatus();
+ }finally{
+  if(el)el.disabled=false;
+ }
+}
+if($("managedOppositeConfirmation"))$("managedOppositeConfirmation").onchange=()=>setOppositeSignalConfirmation();
 if($("autoStartBtn")) $("autoStartBtn").onclick=async()=>{await setAutoTradeControl(true,"start");};
 if($("autoPauseBtn")) $("autoPauseBtn").onclick=async()=>{await setAutoTradeControl(false,"pause");};
 if($("autoStopBtn")) $("autoStopBtn").onclick=async()=>{await setAutoTradeControl(false,"stop");};

@@ -402,6 +402,7 @@ def init_db():
                     ("strong_only", "INTEGER DEFAULT 0"),
                     ("low_stability_entry", "INTEGER DEFAULT 0"),
                     ("high_stability_entry", "INTEGER DEFAULT 0"),
+                    ("opposite_signal_confirmation", "INTEGER DEFAULT 0"),
                     ("max_lot", "DOUBLE PRECISION DEFAULT 10.0"),
                     ("max_open_trades", "INTEGER DEFAULT 1"),
                     ("allocation_pct", "DOUBLE PRECISION DEFAULT 10"),
@@ -414,12 +415,15 @@ def init_db():
                     ("strong_only", "INTEGER DEFAULT 0"),
                     ("low_stability_entry", "INTEGER DEFAULT 0"),
                     ("high_stability_entry", "INTEGER DEFAULT 0"),
+                    ("opposite_signal_confirmation", "INTEGER DEFAULT 0"),
                     ("max_lot", "DOUBLE PRECISION DEFAULT 10.0"),
                     ("max_open_trades", "INTEGER DEFAULT 1"),
                     ("allocation_pct", "DOUBLE PRECISION DEFAULT 10"),
                     ("auto_symbol", "TEXT DEFAULT 'XAUUSD'"),
                     ("target_profit_total", "DOUBLE PRECISION DEFAULT 25"),
                     ("auto_direction", "TEXT"),
+                    ("pending_auto_direction", "TEXT"),
+                    ("pending_auto_signal_id", "TEXT"),
                     ("auto_cycle_start_equity", "DOUBLE PRECISION DEFAULT 0"),
                     ("auto_profit_total", "DOUBLE PRECISION DEFAULT 0"),
                     ("auto_entry_signal_id", "TEXT"),
@@ -1431,6 +1435,9 @@ def managed_status():
             "profit_target":_num(row.get("target_profit_total")) if row.get("target_profit_total") is not None else (_num(row.get("profit_target")) if row.get("profit_target") is not None else 25),
             "target_profit_total":_num(row.get("target_profit_total")) if row.get("target_profit_total") is not None else (_num(row.get("profit_target")) if row.get("profit_target") is not None else 25),
             "auto_direction":str(row.get("auto_direction") or ""),
+            "pending_auto_direction":str(row.get("pending_auto_direction") or ""),
+            "pending_auto_signal_id":str(row.get("pending_auto_signal_id") or ""),
+            "opposite_signal_confirmation":bool(row.get("opposite_signal_confirmation")),
             "auto_profit_total":_num(row.get("auto_profit_total")),
             "min_quality":_num(row.get("min_quality")) if row.get("min_quality") is not None else 40,
             "strong_only":bool(row.get("strong_only")),
@@ -1471,6 +1478,7 @@ def managed_settings():
         strong=1 if bool(body.get("strong_only",row.get("strong_only") or 0)) else 0
         low_stability=1 if bool(body.get("low_stability_entry",row.get("low_stability_entry") or 0)) else 0
         high_stability=1 if bool(body.get("high_stability_entry",row.get("high_stability_entry") or 0)) else 0
+        opposite_confirmation=1 if bool(body.get("opposite_signal_confirmation",row.get("opposite_signal_confirmation") or 0)) else 0
         auto_symbol=str(body.get("auto_symbol",row.get("auto_symbol") or "XAUUSD")).replace("/","").replace("_","").replace("-","").upper()
         if auto_symbol not in {"XAUUSD","BTCUSD"}: auto_symbol="XAUUSD"
         try: max_lot=max(lot,min(float(body.get("max_lot",row.get("max_lot") or 10)),10))
@@ -1480,9 +1488,9 @@ def managed_settings():
         try: allocation=max(1,min(float(body.get("allocation_pct",row.get("allocation_pct") or 10)),100))
         except Exception: allocation=10
         with DB_LOCK:
-            conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET lot_size=?,profit_target=?,target_profit_total=?,min_quality=?,strong_only=?,low_stability_entry=?,high_stability_entry=?,max_lot=?,max_open_trades=?,allocation_pct=?,auto_symbol=?,updated_at=? WHERE id=?",(lot,target,target,quality,strong,low_stability,high_stability,max_lot,max_open,allocation,auto_symbol,_now_iso(),row["id"])); conn.commit(); conn.close()
+            conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET lot_size=?,profit_target=?,target_profit_total=?,min_quality=?,strong_only=?,low_stability_entry=?,high_stability_entry=?,opposite_signal_confirmation=?,max_lot=?,max_open_trades=?,allocation_pct=?,auto_symbol=?,updated_at=? WHERE id=?",(lot,target,target,quality,strong,low_stability,high_stability,opposite_confirmation,max_lot,max_open,allocation,auto_symbol,_now_iso(),row["id"])); conn.commit(); conn.close()
         row=_ctrader_row_for_user(user["id"])
-    return jsonify({"ok":True,"lot_size":_num(row.get("lot_size")) or .01,"profit_target":_num(row.get("target_profit_total")) if row.get("target_profit_total") is not None else (_num(row.get("profit_target")) if row.get("profit_target") is not None else 25),"target_profit_total":_num(row.get("target_profit_total")) if row.get("target_profit_total") is not None else (_num(row.get("profit_target")) if row.get("profit_target") is not None else 25),"min_quality":_num(row.get("min_quality")) if row.get("min_quality") is not None else 40,"strong_only":bool(row.get("strong_only")),"low_stability_entry":bool(row.get("low_stability_entry")),"high_stability_entry":bool(row.get("high_stability_entry")),"max_lot":_num(row.get("max_lot")) or 10,"max_open_trades":int(row.get("max_open_trades") or 1),"allocation_pct":_num(row.get("allocation_pct")) or 10,"auto_symbol":str(row.get("auto_symbol") or "XAUUSD").upper()})
+    return jsonify({"ok":True,"lot_size":_num(row.get("lot_size")) or .01,"profit_target":_num(row.get("target_profit_total")) if row.get("target_profit_total") is not None else (_num(row.get("profit_target")) if row.get("profit_target") is not None else 25),"target_profit_total":_num(row.get("target_profit_total")) if row.get("target_profit_total") is not None else (_num(row.get("profit_target")) if row.get("profit_target") is not None else 25),"min_quality":_num(row.get("min_quality")) if row.get("min_quality") is not None else 40,"strong_only":bool(row.get("strong_only")),"low_stability_entry":bool(row.get("low_stability_entry")),"high_stability_entry":bool(row.get("high_stability_entry")),"opposite_signal_confirmation":bool(row.get("opposite_signal_confirmation")),"max_lot":_num(row.get("max_lot")) or 10,"max_open_trades":int(row.get("max_open_trades") or 1),"allocation_pct":_num(row.get("allocation_pct")) or 10,"auto_symbol":str(row.get("auto_symbol") or "XAUUSD").upper()})
 
 def _ctrader_symbol_for_order(symbols, requested):
     """Resolve the broker-specific cTrader symbol ID.
@@ -1888,8 +1896,8 @@ def _ctrader_autotrade_once():
             # website's Signal History. No external signal URL is polled.
             # The entry/exit
             # rules do not change: BUY/SELL signals in Signal History are actionable,
-            # repeated same-direction signals are ignored, and an opposite
-            # signal closes the existing automatic position before the new one.
+            # repeated same-direction signals are ignored. If opposite-signal
+            # confirmation is ON, reversal requires two distinct opposite signals.
             sig=_latest_history_signal(auto_symbol)
             if not sig:
                 continue
@@ -1912,14 +1920,53 @@ def _ctrader_autotrade_once():
             previous_direction=str(row.get("auto_direction") or "").upper()
             previous_sid=str(row.get("auto_entry_signal_id") or "")
 
-            # A signal change is the ONLY automatic exit condition. Close KETS
-            # auto positions before entering the new direction.
+            # Optional two-signal confirmation for reversals:
+            # current SELL + first BUY = keep SELL open;
+            # second distinct BUY signal = close SELL and enter BUY.
+            # The same rule applies BUY -> SELL.
+            confirmation_on=bool(row.get("opposite_signal_confirmation"))
+            pending_direction=str(row.get("pending_auto_direction") or "").upper()
+            pending_sid=str(row.get("pending_auto_signal_id") or "")
+
+            if previous_direction and direction == previous_direction:
+                # A same-direction signal cancels an unfinished reversal request.
+                if pending_direction:
+                    with DB_LOCK:
+                        conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET pending_auto_direction=NULL,pending_auto_signal_id=NULL,updated_at=? WHERE id=?",(_now_iso(),row["id"])); conn.commit(); conn.close()
+                pending_direction=""
+                pending_sid=""
+
             if previous_direction and direction != previous_direction:
-                _ctrader_close_positions(row, auto_only=True)
-                with DB_LOCK:
-                    conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET auto_direction=NULL,auto_entry_signal_id=NULL,last_signal_id=NULL,last_error=NULL,updated_at=? WHERE id=?",(_now_iso(),row["id"])); conn.commit(); conn.close()
-                previous_direction=""
-                previous_sid=""
+                # Entry requirements must be satisfied before an opposite signal
+                # is counted as a valid confirmation; otherwise the existing
+                # position remains protected and is not closed.
+                if not _stability_entry_allowed(row):
+                    continue
+
+                if confirmation_on:
+                    if pending_direction == direction and pending_sid and sid != pending_sid:
+                        _ctrader_close_positions(row, auto_only=True)
+                        with DB_LOCK:
+                            conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET auto_direction=NULL,auto_entry_signal_id=NULL,pending_auto_direction=NULL,pending_auto_signal_id=NULL,last_signal_id=NULL,last_error=NULL,updated_at=? WHERE id=?",(_now_iso(),row["id"])); conn.commit(); conn.close()
+                        previous_direction=""
+                        previous_sid=""
+                        pending_direction=""
+                        pending_sid=""
+                    else:
+                        # First opposite signal: remember it but do not close
+                        # the current automatic position.
+                        if pending_direction != direction or pending_sid != sid:
+                            with DB_LOCK:
+                                conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET pending_auto_direction=?,pending_auto_signal_id=?,updated_at=? WHERE id=?",(direction,sid,_now_iso(),row["id"])); conn.commit(); conn.close()
+                        continue
+                else:
+                    _ctrader_close_positions(row, auto_only=True)
+                    with DB_LOCK:
+                        conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET auto_direction=NULL,auto_entry_signal_id=NULL,pending_auto_direction=NULL,pending_auto_signal_id=NULL,last_signal_id=NULL,last_error=NULL,updated_at=? WHERE id=?",(_now_iso(),row["id"])); conn.commit(); conn.close()
+                    previous_direction=""
+                    previous_sid=""
+                    pending_direction=""
+                    pending_sid=""
 
             progress=_auto_profit_progress(row)
             target=_num(row.get("target_profit_total")) if row.get("target_profit_total") is not None else (_num(row.get("profit_target")) or 25)
@@ -1929,12 +1976,6 @@ def _ctrader_autotrade_once():
                 # Target total reached: stop NEW automatic entries. Existing
                 # auto positions remain open until the KETS direction changes.
                 app.logger.info("cTrader auto-trade target total reached: %.2f / %.2f",progress,target)
-                continue
-
-            # Optional stability requirement: it only controls NEW automatic
-            # entries. Existing positions and opposite-signal exits keep the
-            # existing KETS behavior.
-            if direction != previous_direction and not _stability_entry_allowed(row):
                 continue
 
             # Current KETS rule: one automatic entry for the active direction.

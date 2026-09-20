@@ -1,0 +1,18 @@
+KETS AUTO-TRADE OPPOSITE SIGNAL CONFIRMATION
+
+New control:
+- Opposite Signal Confirmation ON/OFF
+
+When ON:
+- Existing SELL + first distinct BUY signal = keep SELL open and wait.
+- Second distinct BUY signal = close the automatic SELL and enter BUY.
+- Existing BUY + first distinct SELL signal = keep BUY open and wait.
+- Second distinct SELL signal = close the automatic BUY and enter SELL.
+- A same-direction signal cancels an unfinished opposite-signal confirmation.
+- Stability entry requirements are checked before an opposite signal can be counted.
+- Manual trading is unchanged.
+
+When OFF:
+- Existing KETS behavior remains: the first qualifying opposite signal can reverse the automatic position.
+
+The setting is stored in the cTrader connection database and survives page refresh/restart.
