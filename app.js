@@ -905,6 +905,8 @@ async function refreshManagedStatus(){
    if($("managedStrongOnly")) $("managedStrongOnly").disabled=!connected;
   if($("managedLowStability")) $("managedLowStability").disabled=!connected;
   if($("managedHighStability")) $("managedHighStability").disabled=!connected;
+  if($("atBreakEven")) { $("atBreakEven").disabled=!connected; if(d.settings) $("atBreakEven").checked=!!d.settings.break_even_enabled; }
+  if($("atTrailingStop")) { $("atTrailingStop").disabled=!connected; if(d.settings) $("atTrailingStop").checked=!!d.settings.trailing_stop_enabled; }
   if($("managedOppositeConfirmation")) $("managedOppositeConfirmation").disabled=!connected;
   const ats=$("managedAutoTradeStatus");
   if(ats){ats.textContent=!connected?"NOT CONNECTED":(enabled?"RUNNING":"PAUSED / STOPPED");ats.className=enabled?"running":(connected?"paused":"");}
@@ -1149,7 +1151,12 @@ function initAutoTraderControls(){
       setManagedActionMessage("Automatic trading is OFF.","ok");
     }catch(e){setManagedActionMessage(e.message||"Emergency stop failed.","error");}
   };
-  if($("atMoveBreakEven"))$("atMoveBreakEven").onclick=()=>setManagedActionMessage("MOVE SL TO BREAK-EVEN is selected.","ok");
+  if($("atMoveBreakEven"))$("atMoveBreakEven").onclick=async()=>{
+    try{
+      await api("/api/managed/move-break-even",{method:"POST"});
+      setManagedActionMessage("Break-Even request sent to cTrader.","ok");
+    }catch(e){setManagedActionMessage(e.message||"Break-Even request failed.","error");}
+  };
   if($("atPartialClose"))$("atPartialClose").onclick=()=>setManagedActionMessage("PARTIAL CLOSE is selected.","ok");
   if($("atAutoTrade"))$("atAutoTrade").onchange=async()=>{
     saveAutoTraderControlState();
@@ -1169,6 +1176,19 @@ function initAutoTraderControls(){
       setManagedActionMessage("2-SIGNAL DIRECTION CHANGE CONFIRMATION saved.","ok");
     }catch(e){setManagedActionMessage(e.message||"Could not save the control.","error");}
   };
+  ["atBreakEven","atTrailingStop"].forEach(id=>{
+    const el=$(id); if(!el)return;
+    el.addEventListener("change",async()=>{
+      saveAutoTraderControlState();
+      try{
+        await api("/api/managed/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+          break_even_enabled:!!$("atBreakEven")?.checked,
+          trailing_stop_enabled:!!$("atTrailingStop")?.checked
+        })});
+        setManagedActionMessage(id==="atBreakEven" ? (el.checked ? "Break-Even protection is ON." : "Break-Even protection is OFF.") : (el.checked ? "Trailing Stop protection is ON." : "Trailing Stop protection is OFF."),"ok");
+      }catch(e){setManagedActionMessage(e.message||"Could not save the protection control.","error");}
+    });
+  });
   ["atLowStability","atHighStability","atStrongReversal","atSMC"].forEach(id=>{
     const el=$(id); if(!el)return;
     el.addEventListener("change",async()=>{

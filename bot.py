@@ -407,6 +407,8 @@ def init_db():
                     ("max_lot", "DOUBLE PRECISION DEFAULT 10.0"),
                     ("max_open_trades", "INTEGER DEFAULT 1"),
                     ("allocation_pct", "DOUBLE PRECISION DEFAULT 10"),
+                    ("break_even_enabled", "INTEGER DEFAULT 0"),
+                    ("trailing_stop_enabled", "INTEGER DEFAULT 0"),
                 ],
                 "ctrader_connections": [
                     ("auto_enabled", "INTEGER DEFAULT 0"),
@@ -421,6 +423,8 @@ def init_db():
                     ("max_lot", "DOUBLE PRECISION DEFAULT 10.0"),
                     ("max_open_trades", "INTEGER DEFAULT 1"),
                     ("allocation_pct", "DOUBLE PRECISION DEFAULT 10"),
+                    ("break_even_enabled", "INTEGER DEFAULT 0"),
+                    ("trailing_stop_enabled", "INTEGER DEFAULT 0"),
                     ("auto_symbol", "TEXT DEFAULT 'XAUUSD'"),
                     ("target_profit_total", "DOUBLE PRECISION DEFAULT 25"),
                     ("auto_direction", "TEXT"),
@@ -867,6 +871,7 @@ def _ctrader_account_snapshot(row, retry=True):
             "stop_loss":pos.get("stopLoss"),
             "take_profit":pos.get("takeProfit"),
             "unrealized_pnl":net,
+            "trailing_stop_loss":bool(pos.get("trailingStopLoss")),
             "used_margin":margin,
             "open_timestamp":td.get("openTimestamp"),
             "label":td.get("label") or "",
@@ -1449,6 +1454,8 @@ def managed_status():
             "max_lot":_num(row.get("max_lot")) or 10,
             "max_open_trades":int(row.get("max_open_trades") or 1),
             "allocation_pct":_num(row.get("allocation_pct")) or 10,
+            "break_even_enabled":bool(row.get("break_even_enabled")),
+            "trailing_stop_enabled":bool(row.get("trailing_stop_enabled")),
         },
     })
 
@@ -1491,10 +1498,32 @@ def managed_settings():
         except Exception: max_open=1
         try: allocation=max(1,min(float(body.get("allocation_pct",row.get("allocation_pct") or 10)),100))
         except Exception: allocation=10
+        break_even=1 if bool(body.get("break_even_enabled",row.get("break_even_enabled") or 0)) else 0
+        trailing=1 if bool(body.get("trailing_stop_enabled",row.get("trailing_stop_enabled") or 0)) else 0
         with DB_LOCK:
-            conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET lot_size=?,profit_target=?,target_profit_total=?,min_quality=?,strong_only=?,smc_only=?,low_stability_entry=?,high_stability_entry=?,opposite_signal_confirmation=?,max_lot=?,max_open_trades=?,allocation_pct=?,auto_symbol=?,updated_at=? WHERE id=?",(lot,target,target,quality,strong,smc_only,low_stability,high_stability,opposite_confirmation,max_lot,max_open,allocation,auto_symbol,_now_iso(),row["id"])); conn.commit(); conn.close()
+            conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET lot_size=?,profit_target=?,target_profit_total=?,min_quality=?,strong_only=?,smc_only=?,low_stability_entry=?,high_stability_entry=?,opposite_signal_confirmation=?,max_lot=?,max_open_trades=?,allocation_pct=?,break_even_enabled=?,trailing_stop_enabled=?,auto_symbol=?,updated_at=? WHERE id=?",(lot,target,target,quality,strong,smc_only,low_stability,high_stability,opposite_confirmation,max_lot,max_open,allocation,break_even,trailing,auto_symbol,_now_iso(),row["id"])); conn.commit(); conn.close()
         row=_ctrader_row_for_user(user["id"])
-    return jsonify({"ok":True,"lot_size":_num(row.get("lot_size")) or .01,"profit_target":_num(row.get("target_profit_total")) if row.get("target_profit_total") is not None else (_num(row.get("profit_target")) if row.get("profit_target") is not None else 25),"target_profit_total":_num(row.get("target_profit_total")) if row.get("target_profit_total") is not None else (_num(row.get("profit_target")) if row.get("profit_target") is not None else 25),"min_quality":_num(row.get("min_quality")) if row.get("min_quality") is not None else 40,"strong_only":bool(row.get("strong_only")),"smc_only":bool(row.get("smc_only")),"low_stability_entry":bool(row.get("low_stability_entry")),"high_stability_entry":bool(row.get("high_stability_entry")),"opposite_signal_confirmation":bool(row.get("opposite_signal_confirmation")),"max_lot":_num(row.get("max_lot")) or 10,"max_open_trades":int(row.get("max_open_trades") or 1),"allocation_pct":_num(row.get("allocation_pct")) or 10,"auto_symbol":str(row.get("auto_symbol") or "XAUUSD").upper()})
+    return jsonify({"ok":True,"lot_size":_num(row.get("lot_size")) or .01,"profit_target":_num(row.get("target_profit_total")) if row.get("target_profit_total") is not None else (_num(row.get("profit_target")) if row.get("profit_target") is not None else 25),"target_profit_total":_num(row.get("target_profit_total")) if row.get("target_profit_total") is not None else (_num(row.get("profit_target")) if row.get("profit_target") is not None else 25),"min_quality":_num(row.get("min_quality")) if row.get("min_quality") is not None else 40,"strong_only":bool(row.get("strong_only")),"smc_only":bool(row.get("smc_only")),"low_stability_entry":bool(row.get("low_stability_entry")),"high_stability_entry":bool(row.get("high_stability_entry")),"opposite_signal_confirmation":bool(row.get("opposite_signal_confirmation")),"max_lot":_num(row.get("max_lot")) or 10,"max_open_trades":int(row.get("max_open_trades") or 1),"allocation_pct":_num(row.get("allocation_pct")) or 10,"break_even_enabled":bool(row.get("break_even_enabled")),"trailing_stop_enabled":bool(row.get("trailing_stop_enabled")),"auto_symbol":str(row.get("auto_symbol") or "XAUUSD").upper()})
+
+@app.route("/api/managed/move-break-even", methods=["POST"])
+def managed_move_break_even():
+    user=_current_user()
+    if not user: return jsonify({"error":"Sign in required."}),401
+    row=_ctrader_row_for_user(user["id"])
+    if not row or row.get("status") not in ("AUTHORIZED","CONNECTED"):
+        return jsonify({"error":"Connect cTrader and select an account first."}),400
+    try:
+        snap=_ctrader_account_snapshot(row)
+        changed=0
+        for pos in snap.get("positions",[]):
+            if str(pos.get("label") or "").upper()!="KETS_AUTO" and not str(pos.get("comment") or "").upper().startswith("KETS AUTOMATIC"): continue
+            entry=_num(pos.get("entry_price")); pid=pos.get("positionId")
+            if not entry or not pid: continue
+            _ctrader_amend_position(row,pid,stop_loss=entry,trailing=bool(row.get("trailing_stop_enabled")))
+            changed+=1
+        return jsonify({"ok":True,"changed":changed})
+    except Exception as exc:
+        return jsonify({"error":str(exc)[:500]}),400
 
 def _ctrader_symbol_for_order(symbols, requested):
     """Resolve the broker-specific cTrader symbol ID.
@@ -1857,6 +1886,88 @@ def _auto_profit_progress(row):
     return current-start
 
 
+def _ctrader_amend_position(row, position_id, stop_loss=None, take_profit=None, trailing=None):
+    """Amend an existing cTrader position's SL/TP and/or native trailing flag."""
+    account, selected = _ctrader_selected_account(row)
+    is_live = bool(account.get("is_live"))
+    token = _ctrader_access_token(row)
+    async def run(access_token):
+        import websockets
+        async with websockets.connect(_ctrader_host(is_live), open_timeout=15, close_timeout=5,
+                                      ping_interval=20, ping_timeout=20) as ws:
+            async def send(pt, payload, expected=None, label="cTrader request"):
+                client_msg_id=str(uuid.uuid4())
+                await ws.send(json.dumps({"clientMsgId":client_msg_id,"payloadType":pt,"payload":payload}))
+                for _ in range(12):
+                    d=json.loads(await asyncio.wait_for(ws.recv(),timeout=2.5))
+                    if d.get("payloadType")==51: continue
+                    if d.get("clientMsgId") not in (None,client_msg_id): continue
+                    if d.get("payloadType") in (2132,2142):
+                        ep=d.get("payload") or {}
+                        raise RuntimeError(ep.get("description") or ep.get("errorCode") or f"{label} failed")
+                    if d.get("payloadType")==2126:
+                        ep=d.get("payload") or {}
+                        if int(ep.get("executionType") or 0) in (7,8):
+                            raise RuntimeError(ep.get("description") or f"{label} rejected")
+                    if expected and d.get("payloadType")!=expected: continue
+                    return d
+                raise RuntimeError(f"cTrader did not return the expected {label} response")
+            await send(2100,{"clientId":_ctrader_client_id(),"clientSecret":_ctrader_client_secret()},2101,"application authorization")
+            await send(2102,{"ctidTraderAccountId":int(selected),"accessToken":access_token},2103,"account authorization")
+            payload={"ctidTraderAccountId":int(selected),"positionId":int(position_id)}
+            if stop_loss is not None: payload["stopLoss"]=float(stop_loss)
+            if take_profit is not None: payload["takeProfit"]=float(take_profit)
+            if trailing is not None: payload["trailingStopLoss"]=bool(trailing)
+            return await send(2110,payload,2126,"position protection amendment")
+    try:
+        return asyncio.run(run(token))
+    except RuntimeError as exc:
+        if any(x in str(exc).upper() for x in ("TOKEN","AUTH","ACCESS","EXPIRED")):
+            fresh=_ctrader_row_for_user(row["user_id"]) or row
+            return asyncio.run(run(_ctrader_access_token(fresh,force_refresh=True)))
+        raise
+
+AUTO_BE_TRIGGER_R=1.0
+
+def _manage_auto_positions(row, snapshot=None):
+    """Apply automatic break-even/trailing protection to KETS_AUTO positions."""
+    be_on=bool(row.get("break_even_enabled"))
+    trail_on=bool(row.get("trailing_stop_enabled"))
+    if not (be_on or trail_on): return
+    for pos in (snapshot or {}).get("positions",[]):
+        if str(pos.get("label") or "").upper()!="KETS_AUTO" and not str(pos.get("comment") or "").upper().startswith("KETS AUTOMATIC"): continue
+        pid=pos.get("positionId"); side=str(pos.get("side") or "").upper()
+        entry=_num(pos.get("entry_price")); sl=_num(pos.get("stop_loss")); pnl=_num(pos.get("unrealized_pnl"))
+        volume_cents=_num(pos.get("volume_cents"))
+        if not pid or not entry or not sl or volume_cents<=0: continue
+        be_done=(side=="BUY" and sl>=entry) or (side=="SELL" and sl<=entry)
+        units=volume_cents/100.0
+        risk_money=abs(entry-sl)*units
+        if be_on and not be_done and risk_money>0 and pnl>=risk_money*AUTO_BE_TRIGGER_R:
+            try:
+                _ctrader_amend_position(row,pid,stop_loss=entry,trailing=trail_on)
+                app.logger.info("KETS Auto-Trader: break-even applied to position %s",pid)
+                be_done=True
+            except Exception as exc:
+                app.logger.warning("KETS Auto-Trader: break-even failed for %s: %s",pid,exc)
+        elif trail_on and (not be_on or be_done) and not bool(pos.get("trailing_stop_loss")):
+            try:
+                _ctrader_amend_position(row,pid,stop_loss=sl,trailing=True)
+                app.logger.info("KETS Auto-Trader: native trailing enabled for position %s",pid)
+            except Exception as exc:
+                app.logger.warning("KETS Auto-Trader: trailing activation failed for %s: %s",pid,exc)
+
+def _manage_auto_positions_from_row(row):
+    try:
+        snap=_ctrader_account_snapshot(row)
+        _manage_auto_positions(row,snap)
+        _ctrader_cache_snapshot(row,snap)
+        with DB_LOCK:
+            conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET equity=?,balance=?,free_margin=?,positions_json=?,last_error=NULL,updated_at=? WHERE id=?",
+                (snap.get("equity",0),snap.get("balance",0),snap.get("free_margin",0),json.dumps(snap.get("positions",[])),_now_iso(),row["id"])); conn.commit(); conn.close()
+    except Exception as exc:
+        app.logger.warning("KETS Auto-Trader protection check failed: %s",exc)
+
 def _queue_and_execute_ctrader(row, sig, automatic=True):
     direction=str(sig.get("direction") or sig.get("signal") or "").upper()
     if direction not in {"BUY","SELL"}: raise RuntimeError("Signal is not a BUY/SELL entry.")
@@ -1868,11 +1979,14 @@ def _queue_and_execute_ctrader(row, sig, automatic=True):
     # the next opposite KETS signal, so do not attach the signal TP/SL to auto
     # positions. Manual orders keep their optional SL/TP behavior unchanged.
     order={"symbol":str(row.get("auto_symbol") or sig.get("symbol") or ("XAUUSD" if str(sig.get("asset")).upper() in ("GOLD","XAUUSD") else "BTCUSD")),"direction":direction,"volume":lot,"entry":entry}
+    tp=_num(sig.get("take_profit") or sig.get("tp") or sig.get("target"))
+    sl=_num(sig.get("stop_loss") or sig.get("sl") or sig.get("stop"))
     if not automatic:
-        tp=_num(sig.get("take_profit") or sig.get("tp") or sig.get("target"))
-        sl=_num(sig.get("stop_loss") or sig.get("sl") or sig.get("stop"))
         if not tp or not sl: raise RuntimeError("The current signal has no complete entry, target and stop-loss plan.")
         order["take_profit"]=tp; order["stop_loss"]=sl
+    elif bool(row.get("break_even_enabled")) or bool(row.get("trailing_stop_enabled")):
+        if not sl: raise RuntimeError("Auto-Trader protection is enabled, but this signal has no Stop Loss risk anchor.")
+        order["stop_loss"]=sl
     result,selected=_ctrader_execute_order(row,order,auto_label=automatic)
     with DB_LOCK:
         conn=db_conn()
@@ -1896,6 +2010,10 @@ def _ctrader_autotrade_once():
         row=dict(rr)
         try:
             auto_symbol=str(row.get("auto_symbol") or "XAUUSD").upper()
+            if bool(row.get("break_even_enabled")) or bool(row.get("trailing_stop_enabled")):
+                _manage_auto_positions_from_row(row)
+                fresh_row=_ctrader_row_for_user(row["user_id"])
+                if fresh_row: row=dict(fresh_row)
             # Auto-Trade uses only the trading-bot signals already stored in this
             # website's Signal History. No external signal URL is polled.
             # The entry/exit

@@ -1,0 +1,12 @@
+KETS AUTO-TRADER — BREAK-EVEN + TRAILING STOP
+
+Server-side cTrader protection has been implemented.
+- Break-Even and Trailing Stop controls are persisted on the cTrader account.
+- When protection is enabled, the existing signal Stop Loss is used as the initial risk anchor.
+- Break-Even triggers automatically at 1 initial risk unit and moves SL to exact entry.
+- cTrader native trailing is enabled after BE when both are ON; if trailing alone is ON, native trailing is enabled from the original SL.
+- No 1:1 or 1:2 input is exposed.
+- Existing KETS/SMC/Strong Reversal entry logic remains unchanged.
+- Auto-Trader's opposite-signal exit remains in place.
+- When protection is enabled, an initial broker-side SL is attached because BE/trailing require a real SL risk anchor.
+- The existing signal TP calculation is not altered.
