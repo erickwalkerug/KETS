@@ -1,0 +1,10 @@
+KETS Auto Trader Save Fix
+
+Implemented:
+- Added a visible "Save Auto Trader settings" button directly on the Auto Trader page.
+- Button saves supported Auto Trader controls to /api/managed/settings.
+- Selected additional strategies are saved together in the same server request.
+- Trading Settings save now also persists Opposite Signal Confirmation and selected strategies.
+- Browser-side Auto Trader controls and strategy selections are preserved in localStorage.
+- Existing KETS/cTrader endpoints, strategy definitions, and trading logic were left unchanged.
+- JavaScript syntax validated with Node.js --check.

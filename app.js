@@ -1126,14 +1126,37 @@ function loadAutoTraderControlState(){
   try{return JSON.parse(localStorage.getItem(AUTO_TRADER_CONTROL_KEY)||"{}")||{};}catch(e){return {};}
 }
 function saveAutoTraderControlState(){
-  const out={};
-  Object.entries(AUTO_TRADER_CONTROL_IDS).forEach(([key,id])=>{const el=$(id);if(el)out[key]=!!el.checked;});
+  const out=loadAutoTraderControlState();
+  Object.entries(AUTO_TRADER_CONTROL_IDS).forEach(([key,id])=>{
+    const el=$(id); if(el)out[key]=!!el.checked;
+  });
   try{localStorage.setItem(AUTO_TRADER_CONTROL_KEY,JSON.stringify(out));}catch(e){}
+  return out;
+}
+function saveAutoTraderBrowserState(){
+  const controls=saveAutoTraderControlState();
+  const strategies={};
+  KETS_ADDITIONAL_STRATEGY_CONTROLS.forEach(([id,key])=>{
+    const el=$(id); if(el)strategies[key]=!!el.checked;
+  });
+  const state={controls,strategies,saved_at:new Date().toISOString()};
+  try{localStorage.setItem("kets_auto_trader_strategies",JSON.stringify(strategies));}catch(e){}
+  try{localStorage.setItem("kets_auto_trader_browser_settings",JSON.stringify(state));}catch(e){}
+  return state;
+}
+function loadAutoTraderBrowserState(){
+  try{return JSON.parse(localStorage.getItem("kets_auto_trader_browser_settings")||"{}")||{};}catch(e){return {};}
 }
 function renderAutoTraderControls(){
   const s=loadAutoTraderControlState();
   Object.entries(AUTO_TRADER_CONTROL_IDS).forEach(([key,id])=>{
-    const el=$(id); if(el)el.checked=!!s[key];
+    const el=$(id); if(el && Object.prototype.hasOwnProperty.call(s,key))el.checked=!!s[key];
+  });
+  const browser=loadAutoTraderBrowserState();
+  const strategies=browser.strategies||{};
+  KETS_ADDITIONAL_STRATEGY_CONTROLS.forEach(([id,key])=>{
+    const el=$(id);
+    if(el && Object.prototype.hasOwnProperty.call(strategies,key))el.checked=!!strategies[key];
   });
 }
 const KETS_ADDITIONAL_STRATEGY_CONTROLS = [
@@ -1147,6 +1170,7 @@ const KETS_ADDITIONAL_STRATEGY_CONTROLS = [
   ["atStrategyVolatility","volatility_expansion"]
 ];
 async function saveSelectedStrategyControls(){
+  saveAutoTraderBrowserState();
   const selected=KETS_ADDITIONAL_STRATEGY_CONTROLS
     .filter(([id])=>$(id)?.checked).map(([,key])=>key);
   try{
@@ -1154,14 +1178,57 @@ async function saveSelectedStrategyControls(){
     await api("/api/managed/settings",{method:"POST",headers:{"Content-Type":"application/json"},
       body:JSON.stringify({strategy_selection:selected})});
     setManagedActionMessage(selected.length
-      ? `Strategy selection saved: ${selected.length} strategy${selected.length===1?"":"ies"} enabled.`
+      ? `Strategy selection saved: ${selected.length} strateg${selected.length===1?"y":"ies"} enabled.`
       : "Additional strategies are OFF — existing KETS signal path remains active.","ok");
   }catch(e){
     setManagedActionMessage(e.message||"Could not save strategy selection.","error");
     await refreshManagedStatus();
   }
 }
+async function saveAutoTraderSettings(){
+  const btn=$("saveAutoTraderSettings");
+  const status=$("autoTraderSaveStatus");
+  const browser=saveAutoTraderBrowserState();
+  const selected=KETS_ADDITIONAL_STRATEGY_CONTROLS
+    .filter(([id])=>$(id)?.checked).map(([,key])=>key);
+  const body={
+    opposite_signal_confirmation:!!$("atTwoSignal")?.checked,
+    low_stability_entry:!!$("atLowStability")?.checked,
+    high_stability_entry:!!$("atHighStability")?.checked,
+    strong_only:!!$("atStrongReversal")?.checked,
+    smc_only:!!$("atSMC")?.checked,
+    strategy_selection:selected,
+    break_even_enabled:!!$("atBreakEven")?.checked,
+    trailing_stop_enabled:!!$("atTrailingStop")?.checked
+  };
+  try{
+    if(btn){btn.disabled=true;btn.dataset.oldText=btn.textContent;btn.textContent="Saving…";}
+    if(status)status.textContent="Saving Auto Trader settings to KETS…";
+    setManagedActionMessage("Saving Auto Trader settings…","busy");
+    await api("/api/managed/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)});
+    if(status)status.textContent=`Saved successfully · ${selected.length} additional strateg${selected.length===1?"y":"ies"} selected.`;
+    setManagedActionMessage("Auto Trader settings saved successfully.","ok");
+    await refreshManagedStatus();
+    // Re-apply browser-only controls after the server refresh. These controls
+    // are intentionally local until a corresponding server setting exists.
+    const savedControls=browser.controls||{};
+    Object.entries(AUTO_TRADER_CONTROL_IDS).forEach(([key,id])=>{
+      const el=$(id);
+      if(el && Object.prototype.hasOwnProperty.call(savedControls,key) &&
+         ["stopLoss","takeProfit","profitProtection","maxLossProtection"].includes(key)){
+        el.checked=!!savedControls[key];
+      }
+    });
+  }catch(e){
+    if(status)status.textContent=e.message||"Could not save Auto Trader settings.";
+    setManagedActionMessage(e.message||"Could not save Auto Trader settings.","error");
+  }finally{
+    if(btn){btn.disabled=false;btn.textContent=btn.dataset.oldText||"💾 Save Auto Trader settings";}
+  }
+}
 function initAutoTraderControls(){
+  renderAutoTraderControls();
+  if($("saveAutoTraderSettings"))$("saveAutoTraderSettings").onclick=saveAutoTraderSettings;
   Object.values(AUTO_TRADER_CONTROL_IDS).forEach(id=>{
     const el=$(id);
     if(el)el.onchange=saveAutoTraderControlState;
@@ -1280,8 +1347,23 @@ if($("saveManagedSettings"))$("saveManagedSettings").onclick=async()=>{
  const btn=$("saveManagedSettings");
  try{
   btn.disabled=true;btn.dataset.oldText=btn.textContent;btn.textContent="Saving…";setManagedActionMessage("Saving trading controls…","busy");
-  await api("/api/managed/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({lot_size:Number($("managedLotSize").value||0.01),target_profit_total:Number($("managedProfitTarget").value||25),min_quality:Number($("managedMinQuality").value||85),strong_only:$("managedStrongOnly").checked,low_stability_entry:$("managedLowStability").checked,high_stability_entry:$("managedHighStability").checked,max_lot:10,max_open_trades:Number($("managedMaxTrades").value||1),allocation_pct:Number($("managedAllocation").value||10),auto_symbol:String($("autoTradeSymbol")?.value||"XAUUSD")})});
-  setManagedActionMessage("Trading settings saved successfully.","ok");await refreshManagedStatus();
+  await api("/api/managed/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+   lot_size:Number($("managedLotSize").value||0.01),
+   target_profit_total:Number($("managedProfitTarget").value||25),
+   min_quality:Number($("managedMinQuality").value||85),
+   strong_only:$("managedStrongOnly").checked,
+   low_stability_entry:$("managedLowStability").checked,
+   high_stability_entry:$("managedHighStability").checked,
+   opposite_signal_confirmation:$("managedOppositeConfirmation").checked,
+   strategy_selection:KETS_ADDITIONAL_STRATEGY_CONTROLS
+     .filter(([id])=>$(id)?.checked).map(([,key])=>key),
+   max_lot:10,
+   max_open_trades:Number($("managedMaxTrades").value||1),
+   allocation_pct:Number($("managedAllocation").value||10),
+   auto_symbol:String($("autoTradeSymbol")?.value||"XAUUSD")
+  })});
+  saveAutoTraderBrowserState();
+  setManagedActionMessage("Trading settings and selected strategies saved successfully.","ok");await refreshManagedStatus();
  }catch(e){setManagedActionMessage(e.message||"Settings could not be saved.","error");}
  finally{btn.disabled=false;btn.textContent=btn.dataset.oldText||"Save trading settings";}
 };
