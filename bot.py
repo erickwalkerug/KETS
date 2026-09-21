@@ -1744,12 +1744,37 @@ def _ctrader_execute_order(row, order, auto_label=False):
                 "comment": "KETS automatic signal trade" if auto_label else "KETS manual trade",
             }
 
-            sl = order.get("stop_loss")
-            tp = order.get("take_profit")
-            if sl not in (None, "", 0):
-                payload["stopLoss"] = float(sl)
-            if tp not in (None, "", 0):
-                payload["takeProfit"] = float(tp)
+            # cTrader validates every order price (including SL/TP) against
+            # the symbol's allowed decimal precision. KETS signals can contain
+            # more precision than a broker symbol supports (for example
+            # XAUUSD may allow only 2 digits). Round broker-facing prices to
+            # the actual symbol precision before sending the order.
+            try:
+                price_digits = int(symbol.get("digits"))
+            except (TypeError, ValueError):
+                price_digits = 2
+            if price_digits < 0:
+                price_digits = 2
+            if price_digits > 10:
+                price_digits = 10
+
+            def _broker_price(value):
+                if value in (None, "", 0):
+                    return None
+                try:
+                    number = float(value)
+                except (TypeError, ValueError):
+                    raise RuntimeError("Invalid stop-loss/take-profit price.")
+                if not math.isfinite(number) or number <= 0:
+                    raise RuntimeError("Stop-loss/take-profit price must be positive.")
+                return float(f"{number:.{price_digits}f}")
+
+            sl = _broker_price(order.get("stop_loss"))
+            tp = _broker_price(order.get("take_profit"))
+            if sl is not None:
+                payload["stopLoss"] = sl
+            if tp is not None:
+                payload["takeProfit"] = tp
 
             response = await send(
                 CTRADER_PAYLOAD["NEW_ORDER_REQ"],

@@ -57,3 +57,5 @@ DEPLOYMENT FIX — 2026-09-07
 
 - Fixed cTrader manual/automatic order execution: implemented _ctrader_execute_order with broker-specific symbol/contract resolution, real market order submission, SL/TP, volume validation, and token refresh.
 - Fixed Require strong reversal only: toggle now saves immediately and auto-trading skips every signal that is not explicitly classified as STRONG REVERSAL ENTRY.
+
+- cTrader price precision fix: broker-facing Stop Loss and Take Profit prices are rounded to the selected symbol's actual digits before market orders are sent. This prevents errors such as 'Order price = 4361.47941 has more digits than symbol allows. Allowed 2 digits'. Existing KETS signal/strategy logic is unchanged.
