@@ -16,7 +16,7 @@ app = Flask(__name__)
 API_LOCK = Lock()
 MARKET_STATE = {}
 SIGNAL_HISTORY = []
-SIGNAL_HISTORY_HOURS = 1
+SIGNAL_HISTORY_DAYS = 7
 STRATEGY_SCAN_FEED = {}
 STRATEGY_SCAN_LOCK = Lock()
 last_signal = {}
@@ -2465,7 +2465,7 @@ def _latest_signal_map(items):
 
 
 def _history_items():
-    cutoff = get_eat_time() - datetime.timedelta(hours=SIGNAL_HISTORY_HOURS)
+    cutoff = get_eat_time() - datetime.timedelta(days=SIGNAL_HISTORY_DAYS)
     with API_LOCK:
         memory = [dict(x) for x in SIGNAL_HISTORY]
     persistent = _load_persistent_signals()
@@ -2515,7 +2515,7 @@ def api_signals():
             existing = {str(x.get("id")) for x in SIGNAL_HISTORY}
             if item["id"] not in existing:
                 SIGNAL_HISTORY.append(item)
-                cutoff = now - datetime.timedelta(hours=SIGNAL_HISTORY_HOURS)
+                cutoff = now - datetime.timedelta(days=SIGNAL_HISTORY_DAYS)
                 kept = []
                 for x in SIGNAL_HISTORY:
                     try:
@@ -2618,7 +2618,7 @@ def api_history():
     user, error = _require_active_access()
     if error:
         return error
-    return jsonify({"ok": True, "history": _history_items(), "retention_hours": SIGNAL_HISTORY_HOURS})
+    return jsonify({"ok": True, "history": _history_items(), "days": SIGNAL_HISTORY_DAYS})
 
 
 @app.route("/api/developer/signals")
@@ -3347,7 +3347,7 @@ def _persist_signal(item):
 
 def _load_persistent_signals():
     """Load recent persisted signals, newest last."""
-    cutoff = get_eat_time() - datetime.timedelta(hours=SIGNAL_HISTORY_HOURS)
+    cutoff = get_eat_time() - datetime.timedelta(days=SIGNAL_HISTORY_DAYS)
     try:
         with DB_LOCK:
             conn = db_conn()
@@ -3455,7 +3455,7 @@ def store_app_signal(asset, signal):
                 if str(existing.get("id")) == item["id"]:
                     SIGNAL_HISTORY[idx] = item
                     break
-        cutoff = now - datetime.timedelta(hours=SIGNAL_HISTORY_HOURS)
+        cutoff = now - datetime.timedelta(days=SIGNAL_HISTORY_DAYS)
         SIGNAL_HISTORY[:] = [x for x in SIGNAL_HISTORY if _signal_dt(x) >= cutoff]
     _persist_signal(item)
     return item

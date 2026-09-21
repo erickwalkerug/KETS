@@ -584,7 +584,7 @@ function renderHistory(){
  const el=$("historyList");
  const strongEl=$("strongReversalHistory");
  if(!state.history.length){
-  el.innerHTML=`<div class="empty">No engine scans recorded in the last 1 hour.</div>`;
+  el.innerHTML=`<div class="empty">No engine scans recorded in the last 7 days.</div>`;
   if(strongEl) strongEl.innerHTML=`<div class="empty">No STRONG REVERSAL ENTRY history yet.</div>`;
   return;
  }
@@ -629,7 +629,7 @@ function renderHistory(){
    <div class="stability-metric ${stabilityClass}"><b>${stabilityLabel}</b><small>${riskLabel}</small></div>
  </div>
  <div class="bull-bear-table-head"><span>History</span><span>Bullish</span><span>Bearish</span><span>Difference</span><span>Stability</span><span>Risk</span></div>
- <div class="bull-bear-table-row"><span>Last 1 hour · Strong Reversal Entry</span><span class="buy">${bullish}</span><span class="sell">${bearish}</span><span>${stabilityDifference}</span><span class="${stabilityClass}">${stabilityLabel}</span><span class="${stabilityClass}">${riskLabel}</span></div>`;
+ <div class="bull-bear-table-row"><span>Last 7 days · Strong Reversal Entry</span><span class="buy">${bullish}</span><span class="sell">${bearish}</span><span>${stabilityDifference}</span><span class="${stabilityClass}">${stabilityLabel}</span><span class="${stabilityClass}">${riskLabel}</span></div>`;
  const rows=reversals.map(s=>{
    const dir=String(s.direction||"").toUpperCase();
    const bullishDir=dir==="BUY";
