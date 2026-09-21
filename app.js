@@ -946,6 +946,11 @@ async function refreshManagedStatus(){
   if($("atHighStability"))$("atHighStability").checked=!!st.high_stability_entry;
   if($("atStrongReversal"))$("atStrongReversal").checked=!!st.strong_only;
   if($("atSMC"))$("atSMC").checked=!!st.smc_only;
+  const selectedStrategies=Array.isArray(st.strategy_selection)?st.strategy_selection:[];
+  KETS_ADDITIONAL_STRATEGY_CONTROLS.forEach(([id,key])=>{
+    const el=$(id);
+    if(el){el.disabled=!connected; el.checked=selectedStrategies.includes(key);}
+  });
   if($("managedLowStability"))$("managedLowStability").checked=!!st.low_stability_entry;
   if($("managedHighStability"))$("managedHighStability").checked=!!st.high_stability_entry;
   if($("managedMaxTrades"))$("managedMaxTrades").value=String(st.max_open_trades||1);
@@ -1131,6 +1136,31 @@ function renderAutoTraderControls(){
     const el=$(id); if(el)el.checked=!!s[key];
   });
 }
+const KETS_ADDITIONAL_STRATEGY_CONTROLS = [
+  ["atStrategyTrend","trend_following"],["atStrategyBreakout","breakout"],
+  ["atStrategyMeanReversion","mean_reversion"],["atStrategyMomentum","momentum"],
+  ["atStrategyPriceAction","price_action"],["atStrategySupportResistance","support_resistance"],
+  ["atStrategySupplyDemand","supply_demand"],["atStrategyVWAP","vwap"],
+  ["atStrategyMACross","moving_average_cross"],["atStrategyMACD","macd"],
+  ["atStrategyRSI","rsi"],["atStrategyBollinger","bollinger_bands"],
+  ["atStrategyFibonacci","fibonacci"],["atStrategyScalping","scalping"],
+  ["atStrategyVolatility","volatility_expansion"]
+];
+async function saveSelectedStrategyControls(){
+  const selected=KETS_ADDITIONAL_STRATEGY_CONTROLS
+    .filter(([id])=>$(id)?.checked).map(([,key])=>key);
+  try{
+    setManagedActionMessage("Saving strategy selection…","busy");
+    await api("/api/managed/settings",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({strategy_selection:selected})});
+    setManagedActionMessage(selected.length
+      ? `Strategy selection saved: ${selected.length} strategy${selected.length===1?"":"ies"} enabled.`
+      : "Additional strategies are OFF — existing KETS signal path remains active.","ok");
+  }catch(e){
+    setManagedActionMessage(e.message||"Could not save strategy selection.","error");
+    await refreshManagedStatus();
+  }
+}
 function initAutoTraderControls(){
   Object.values(AUTO_TRADER_CONTROL_IDS).forEach(id=>{
     const el=$(id);
@@ -1204,6 +1234,11 @@ function initAutoTraderControls(){
         setManagedActionMessage(id==="atSMC" ? (el.checked ? "SMC Strategy is ON — Auto-Trader will require SMC confirmation." : "SMC Strategy is OFF — Auto-Trader uses the existing entry rules.") : `${el.parentElement?.parentElement?.querySelector(".auto-control-name")?.textContent||"Entry control"} saved.`,"ok");
       }catch(e){setManagedActionMessage(e.message||"Could not save the control.","error");}
     });
+  });
+
+  KETS_ADDITIONAL_STRATEGY_CONTROLS.forEach(([id])=>{
+    const el=$(id);
+    if(el) el.addEventListener("change", saveSelectedStrategyControls);
   });
 }
 initAutoTraderControls();

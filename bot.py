@@ -17,6 +17,8 @@ API_LOCK = Lock()
 MARKET_STATE = {}
 SIGNAL_HISTORY = []
 SIGNAL_HISTORY_DAYS = 7
+STRATEGY_SCAN_FEED = {}
+STRATEGY_SCAN_LOCK = Lock()
 last_signal = {}
 last_scan = None
 next_scan = None
@@ -417,6 +419,7 @@ def init_db():
                     ("min_quality", "DOUBLE PRECISION DEFAULT 40"),
                     ("strong_only", "INTEGER DEFAULT 0"),
                     ("smc_only", "INTEGER DEFAULT 0"),
+                    ("strategy_selection_json", "TEXT DEFAULT '[]'"),
                     ("low_stability_entry", "INTEGER DEFAULT 0"),
                     ("high_stability_entry", "INTEGER DEFAULT 0"),
                     ("opposite_signal_confirmation", "INTEGER DEFAULT 0"),
@@ -1449,6 +1452,7 @@ def managed_status():
             "min_quality":_num(row.get("min_quality")) if row.get("min_quality") is not None else 40,
             "strong_only":bool(row.get("strong_only")),
             "smc_only":bool(row.get("smc_only")),
+            "strategy_selection":json.loads(row.get("strategy_selection_json") or "[]") if str(row.get("strategy_selection_json") or "").strip() else [],
             "low_stability_entry":bool(row.get("low_stability_entry")),
             "high_stability_entry":bool(row.get("high_stability_entry")),
             "max_lot":_num(row.get("max_lot")) or 10,
@@ -1487,6 +1491,18 @@ def managed_settings():
         except Exception: quality=40
         strong=1 if bool(body.get("strong_only",row.get("strong_only") or 0)) else 0
         smc_only=1 if bool(body.get("smc_only",row.get("smc_only") or 0)) else 0
+        allowed_strategies={"trend_following","breakout","mean_reversion","momentum","price_action","support_resistance","supply_demand","vwap","moving_average_cross","macd","rsi","bollinger_bands","fibonacci","scalping","volatility_expansion"}
+        raw_strategies=body.get("strategy_selection", None)
+        if raw_strategies is None:
+            try: selected_strategies=json.loads(row.get("strategy_selection_json") or "[]")
+            except Exception: selected_strategies=[]
+        else:
+            if isinstance(raw_strategies,str):
+                try: raw_strategies=json.loads(raw_strategies)
+                except Exception: raw_strategies=[]
+            selected_strategies=[str(x) for x in (raw_strategies or []) if str(x) in allowed_strategies]
+        selected_strategies=list(dict.fromkeys(selected_strategies))
+        strategy_selection_json=json.dumps(selected_strategies)
         low_stability=1 if bool(body.get("low_stability_entry",row.get("low_stability_entry") or 0)) else 0
         high_stability=1 if bool(body.get("high_stability_entry",row.get("high_stability_entry") or 0)) else 0
         opposite_confirmation=1 if bool(body.get("opposite_signal_confirmation",row.get("opposite_signal_confirmation") or 0)) else 0
@@ -1501,9 +1517,9 @@ def managed_settings():
         break_even=1 if bool(body.get("break_even_enabled",row.get("break_even_enabled") or 0)) else 0
         trailing=1 if bool(body.get("trailing_stop_enabled",row.get("trailing_stop_enabled") or 0)) else 0
         with DB_LOCK:
-            conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET lot_size=?,profit_target=?,target_profit_total=?,min_quality=?,strong_only=?,smc_only=?,low_stability_entry=?,high_stability_entry=?,opposite_signal_confirmation=?,max_lot=?,max_open_trades=?,allocation_pct=?,break_even_enabled=?,trailing_stop_enabled=?,auto_symbol=?,updated_at=? WHERE id=?",(lot,target,target,quality,strong,smc_only,low_stability,high_stability,opposite_confirmation,max_lot,max_open,allocation,break_even,trailing,auto_symbol,_now_iso(),row["id"])); conn.commit(); conn.close()
+            conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET lot_size=?,profit_target=?,target_profit_total=?,min_quality=?,strong_only=?,smc_only=?,strategy_selection_json=?,low_stability_entry=?,high_stability_entry=?,opposite_signal_confirmation=?,max_lot=?,max_open_trades=?,allocation_pct=?,break_even_enabled=?,trailing_stop_enabled=?,auto_symbol=?,updated_at=? WHERE id=?",(lot,target,target,quality,strong,smc_only,strategy_selection_json,low_stability,high_stability,opposite_confirmation,max_lot,max_open,allocation,break_even,trailing,auto_symbol,_now_iso(),row["id"])); conn.commit(); conn.close()
         row=_ctrader_row_for_user(user["id"])
-    return jsonify({"ok":True,"lot_size":_num(row.get("lot_size")) or .01,"profit_target":_num(row.get("target_profit_total")) if row.get("target_profit_total") is not None else (_num(row.get("profit_target")) if row.get("profit_target") is not None else 25),"target_profit_total":_num(row.get("target_profit_total")) if row.get("target_profit_total") is not None else (_num(row.get("profit_target")) if row.get("profit_target") is not None else 25),"min_quality":_num(row.get("min_quality")) if row.get("min_quality") is not None else 40,"strong_only":bool(row.get("strong_only")),"smc_only":bool(row.get("smc_only")),"low_stability_entry":bool(row.get("low_stability_entry")),"high_stability_entry":bool(row.get("high_stability_entry")),"opposite_signal_confirmation":bool(row.get("opposite_signal_confirmation")),"max_lot":_num(row.get("max_lot")) or 10,"max_open_trades":int(row.get("max_open_trades") or 1),"allocation_pct":_num(row.get("allocation_pct")) or 10,"break_even_enabled":bool(row.get("break_even_enabled")),"trailing_stop_enabled":bool(row.get("trailing_stop_enabled")),"auto_symbol":str(row.get("auto_symbol") or "XAUUSD").upper()})
+    return jsonify({"ok":True,"lot_size":_num(row.get("lot_size")) or .01,"profit_target":_num(row.get("target_profit_total")) if row.get("target_profit_total") is not None else (_num(row.get("profit_target")) if row.get("profit_target") is not None else 25),"target_profit_total":_num(row.get("target_profit_total")) if row.get("target_profit_total") is not None else (_num(row.get("profit_target")) if row.get("profit_target") is not None else 25),"min_quality":_num(row.get("min_quality")) if row.get("min_quality") is not None else 40,"strong_only":bool(row.get("strong_only")),"smc_only":bool(row.get("smc_only")),"strategy_selection":json.loads(row.get("strategy_selection_json") or "[]") if str(row.get("strategy_selection_json") or "").strip() else [],"low_stability_entry":bool(row.get("low_stability_entry")),"high_stability_entry":bool(row.get("high_stability_entry")),"opposite_signal_confirmation":bool(row.get("opposite_signal_confirmation")),"max_lot":_num(row.get("max_lot")) or 10,"max_open_trades":int(row.get("max_open_trades") or 1),"allocation_pct":_num(row.get("allocation_pct")) or 10,"break_even_enabled":bool(row.get("break_even_enabled")),"trailing_stop_enabled":bool(row.get("trailing_stop_enabled")),"auto_symbol":str(row.get("auto_symbol") or "XAUUSD").upper()})
 
 @app.route("/api/managed/move-break-even", methods=["POST"])
 def managed_move_break_even():
@@ -2021,6 +2037,60 @@ def _queue_and_execute_ctrader(row, sig, automatic=True):
     return result
 
 
+
+def _latest_selected_strategy_signal(requested_symbol, selected_strategies):
+    """Build an actionable signal from the independent strategy scan feed."""
+    selected=[str(x) for x in (selected_strategies or [])]
+    if not selected:
+        return None
+    asset="XAUUSD" if str(requested_symbol).upper().replace("/","") in {"XAUUSD","GOLD"} else "BTCUSD"
+    with STRATEGY_SCAN_LOCK:
+        scan=dict(STRATEGY_SCAN_FEED.get(asset) or {})
+    strategies=scan.get("strategy_signals") if isinstance(scan.get("strategy_signals"),dict) else {}
+    candidates=[]
+    for name in selected:
+        item=strategies.get(name)
+        if not isinstance(item,dict) or not item.get("confirmed"):
+            continue
+        direction=str(item.get("direction") or "").upper()
+        if direction not in {"BUY","SELL"}:
+            continue
+        candidates.append((float(item.get("score") or 0),name,item))
+    if not candidates:
+        return None
+    # Multiple enabled strategies may agree. Use the strongest confirmed
+    # candidate, while retaining the full list for audit/display.
+    candidates.sort(key=lambda x:x[0], reverse=True)
+    score,name,item=candidates[0]
+    price=_num(scan.get("market_price"))
+    if price <= 0:
+        return None
+    stamp=str(scan.get("timestamp_utc") or scan.get("timestamp") or _now_iso())
+    sid=f"STRATEGY-{asset}-{name}-{stamp}"
+    return {
+        "id":sid,
+        "asset":asset,
+        "symbol":requested_symbol,
+        "direction":str(item.get("direction")).upper(),
+        "score":score,
+        "market_price":price,
+        "entry":price,
+        "take_profit":0,
+        "stop_loss":0,
+        "timestamp":stamp,
+        "timestamp_utc":stamp,
+        "strategy":name,
+        "strategy_name":name,
+        "strategy_score":score,
+        "strategy_reasons":item.get("reasons",[]),
+        "strategy_components":item.get("components",{}),
+        "selected_strategies":selected,
+        "strategy_candidates":[
+            {"name":n,"direction":str(it.get("direction") or "").upper(),"score":float(it.get("score") or 0)}
+            for _,n,it in candidates
+        ],
+    }
+
 def _ctrader_autotrade_once():
     # Auto-Trade is strictly limited to 06:00-18:00 EAT. Outside this window
     # the worker remains alive but performs no automatic entries or exits.
@@ -2045,7 +2115,14 @@ def _ctrader_autotrade_once():
             # rules do not change: BUY/SELL signals in Signal History are actionable,
             # repeated same-direction signals are ignored. If opposite-signal
             # confirmation is ON, reversal requires two distinct opposite signals.
-            sig=_latest_history_signal(auto_symbol)
+            try:
+                selected_strategies=json.loads(row.get("strategy_selection_json") or "[]")
+            except Exception:
+                selected_strategies=[]
+            if selected_strategies:
+                sig=_latest_selected_strategy_signal(auto_symbol, selected_strategies)
+            else:
+                sig=_latest_history_signal(auto_symbol)
             if not sig:
                 continue
             sid=_signal_id(sig)
@@ -2074,6 +2151,11 @@ def _ctrader_autotrade_once():
 
             previous_direction=str(row.get("auto_direction") or "").upper()
             previous_sid=str(row.get("auto_entry_signal_id") or "")
+
+            # Never re-enter the same signal/candidate repeatedly while the
+            # worker polls the account every few seconds.
+            if previous_sid and sid == previous_sid:
+                continue
 
             # Optional two-signal confirmation for reversals:
             # current SELL + first BUY = keep SELL open;
@@ -2462,6 +2544,27 @@ def api_signals():
         "time_eat": get_eat_time().isoformat(),
     })
 
+
+@app.route("/api/strategy-scans", methods=["POST"])
+def api_strategy_scans():
+    """Receive independent strategy candidates from my-trading-bot."""
+    if not _source_request_authorized():
+        return jsonify({"error":"Signal source authentication failed."}),401
+    body=request.get_json(silent=True)
+    if not isinstance(body,dict):
+        return jsonify({"error":"JSON strategy scan required."}),400
+    asset=str(body.get("asset") or "").strip().upper()
+    strategies=body.get("strategy_signals")
+    if not asset or not isinstance(strategies,dict):
+        return jsonify({"error":"Strategy scan must include asset and strategy_signals."}),400
+    with STRATEGY_SCAN_LOCK:
+        STRATEGY_SCAN_FEED[asset]=dict(body)
+    return jsonify({"ok":True,"accepted":True,"asset":asset}),200
+
+@app.route("/api/strategy-scans", methods=["GET"])
+def api_strategy_scans_get():
+    with STRATEGY_SCAN_LOCK:
+        return jsonify({"ok":True,"scans":dict(STRATEGY_SCAN_FEED)})
 
 @app.route("/api/source/signals", methods=["GET"])
 def api_source_signals():

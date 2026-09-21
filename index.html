@@ -273,6 +273,27 @@
     </article>
 
     <article class="panel auto-control-section">
+      <div class="panel-title"><h3>🧠 ADDITIONAL STRATEGIES</h3></div>
+      <p class="tiny">These strategies are implemented in the KETS trading bot as independent candidates. Turning one ON makes Auto-Trader use that strategy's candidate feed; turning all of them OFF leaves the existing KETS signal path unchanged.</p>
+      <div class="auto-control-row"><div class="auto-control-name">📈 TREND FOLLOWING — ON / OFF</div><label class="switch"><input id="atStrategyTrend" data-strategy="trend_following" type="checkbox"><span></span></label></div>
+      <div class="auto-control-row"><div class="auto-control-name">🚀 BREAKOUT — ON / OFF</div><label class="switch"><input id="atStrategyBreakout" data-strategy="breakout" type="checkbox"><span></span></label></div>
+      <div class="auto-control-row"><div class="auto-control-name">↔️ MEAN REVERSION — ON / OFF</div><label class="switch"><input id="atStrategyMeanReversion" data-strategy="mean_reversion" type="checkbox"><span></span></label></div>
+      <div class="auto-control-row"><div class="auto-control-name">⚡ MOMENTUM — ON / OFF</div><label class="switch"><input id="atStrategyMomentum" data-strategy="momentum" type="checkbox"><span></span></label></div>
+      <div class="auto-control-row"><div class="auto-control-name">🕯️ PRICE ACTION — ON / OFF</div><label class="switch"><input id="atStrategyPriceAction" data-strategy="price_action" type="checkbox"><span></span></label></div>
+      <div class="auto-control-row"><div class="auto-control-name">🎯 SUPPORT &amp; RESISTANCE — ON / OFF</div><label class="switch"><input id="atStrategySupportResistance" data-strategy="support_resistance" type="checkbox"><span></span></label></div>
+      <div class="auto-control-row"><div class="auto-control-name">💧 SUPPLY &amp; DEMAND — ON / OFF</div><label class="switch"><input id="atStrategySupplyDemand" data-strategy="supply_demand" type="checkbox"><span></span></label></div>
+      <div class="auto-control-row"><div class="auto-control-name">📊 VWAP — ON / OFF</div><label class="switch"><input id="atStrategyVWAP" data-strategy="vwap" type="checkbox"><span></span></label></div>
+      <div class="auto-control-row"><div class="auto-control-name">〽️ MOVING AVERAGE CROSS — ON / OFF</div><label class="switch"><input id="atStrategyMACross" data-strategy="moving_average_cross" type="checkbox"><span></span></label></div>
+      <div class="auto-control-row"><div class="auto-control-name">📉 MACD — ON / OFF</div><label class="switch"><input id="atStrategyMACD" data-strategy="macd" type="checkbox"><span></span></label></div>
+      <div class="auto-control-row"><div class="auto-control-name">📈 RSI — ON / OFF</div><label class="switch"><input id="atStrategyRSI" data-strategy="rsi" type="checkbox"><span></span></label></div>
+      <div class="auto-control-row"><div class="auto-control-name">🎚️ BOLLINGER BANDS — ON / OFF</div><label class="switch"><input id="atStrategyBollinger" data-strategy="bollinger_bands" type="checkbox"><span></span></label></div>
+      <div class="auto-control-row"><div class="auto-control-name">🔢 FIBONACCI — ON / OFF</div><label class="switch"><input id="atStrategyFibonacci" data-strategy="fibonacci" type="checkbox"><span></span></label></div>
+      <div class="auto-control-row"><div class="auto-control-name">⚡ SCALPING — ON / OFF</div><label class="switch"><input id="atStrategyScalping" data-strategy="scalping" type="checkbox"><span></span></label></div>
+      <div class="auto-control-row"><div class="auto-control-name">🌪️ NEWS / VOLATILITY — ON / OFF</div><label class="switch"><input id="atStrategyVolatility" data-strategy="volatility_expansion" type="checkbox"><span></span></label></div>
+      <p class="tiny">News/Volatility uses the bot's measured volatility expansion. It does not claim to read a news calendar.</p>
+    </article>
+
+    <article class="panel auto-control-section">
       <div class="panel-title"><h3>🛡️ RISK MANAGEMENT</h3></div>
       <div class="auto-control-row">
         <div class="auto-control-name">🛑 STOP LOSS — ON / OFF</div>

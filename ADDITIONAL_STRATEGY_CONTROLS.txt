@@ -1,0 +1,14 @@
+KETS ADDITIONAL STRATEGY CONTROLS
+=================================
+The Auto Trader button page now includes ON/OFF controls for:
+Trend Following, Breakout, Mean Reversion, Momentum, Price Action,
+Support & Resistance, Supply & Demand, VWAP, Moving Average Cross, MACD,
+RSI, Bollinger Bands, Fibonacci, Scalping, and News / Volatility.
+
+The selection is stored per connected cTrader account in
+strategy_selection_json. When at least one additional strategy is selected,
+the Auto Trader uses the independent strategy-candidate feed from the
+trading bot. When none are selected, the existing KETS Signal History
+execution path remains unchanged.
+
+SMC and Strong Reversal controls remain separate.
