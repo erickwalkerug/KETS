@@ -7,7 +7,7 @@ KETS FINAL FIXES
 - 60 completed 1-minute candles required for data quality.
 - Current/forming candle excluded from analysis.
 - Public dashboard continues to hide strategy indicators.
-- Signal history retained for 7 days.
+- Signal history retained in memory for 1 hour.
 - Trading window remains 06:00-18:00 EAT.
 
 ENTRY QUALITY HARDENING — 2026-09-05
