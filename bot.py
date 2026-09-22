@@ -35,9 +35,36 @@ def _num(value, default=0.0):
     except (TypeError, ValueError):
         return default
 
-def trading_hours_open(now=None):
+TRADING_SESSIONS = (
+    (datetime.time(6, 0), datetime.time(11, 0), "ACTIVE"),
+    (datetime.time(14, 30), datetime.time(17, 30), "ACTIVE"),
+)
+
+def trading_session(now=None):
+    """Return the authoritative KETS trading session in EAT (UTC+3)."""
     now = now or get_eat_time()
-    return datetime.time(6, 0) <= now.time() < datetime.time(18, 0)
+    t = now.time()
+    for start, end, mode in TRADING_SESSIONS:
+        if start <= t < end:
+            boundary = datetime.datetime.combine(now.date(), end, tzinfo=EAT)
+            return {"mode": mode, "active": True, "next_boundary": boundary}
+
+    if t < datetime.time(6, 0):
+        next_boundary = datetime.datetime.combine(now.date(), datetime.time(6, 0), tzinfo=EAT)
+    elif t < datetime.time(14, 30):
+        next_boundary = datetime.datetime.combine(now.date(), datetime.time(14, 30), tzinfo=EAT)
+    else:
+        next_boundary = datetime.datetime.combine(now.date() + datetime.timedelta(days=1), datetime.time(6, 0), tzinfo=EAT)
+
+    mode = "IDLE" if datetime.time(11, 0) <= t < datetime.time(14, 30) else "OUTSIDE_HOURS"
+    return {"mode": mode, "active": False, "next_boundary": next_boundary}
+
+def trading_hours_open(now=None):
+    return trading_session(now)["active"]
+
+def seconds_to_session_boundary(now=None):
+    now = now or get_eat_time()
+    return max(0, int((trading_session(now)["next_boundary"] - now).total_seconds()))
 
 def get_markets(now=None):
     # KETS schedule: weekdays = GOLD only; weekends = BTC only.
@@ -2092,12 +2119,9 @@ def _latest_selected_strategy_signal(requested_symbol, selected_strategies):
     }
 
 def _ctrader_autotrade_once():
-    # Auto-Trade is strictly limited to 06:00-18:00 EAT. Outside this window
-    # the worker remains alive but performs no automatic entries or exits.
-    # It resumes automatically at 06:00 EAT and continues the same target
-    # profit cycle until the configured total target is reached.
-    if not trading_hours_open():
-        return
+    # Position protection/management remains available at all times.
+    # New signal-driven automatic entries are restricted to ACTIVE sessions.
+    session = trading_session()
     with DB_LOCK:
         conn=db_conn(); rows=db_execute(conn,"SELECT * FROM ctrader_connections WHERE auto_enabled=1 AND status IN ('AUTHORIZED','CONNECTED')").fetchall(); conn.close()
     if not rows: return
@@ -2109,6 +2133,10 @@ def _ctrader_autotrade_once():
                 _manage_auto_positions_from_row(row)
                 fresh_row=_ctrader_row_for_user(row["user_id"])
                 if fresh_row: row=dict(fresh_row)
+            # During IDLE/OUTSIDE_HOURS, existing position protection above is
+            # preserved, but no new signal-driven automatic entry is processed.
+            if not session["active"]:
+                continue
             # Auto-Trade uses only the trading-bot signals already stored in this
             # website's Signal History. No external signal URL is polled.
             # The entry/exit
@@ -2242,15 +2270,21 @@ def _ctrader_autotrade_once():
 
 
 def _ctrader_autotrade_loop():
-    # The browser never owns this loop. It runs continuously in the KETS web
-    # service and consumes the same BUY/SELL signals stored in Signal History.
+    # Session-aware worker: fast polling only while ACTIVE; much less background
+    # work while IDLE/OUTSIDE_HOURS. Position protection is still checked by the
+    # worker when configured, so existing positions are not force-closed by the schedule.
     while True:
         try:
+            now = get_eat_time()
+            session = trading_session(now)
             _ctrader_autotrade_once()
-            time.sleep(1)
+            if session["active"]:
+                time.sleep(1)
+            else:
+                time.sleep(min(30, max(5, seconds_to_session_boundary(now))))
         except Exception:
             app.logger.exception("cTrader auto-trade loop error")
-            time.sleep(3)
+            time.sleep(5)
 
 def _ctrader_close_positions(row, auto_only=False):
     accounts=json.loads(row.get("account_ids_json") or "[]")
@@ -2417,14 +2451,9 @@ def _developer_ok():
 @app.route("/api/status", methods=["GET"])
 def api_status():
     now = get_eat_time()
-    active = trading_hours_open(now)
-    if active:
-        seconds_to_boundary = max(0, int((datetime.datetime.combine(now.date(), datetime.time(18, 0), tzinfo=EAT) - now).total_seconds()))
-    else:
-        start = datetime.datetime.combine(now.date(), datetime.time(6, 0), tzinfo=EAT)
-        if now >= datetime.datetime.combine(now.date(), datetime.time(18, 0), tzinfo=EAT):
-            start += datetime.timedelta(days=1)
-        seconds_to_boundary = max(0, int((start - now).total_seconds()))
+    session = trading_session(now)
+    active = session["active"]
+    seconds_to_boundary = seconds_to_session_boundary(now)
     return jsonify({
         "ok": True,
         "engine_running": bool(engine_started) if "engine_started" in globals() else os.environ.get("KETS_DISABLE_ENGINE", "0") != "1",
@@ -2435,8 +2464,10 @@ def api_status():
         "next_broadcast_seconds": max(0, int((datetime.datetime.fromisoformat(next_scan) - now).total_seconds())) if next_scan else None,
         "signal_window": {
             "active": active,
+            "mode": session["mode"],
             "seconds_to_stop": seconds_to_boundary if active else 0,
             "seconds_to_start": seconds_to_boundary if not active else 0,
+            "next_session_start": session["next_boundary"].isoformat(),
         },
         "markets": list(get_markets(now).keys()),
     })
@@ -2584,29 +2615,24 @@ def api_source_signals():
 @app.route("/api/public/welcome", methods=["GET"])
 def api_public_welcome():
     """Public read-only feed for the sign-in/welcome page.
-    Uses the same signal history and 06:00-18:00 EAT window as the dashboard.
+    Uses the same signal history and authoritative EAT session state as the dashboard.
     No authentication is required because this endpoint only powers the
     public preview on the welcome screen.
     """
     now = get_eat_time()
-    active = trading_hours_open(now)
-    if active:
-        seconds_to_boundary = max(0, int((
-            datetime.datetime.combine(now.date(), datetime.time(18, 0), tzinfo=EAT) - now
-        ).total_seconds()))
-    else:
-        start = datetime.datetime.combine(now.date(), datetime.time(6, 0), tzinfo=EAT)
-        if now >= datetime.datetime.combine(now.date(), datetime.time(18, 0), tzinfo=EAT):
-            start += datetime.timedelta(days=1)
-        seconds_to_boundary = max(0, int((start - now).total_seconds()))
+    session = trading_session(now)
+    active = session["active"]
+    seconds_to_boundary = seconds_to_session_boundary(now)
     history = _history_items()
     return jsonify({
         "ok": True,
         "server_time": now.isoformat(),
         "signal_window": {
             "active": active,
+            "mode": session["mode"],
             "seconds_to_stop": seconds_to_boundary if active else 0,
             "seconds_to_start": seconds_to_boundary if not active else 0,
+            "next_session_start": session["next_boundary"].isoformat(),
         },
         "markets": list(get_markets(now).keys()),
         "history": history[-30:],
@@ -2965,7 +2991,7 @@ def api_access():
         "plan":access.get("plan") if access else None,
         "expires":access.get("expires") if access else None,
         "user":_safe_user(user),
-        "trading_hours_eat":"06:00-18:00",
+        "trading_hours_eat":"06:00-11:00 and 14:30-17:30",
         "provider":"Pesapal",
     })
 
@@ -4074,8 +4100,8 @@ def analyze_market(asset, symbol, candles):
 
 # ------------------------- ENGINE ----------------------------
 def build_startup_messages():
-    b="🤖 *KETS STRATEGY ENGINE ONLINE*\n━━━━━━━━━━━━━━━━━━\n✅ Backend connected\n📊 Timeframe: 1 minute\n🔄 Scan interval: 1 minute\n⏰ Trading hours: 06:00-18:00 EAT\n💰 Monday-Friday: GOLD ONLY\n₿ Weekend: BTC ONLY\n🧠 Advanced intelligence ON\n━━━━━━━━━━━━━━━━━━\nℹ️ Strength is strategy alignment, not guaranteed win probability."
-    c="🤖 *KETS STRATEGY ENGINE ONLINE*\n━━━━━━━━━━━━━━━━━━\n✅ Signal system online\n📊 1-minute monitoring\n🔄 Analysis every 1 minute\n⏰ Active: 06:00-18:00 EAT\n⚡ Early-entry detection ON\n━━━━━━━━━━━━━━━━━━\n📡 KETS is monitoring the market."
+    b="🤖 *KETS STRATEGY ENGINE ONLINE*\n━━━━━━━━━━━━━━━━━━\n✅ Backend connected\n📊 Timeframe: 1 minute\n🔄 Scan interval: 1 minute\n⏰ Trading hours: 06:00-11:00 & 14:30-17:30 EAT\n💰 Monday-Friday: GOLD ONLY\n₿ Weekend: BTC ONLY\n🧠 Advanced intelligence ON\n━━━━━━━━━━━━━━━━━━\nℹ️ Strength is strategy alignment, not guaranteed win probability."
+    c="🤖 *KETS STRATEGY ENGINE ONLINE*\n━━━━━━━━━━━━━━━━━━\n✅ Signal system online\n📊 1-minute monitoring\n🔄 Analysis every 1 minute\n⏰ Active: 06:00-11:00 & 14:30-17:30 EAT\n⚡ Early-entry detection ON\n━━━━━━━━━━━━━━━━━━\n📡 KETS is monitoring the market."
     return b,c
 
 

@@ -4,7 +4,7 @@ const hashToken=freshHash.get("login")||"";
 const storedToken=sessionStorage.getItem("kets_user_token")||"";
 const initialToken=hashToken||storedToken;
 if(hashToken)sessionStorage.setItem("kets_user_token",hashToken);
-const state={token:initialToken,user:null,access:null,signals:{},history:[],payments:[],status:{},plans:{},clockOffsetMs:0,signalWindowDeadlineMs:0,nextBroadcastDeadlineMs:0,nextRefreshDeadlineMs:0,welcomeWindowDeadlineMs:0,welcomeClockOffsetMs:0,welcomeRefreshDeadlineMs:0,loading:false,refreshInProgress:false};
+const state={token:initialToken,user:null,access:null,signals:{},history:[],payments:[],status:{},plans:{},clockOffsetMs:0,signalWindowDeadlineMs:0,nextBroadcastDeadlineMs:0,nextRefreshDeadlineMs:0,welcomeWindowDeadlineMs:0,welcomeClockOffsetMs:0,welcomeRefreshDeadlineMs:0,welcomeWindowMode:"OUTSIDE_HOURS",loading:false,refreshInProgress:false};
 const $=id=>document.getElementById(id);
 function headers(extra={}){return {Accept:"application/json",...(state.token?{Authorization:`Bearer ${state.token}`}:{}) ,...extra};}
 async function api(path,opts={}){
@@ -100,7 +100,7 @@ function tickTimers(){
  }
  const nextBroadcastSeconds=Math.max(0,Math.ceil((state.nextBroadcastDeadlineMs-now)/1000));
  if($("signalWindow")) $("signalWindow").textContent=countdown(signalSeconds);
- if($("windowLabel")) $("windowLabel").textContent=w.active?"Time left before signals stop":"Until signals start at 06:00 EAT";
+ if($("windowLabel")){ const mode=w.mode||((w.active)?"ACTIVE":"OUTSIDE_HOURS"); $("windowLabel").textContent=mode==="ACTIVE"?"Time left before trading stops":(mode==="IDLE"?"Trading resumes 14:30 EAT":"Trading resumes 06:00 EAT"); }
  if($("nextBroadcast")) $("nextBroadcast").textContent=countdown(nextBroadcastSeconds);
  const expiryEl=$("paymentExpiryTimer");
  if(expiryEl && state.access?.expires){
@@ -212,7 +212,7 @@ function tickWelcomePreview(){
  const seconds=Math.max(0,Math.ceil((state.welcomeWindowDeadlineMs-now)/1000));
  const active=state.welcomeWindowActive===true;
  timeEl.textContent=countdown(seconds);
- labelEl.textContent=active?"Time left before signals stop":"Until signals start at 06:00 EAT";
+ labelEl.textContent=state.welcomeWindowMode==="ACTIVE"?"Time left before trading stops":(state.welcomeWindowMode==="IDLE"?"Trading resumes 14:30 EAT":"Trading resumes 06:00 EAT");
  if(state.welcomeRefreshDeadlineMs<=Date.now()){
    state.welcomeRefreshDeadlineMs=Date.now()+10000;
    loadWelcomePreview();
@@ -254,6 +254,7 @@ async function loadWelcomePreview(){
  try{
    const d=await api("/api/public/welcome",{timeoutMs:10000});
    state.welcomeWindowActive=d?.signal_window?.active===true;
+   state.welcomeWindowMode=d?.signal_window?.mode||"OUTSIDE_HOURS";
    setWelcomeTimer(d);
    renderWelcomeHistory(d.history||[]);
  }catch(e){
