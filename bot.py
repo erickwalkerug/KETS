@@ -16,8 +16,9 @@ app = Flask(__name__)
 API_LOCK = Lock()
 MARKET_STATE = {}
 SIGNAL_HISTORY = []
-SIGNAL_HISTORY_DAYS = 7
+SIGNAL_HISTORY_DAYS = 2
 STRATEGY_SCAN_FEED = {}
+STRATEGY_SCAN_TTL_MINUTES = 10
 STRATEGY_SCAN_LOCK = Lock()
 last_signal = {}
 last_scan = None
@@ -1881,7 +1882,7 @@ def _signal_matches_symbol(sig, requested_symbol):
 
 
 def _current_stability_label():
-    """Return the current 7-day KETS stability state used by the dashboard.
+    """Return the current 2-day KETS stability state used by the dashboard.
 
     The state is based on the same STRONG REVERSAL history counts displayed in
     the Bullish/Bearish Stability section, so the Auto-Trade requirement and
@@ -2065,6 +2066,29 @@ def _queue_and_execute_ctrader(row, sig, automatic=True):
 
 
 
+def _clean_strategy_scan_feed_locked(now=None):
+    """Remove temporary strategy-scan snapshots older than 10 minutes.
+
+    This is intentionally separate from SIGNAL_HISTORY: Auto-Trader signal
+    history remains 2 days, while temporary strategy snapshots are short-lived.
+    """
+    now = now or datetime.datetime.now(datetime.timezone.utc)
+    cutoff = now - datetime.timedelta(minutes=STRATEGY_SCAN_TTL_MINUTES)
+    stale = []
+    for asset, scan in list(STRATEGY_SCAN_FEED.items()):
+        try:
+            raw = scan.get("timestamp_utc") or scan.get("timestamp")
+            dt = datetime.datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=datetime.timezone.utc)
+            if dt < cutoff:
+                stale.append(asset)
+        except Exception:
+            # Malformed temporary scans should not live forever.
+            stale.append(asset)
+    for asset in stale:
+        STRATEGY_SCAN_FEED.pop(asset, None)
+
 def _latest_selected_strategy_signal(requested_symbol, selected_strategies):
     """Build an actionable signal from the independent strategy scan feed."""
     selected=[str(x) for x in (selected_strategies or [])]
@@ -2072,6 +2096,7 @@ def _latest_selected_strategy_signal(requested_symbol, selected_strategies):
         return None
     asset="XAUUSD" if str(requested_symbol).upper().replace("/","") in {"XAUUSD","GOLD"} else "BTCUSD"
     with STRATEGY_SCAN_LOCK:
+        _clean_strategy_scan_feed_locked()
         scan=dict(STRATEGY_SCAN_FEED.get(asset) or {})
     strategies=scan.get("strategy_signals") if isinstance(scan.get("strategy_signals"),dict) else {}
     candidates=[]
@@ -2589,12 +2614,14 @@ def api_strategy_scans():
     if not asset or not isinstance(strategies,dict):
         return jsonify({"error":"Strategy scan must include asset and strategy_signals."}),400
     with STRATEGY_SCAN_LOCK:
+        _clean_strategy_scan_feed_locked()
         STRATEGY_SCAN_FEED[asset]=dict(body)
     return jsonify({"ok":True,"accepted":True,"asset":asset}),200
 
 @app.route("/api/strategy-scans", methods=["GET"])
 def api_strategy_scans_get():
     with STRATEGY_SCAN_LOCK:
+        _clean_strategy_scan_feed_locked()
         return jsonify({"ok":True,"scans":dict(STRATEGY_SCAN_FEED)})
 
 @app.route("/api/source/signals", methods=["GET"])
