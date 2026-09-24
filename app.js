@@ -947,6 +947,7 @@ async function refreshManagedStatus(){
   if($("atHighStability"))$("atHighStability").checked=!!st.high_stability_entry;
   if($("atStrongReversal"))$("atStrongReversal").checked=!!st.strong_only;
   if($("atSMC"))$("atSMC").checked=!!st.smc_only;
+  if($("atKetsStrategy"))$("atKetsStrategy").checked=st.kets_strategy_enabled !== false;
   const selectedStrategies=Array.isArray(st.strategy_selection)?st.strategy_selection:[];
   KETS_ADDITIONAL_STRATEGY_CONTROLS.forEach(([id,key])=>{
     const el=$(id);
@@ -1116,6 +1117,7 @@ const AUTO_TRADER_CONTROL_IDS={
   highStability:"atHighStability",
   strongReversal:"atStrongReversal",
   smc:"atSMC",
+  ketsStrategy:"atKetsStrategy",
   stopLoss:"atStopLoss",
   takeProfit:"atTakeProfit",
   breakEven:"atBreakEven",
@@ -1198,6 +1200,7 @@ async function saveAutoTraderSettings(){
     high_stability_entry:!!$("atHighStability")?.checked,
     strong_only:!!$("atStrongReversal")?.checked,
     smc_only:!!$("atSMC")?.checked,
+    kets_strategy_enabled:!!$("atKetsStrategy")?.checked,
     strategy_selection:selected,
     break_even_enabled:!!$("atBreakEven")?.checked,
     trailing_stop_enabled:!!$("atTrailingStop")?.checked
@@ -1302,6 +1305,24 @@ function initAutoTraderControls(){
         setManagedActionMessage(id==="atSMC" ? (el.checked ? "SMC Strategy is ON — Auto-Trader will require SMC confirmation." : "SMC Strategy is OFF — Auto-Trader uses the existing entry rules.") : `${el.parentElement?.parentElement?.querySelector(".auto-control-name")?.textContent||"Entry control"} saved.`,"ok");
       }catch(e){setManagedActionMessage(e.message||"Could not save the control.","error");}
     });
+  });
+
+  if($("atKetsStrategy"))$("atKetsStrategy").addEventListener("change",async()=>{
+    saveAutoTraderControlState();
+    try{
+      await api("/api/managed/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+        kets_strategy_enabled:!!$("atKetsStrategy").checked,
+        strategy_selection:KETS_ADDITIONAL_STRATEGY_CONTROLS.filter(([id])=>$(id)?.checked).map(([,key])=>key),
+        opposite_signal_confirmation:!!$("atTwoSignal")?.checked,
+        low_stability_entry:!!$("atLowStability")?.checked,
+        high_stability_entry:!!$("atHighStability")?.checked,
+        strong_only:!!$("atStrongReversal")?.checked,
+        smc_only:!!$("atSMC")?.checked,
+        break_even_enabled:!!$("atBreakEven")?.checked,
+        trailing_stop_enabled:!!$("atTrailingStop")?.checked
+      })});
+      setManagedActionMessage($("atKetsStrategy").checked ? "KETS Strategy is ON." : "KETS Strategy is OFF — only selected additional strategies can generate new Auto-Trader entries.","ok");
+    }catch(e){setManagedActionMessage(e.message||"Could not save KETS Strategy.","error"); await refreshManagedStatus();}
   });
 
   KETS_ADDITIONAL_STRATEGY_CONTROLS.forEach(([id])=>{

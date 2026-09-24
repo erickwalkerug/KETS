@@ -448,6 +448,7 @@ def init_db():
                     ("strong_only", "INTEGER DEFAULT 0"),
                     ("smc_only", "INTEGER DEFAULT 0"),
                     ("strategy_selection_json", "TEXT DEFAULT '[]'"),
+                    ("kets_strategy_enabled", "INTEGER DEFAULT 1"),
                     ("low_stability_entry", "INTEGER DEFAULT 0"),
                     ("high_stability_entry", "INTEGER DEFAULT 0"),
                     ("opposite_signal_confirmation", "INTEGER DEFAULT 0"),
@@ -1480,6 +1481,7 @@ def managed_status():
             "min_quality":_num(row.get("min_quality")) if row.get("min_quality") is not None else 40,
             "strong_only":bool(row.get("strong_only")),
             "smc_only":bool(row.get("smc_only")),
+            "kets_strategy_enabled":bool(row.get("kets_strategy_enabled") if row.get("kets_strategy_enabled") is not None else 1),
             "strategy_selection":json.loads(row.get("strategy_selection_json") or "[]") if str(row.get("strategy_selection_json") or "").strip() else [],
             "low_stability_entry":bool(row.get("low_stability_entry")),
             "high_stability_entry":bool(row.get("high_stability_entry")),
@@ -1531,6 +1533,11 @@ def managed_settings():
             selected_strategies=[str(x) for x in (raw_strategies or []) if str(x) in allowed_strategies]
         selected_strategies=list(dict.fromkeys(selected_strategies))
         strategy_selection_json=json.dumps(selected_strategies)
+        # The original KETS strategy is an explicit Auto-Trader source. It is
+        # enabled by default for backward compatibility. Additional strategies
+        # can run alongside it; if KETS is OFF, only the selected additional
+        # strategy candidates are eligible to generate entries.
+        kets_strategy_enabled=1 if bool(body.get("kets_strategy_enabled", row.get("kets_strategy_enabled") if row.get("kets_strategy_enabled") is not None else 1)) else 0
         low_stability=1 if bool(body.get("low_stability_entry",row.get("low_stability_entry") or 0)) else 0
         high_stability=1 if bool(body.get("high_stability_entry",row.get("high_stability_entry") or 0)) else 0
         opposite_confirmation=1 if bool(body.get("opposite_signal_confirmation",row.get("opposite_signal_confirmation") or 0)) else 0
@@ -1545,9 +1552,9 @@ def managed_settings():
         break_even=1 if bool(body.get("break_even_enabled",row.get("break_even_enabled") or 0)) else 0
         trailing=1 if bool(body.get("trailing_stop_enabled",row.get("trailing_stop_enabled") or 0)) else 0
         with DB_LOCK:
-            conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET lot_size=?,profit_target=?,target_profit_total=?,min_quality=?,strong_only=?,smc_only=?,strategy_selection_json=?,low_stability_entry=?,high_stability_entry=?,opposite_signal_confirmation=?,max_lot=?,max_open_trades=?,allocation_pct=?,break_even_enabled=?,trailing_stop_enabled=?,auto_symbol=?,updated_at=? WHERE id=?",(lot,target,target,quality,strong,smc_only,strategy_selection_json,low_stability,high_stability,opposite_confirmation,max_lot,max_open,allocation,break_even,trailing,auto_symbol,_now_iso(),row["id"])); conn.commit(); conn.close()
+            conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET lot_size=?,profit_target=?,target_profit_total=?,min_quality=?,strong_only=?,smc_only=?,strategy_selection_json=?,kets_strategy_enabled=?,low_stability_entry=?,high_stability_entry=?,opposite_signal_confirmation=?,max_lot=?,max_open_trades=?,allocation_pct=?,break_even_enabled=?,trailing_stop_enabled=?,auto_symbol=?,updated_at=? WHERE id=?",(lot,target,target,quality,strong,smc_only,strategy_selection_json,kets_strategy_enabled,low_stability,high_stability,opposite_confirmation,max_lot,max_open,allocation,break_even,trailing,auto_symbol,_now_iso(),row["id"])); conn.commit(); conn.close()
         row=_ctrader_row_for_user(user["id"])
-    return jsonify({"ok":True,"lot_size":_num(row.get("lot_size")) or .01,"profit_target":_num(row.get("target_profit_total")) if row.get("target_profit_total") is not None else (_num(row.get("profit_target")) if row.get("profit_target") is not None else 25),"target_profit_total":_num(row.get("target_profit_total")) if row.get("target_profit_total") is not None else (_num(row.get("profit_target")) if row.get("profit_target") is not None else 25),"min_quality":_num(row.get("min_quality")) if row.get("min_quality") is not None else 40,"strong_only":bool(row.get("strong_only")),"smc_only":bool(row.get("smc_only")),"strategy_selection":json.loads(row.get("strategy_selection_json") or "[]") if str(row.get("strategy_selection_json") or "").strip() else [],"low_stability_entry":bool(row.get("low_stability_entry")),"high_stability_entry":bool(row.get("high_stability_entry")),"opposite_signal_confirmation":bool(row.get("opposite_signal_confirmation")),"max_lot":_num(row.get("max_lot")) or 10,"max_open_trades":int(row.get("max_open_trades") or 1),"allocation_pct":_num(row.get("allocation_pct")) or 10,"break_even_enabled":bool(row.get("break_even_enabled")),"trailing_stop_enabled":bool(row.get("trailing_stop_enabled")),"auto_symbol":str(row.get("auto_symbol") or "XAUUSD").upper()})
+    return jsonify({"ok":True,"lot_size":_num(row.get("lot_size")) or .01,"profit_target":_num(row.get("target_profit_total")) if row.get("target_profit_total") is not None else (_num(row.get("profit_target")) if row.get("profit_target") is not None else 25),"target_profit_total":_num(row.get("target_profit_total")) if row.get("target_profit_total") is not None else (_num(row.get("profit_target")) if row.get("profit_target") is not None else 25),"min_quality":_num(row.get("min_quality")) if row.get("min_quality") is not None else 40,"strong_only":bool(row.get("strong_only")),"smc_only":bool(row.get("smc_only")),"kets_strategy_enabled":bool(row.get("kets_strategy_enabled") if row.get("kets_strategy_enabled") is not None else 1),"strategy_selection":json.loads(row.get("strategy_selection_json") or "[]") if str(row.get("strategy_selection_json") or "").strip() else [],"low_stability_entry":bool(row.get("low_stability_entry")),"high_stability_entry":bool(row.get("high_stability_entry")),"opposite_signal_confirmation":bool(row.get("opposite_signal_confirmation")),"max_lot":_num(row.get("max_lot")) or 10,"max_open_trades":int(row.get("max_open_trades") or 1),"allocation_pct":_num(row.get("allocation_pct")) or 10,"break_even_enabled":bool(row.get("break_even_enabled")),"trailing_stop_enabled":bool(row.get("trailing_stop_enabled")),"auto_symbol":str(row.get("auto_symbol") or "XAUUSD").upper()})
 
 @app.route("/api/managed/move-break-even", methods=["POST"])
 def managed_move_break_even():
@@ -2143,6 +2150,34 @@ def _latest_selected_strategy_signal(requested_symbol, selected_strategies):
         ],
     }
 
+def _latest_autotrader_signal(requested_symbol, kets_strategy_enabled=True, selected_strategies=None):
+    """Select the Auto-Trader entry source(s).
+
+    KETS Strategy is the original KETS signal feed. Additional strategies are
+    independent candidates. When both are enabled, the strongest confirmed
+    candidate is used. When KETS is OFF, KETS Signal History is excluded.
+    When KETS is ON and no additional strategy is selected, behavior is exactly
+    the original KETS-only path.
+    """
+    candidates=[]
+    if kets_strategy_enabled:
+        sig=_latest_history_signal(requested_symbol)
+        if sig:
+            score=_num(sig.get("score") or sig.get("strength") or sig.get("signal_strength"))
+            candidates.append((score, str(sig.get("timestamp") or sig.get("timestamp_utc") or ""), "KETS Strategy", sig))
+    if selected_strategies:
+        sig=_latest_selected_strategy_signal(requested_symbol, selected_strategies)
+        if sig:
+            score=_num(sig.get("strategy_score") or sig.get("score"))
+            candidates.append((score, str(sig.get("timestamp") or sig.get("timestamp_utc") or ""), str(sig.get("strategy_name") or sig.get("strategy") or "Additional Strategy"), sig))
+    if not candidates:
+        return None
+    # Do not let a zero-score strategy candidate automatically outrank a real
+    # KETS signal. If scores tie, prefer the most recent source.
+    candidates.sort(key=lambda x:(x[0], x[1]), reverse=True)
+    return candidates[0][3]
+
+
 def _ctrader_autotrade_once():
     # Position protection/management remains available at all times.
     # New signal-driven automatic entries are restricted to ACTIVE sessions.
@@ -2172,10 +2207,8 @@ def _ctrader_autotrade_once():
                 selected_strategies=json.loads(row.get("strategy_selection_json") or "[]")
             except Exception:
                 selected_strategies=[]
-            if selected_strategies:
-                sig=_latest_selected_strategy_signal(auto_symbol, selected_strategies)
-            else:
-                sig=_latest_history_signal(auto_symbol)
+            kets_strategy_enabled=bool(row.get("kets_strategy_enabled") if row.get("kets_strategy_enabled") is not None else 1)
+            sig=_latest_autotrader_signal(auto_symbol, kets_strategy_enabled, selected_strategies)
             if not sig:
                 continue
             sid=_signal_id(sig)
