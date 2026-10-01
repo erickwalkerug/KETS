@@ -10,3 +10,5 @@ KETS STORAGE SETUP
 Render service settings:
 - Build command: pip install -r requirements.txt
 - Start command: gunicorn app:app --workers 1 --threads 4 --timeout 120
+
+Trading schedule: Monday-Friday 06:00-11:00 and 15:00-18:00 EAT; Saturday-Sunday offline.

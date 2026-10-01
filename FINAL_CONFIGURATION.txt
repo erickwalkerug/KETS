@@ -1,0 +1,27 @@
+KETS FINAL CONFIGURATION
+
+Working schedule (EAT / UTC+3):
+- Monday-Friday: 06:00-11:00
+- Monday-Friday: 15:00-18:00
+- Saturday-Sunday: OFFLINE
+
+Outside active windows, new signal scanning/entries are paused. Existing cTrader position-protection logic is not force-closed solely because a session ends.
+
+Preserved:
+- Existing KETS dashboard/layout
+- Gold-first weekday market display
+- Signal History and 2-day retention
+- Strong Reversal display/data
+- SMC and additional strategy controls
+- Auto-Trader controls and Signal History execution flow
+- cTrader account selection, balance/profit and execution flow
+- Existing risk/position-management controls
+
+Memory protections:
+- Temporary strategy-scan snapshots: 10-minute retention
+- In-memory signal cache is bounded; persisted history remains 2 days
+- cTrader account snapshots remain short-lived
+
+The approved schedule is persisted in KETS app metadata so it survives normal restarts/redeploys when the configured persistent database storage is available.
+
+No existing strategy thresholds or signal-generation rules were intentionally changed by this fix.

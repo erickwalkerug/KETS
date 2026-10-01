@@ -100,7 +100,7 @@ function tickTimers(){
  }
  const nextBroadcastSeconds=Math.max(0,Math.ceil((state.nextBroadcastDeadlineMs-now)/1000));
  if($("signalWindow")) $("signalWindow").textContent=countdown(signalSeconds);
- if($("windowLabel")){ const mode=w.mode||((w.active)?"ACTIVE":"OUTSIDE_HOURS"); $("windowLabel").textContent=mode==="ACTIVE"?"Time left before trading stops":(mode==="IDLE"?"Trading resumes 14:30 EAT":"Trading resumes 06:00 EAT"); }
+ if($("windowLabel")){ const mode=w.mode||((w.active)?"ACTIVE":"OUTSIDE_HOURS"); $("windowLabel").textContent=mode==="ACTIVE"?"Time left before trading stops":(mode==="IDLE"?"Trading resumes 15:00 EAT":"Trading resumes 06:00 EAT"); }
  if($("nextBroadcast")) $("nextBroadcast").textContent=countdown(nextBroadcastSeconds);
  const expiryEl=$("paymentExpiryTimer");
  if(expiryEl && state.access?.expires){
@@ -212,7 +212,7 @@ function tickWelcomePreview(){
  const seconds=Math.max(0,Math.ceil((state.welcomeWindowDeadlineMs-now)/1000));
  const active=state.welcomeWindowActive===true;
  timeEl.textContent=countdown(seconds);
- labelEl.textContent=state.welcomeWindowMode==="ACTIVE"?"Time left before trading stops":(state.welcomeWindowMode==="IDLE"?"Trading resumes 14:30 EAT":"Trading resumes 06:00 EAT");
+ labelEl.textContent=state.welcomeWindowMode==="ACTIVE"?"Time left before trading stops":(state.welcomeWindowMode==="IDLE"?"Trading resumes 15:00 EAT":"Trading resumes 06:00 EAT");
  if(state.welcomeRefreshDeadlineMs<=Date.now()){
    state.welcomeRefreshDeadlineMs=Date.now()+10000;
    loadWelcomePreview();
@@ -565,13 +565,10 @@ function renderSignals(){
  const gold=state.signals?.GOLD||state.signals?.XAUUSD||state.signals?.XAU;
  const btc=state.signals?.BTC||state.signals?.BTCUSD;
  // Only the market scheduled for the current day is displayed. The backend
- // already enforces the same schedule: Monday-Friday = GOLD, Saturday-Sunday = BTC.
+ // The backend is authoritative: weekdays = GOLD, weekends = OFFLINE.
  const activeMarkets=Array.isArray(state.status?.markets)?state.status.markets.map(x=>String(x).toUpperCase()):[];
- const serverMs=Date.parse(state.status?.server_time||state.status?.time_eat||"");
- const day=Number.isFinite(serverMs)?new Date(serverMs).getUTCDay():new Date().getDay();
- const isWeekend=day===0||day===6;
- const showGold=activeMarkets.length?activeMarkets.some(x=>x==="GOLD"||x==="XAUUSD"||x==="XAU"):!isWeekend;
- const showBtc=activeMarkets.length?activeMarkets.some(x=>x==="BTC"||x==="BTCUSD"||x==="BITCOIN"):isWeekend;
+ const showGold=activeMarkets.some(x=>x==="GOLD"||x==="XAUUSD"||x==="XAU");
+ const showBtc=activeMarkets.some(x=>x==="BTC"||x==="BTCUSD"||x==="BITCOIN");
  let html="";
  if(showGold) html += gold ? renderRichDashboard(gold,'GOLD') : renderWaitingDashboard('GOLD');
  if(showBtc) html += btc ? renderRichDashboard(btc,'BTC') : renderWaitingDashboard('BTC');
@@ -737,10 +734,11 @@ function renderManagedTrading(){
  if(note) note.textContent='Broker connection is not configured yet. This page will not move or hold money by itself.';
  const markets=state.signals||{};
  const activeMarkets=Array.isArray(state.status?.markets)?state.status.markets.map(x=>String(x).toUpperCase()):[];
- const weekend=(()=>{const t=Date.parse(state.status?.server_time||state.status?.time_eat||""); const d=Number.isFinite(t)?new Date(t).getUTCDay():new Date().getDay(); return d===0||d===6;})();
- const preferredKeys=weekend
+ const preferredKeys=activeMarkets.some(x=>x==="BTC"||x==="BTCUSD"||x==="BITCOIN")
    ? ["BTC","BTCUSD"]
-   : ["GOLD","XAUUSD","XAU"];
+   : activeMarkets.some(x=>x==="GOLD"||x==="XAUUSD"||x==="XAU")
+   ? ["GOLD","XAUUSD","XAU"]
+   : [];
  let raw=null;
  for(const key of preferredKeys){ if(markets[key]){ raw=markets[key]; break; } }
  if(!raw){
@@ -759,7 +757,7 @@ function renderManagedTrading(){
    el.innerHTML='<div class="empty">No Current KETS signal is ready right now. When KETS status is READY, this table will show the manual entry, take profit and stop loss levels.</div>';
    return;
  }
- const market=String(s.asset||s.market||s.symbol||(weekend?"BTC":"GOLD")).toUpperCase();
+ const market=String(s.asset||s.market||s.symbol||preferredKeys[0]||"GOLD").toUpperCase();
  const score=s.score==null?'--':Number(s.score).toFixed(0);
  const lot=Number($("managedLotSize")?.value||0.01);
  const move=Math.abs(Number(tp)-Number(price));

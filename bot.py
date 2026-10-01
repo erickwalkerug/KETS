@@ -17,6 +17,7 @@ API_LOCK = Lock()
 MARKET_STATE = {}
 SIGNAL_HISTORY = []
 SIGNAL_HISTORY_DAYS = 2
+MAX_IN_MEMORY_SIGNALS = 500
 STRATEGY_SCAN_FEED = {}
 STRATEGY_SCAN_TTL_MINUTES = 10
 STRATEGY_SCAN_LOCK = Lock()
@@ -38,13 +39,18 @@ def _num(value, default=0.0):
 
 TRADING_SESSIONS = (
     (datetime.time(6, 0), datetime.time(11, 0), "ACTIVE"),
-    (datetime.time(14, 30), datetime.time(17, 30), "ACTIVE"),
+    (datetime.time(15, 0), datetime.time(18, 0), "ACTIVE"),
 )
 
 def trading_session(now=None):
     """Return the authoritative KETS trading session in EAT (UTC+3)."""
     now = now or get_eat_time()
     t = now.time()
+    # Saturday and Sunday are completely offline.
+    if now.weekday() >= 5:
+        days_to_monday = 7 - now.weekday()
+        next_boundary = datetime.datetime.combine(now.date() + datetime.timedelta(days=days_to_monday), datetime.time(6, 0), tzinfo=EAT)
+        return {"mode": "WEEKEND_OFFLINE", "active": False, "next_boundary": next_boundary}
     for start, end, mode in TRADING_SESSIONS:
         if start <= t < end:
             boundary = datetime.datetime.combine(now.date(), end, tzinfo=EAT)
@@ -52,12 +58,12 @@ def trading_session(now=None):
 
     if t < datetime.time(6, 0):
         next_boundary = datetime.datetime.combine(now.date(), datetime.time(6, 0), tzinfo=EAT)
-    elif t < datetime.time(14, 30):
-        next_boundary = datetime.datetime.combine(now.date(), datetime.time(14, 30), tzinfo=EAT)
+    elif t < datetime.time(15, 0):
+        next_boundary = datetime.datetime.combine(now.date(), datetime.time(15, 0), tzinfo=EAT)
     else:
         next_boundary = datetime.datetime.combine(now.date() + datetime.timedelta(days=1), datetime.time(6, 0), tzinfo=EAT)
 
-    mode = "IDLE" if datetime.time(11, 0) <= t < datetime.time(14, 30) else "OUTSIDE_HOURS"
+    mode = "IDLE" if datetime.time(11, 0) <= t < datetime.time(15, 0) else "OUTSIDE_HOURS"
     return {"mode": mode, "active": False, "next_boundary": next_boundary}
 
 def trading_hours_open(now=None):
@@ -68,11 +74,11 @@ def seconds_to_session_boundary(now=None):
     return max(0, int((trading_session(now)["next_boundary"] - now).total_seconds()))
 
 def get_markets(now=None):
-    # KETS schedule: weekdays = GOLD only; weekends = BTC only.
+    # KETS schedule: weekdays = GOLD only; weekends = fully offline.
     now = now or get_eat_time()
     if now.weekday() < 5:
         return {"GOLD": "XAU/USD"}
-    return {"BTC": "BTC/USD"}
+    return {}
 
 def _source_config():
     return (
@@ -486,6 +492,35 @@ def init_db():
     print(f"✅ KETS persistent storage ready: {'Render PostgreSQL' if USING_POSTGRES else DB_PATH}")
 
 init_db()
+
+# Persist the approved working-hours schedule in KETS app metadata so a
+# restart/redeploy does not silently revert it.
+def _load_saved_schedule_from_meta():
+    global TRADING_SESSIONS
+    default = {"timezone":"EAT","weekdays":[0,1,2,3,4],"sessions":[["06:00","11:00"],["15:00","18:00"]],"weekend":"OFFLINE"}
+    try:
+        with DB_LOCK:
+            conn=db_conn()
+            row=db_execute(conn,"SELECT value FROM app_meta WHERE key=?",("trading_schedule",)).fetchone()
+            if not row:
+                db_execute(conn,"INSERT INTO app_meta(key,value) VALUES(?,?)",("trading_schedule",json.dumps(default,separators=(",",":"))))
+                conn.commit()
+                cfg=default
+            else:
+                raw = row["value"] if isinstance(row, dict) else row[0]
+                cfg=json.loads(raw)
+            conn.close()
+        sessions=[]
+        for start,end in cfg.get("sessions",[]):
+            sh,sm=[int(x) for x in str(start).split(":",1)]
+            eh,em=[int(x) for x in str(end).split(":",1)]
+            sessions.append((datetime.time(sh,sm),datetime.time(eh,em),"ACTIVE"))
+        if sessions:
+            TRADING_SESSIONS=tuple(sessions)
+    except Exception as exc:
+        app.logger.warning("Saved trading schedule load failed; using defaults: %s",exc)
+
+_load_saved_schedule_from_meta()
 
 def _now_iso():
     return get_eat_time().isoformat()
@@ -2613,6 +2648,8 @@ def api_signals():
                         if dt >= cutoff: kept.append(x)
                     except Exception:
                         kept.append(x)
+                if len(kept) > MAX_IN_MEMORY_SIGNALS:
+                    kept = kept[-MAX_IN_MEMORY_SIGNALS:]
                 SIGNAL_HISTORY[:] = kept
         _persist_signal(item)
         return jsonify({"ok": True, "accepted": True, "signal": item}), 200
@@ -2695,6 +2732,9 @@ def api_public_welcome():
             "next_session_start": session["next_boundary"].isoformat(),
         },
         "markets": list(get_markets(now).keys()),
+        "trading_days": "Monday-Friday",
+        "weekend_mode": "OFFLINE",
+        "trading_hours_eat": "06:00-11:00 and 15:00-18:00",
         "history": history[-30:],
     })
 
@@ -3051,7 +3091,7 @@ def api_access():
         "plan":access.get("plan") if access else None,
         "expires":access.get("expires") if access else None,
         "user":_safe_user(user),
-        "trading_hours_eat":"06:00-11:00 and 14:30-17:30",
+        "trading_hours_eat":"06:00-11:00 and 15:00-18:00",
         "provider":"Pesapal",
     })
 
@@ -4160,8 +4200,8 @@ def analyze_market(asset, symbol, candles):
 
 # ------------------------- ENGINE ----------------------------
 def build_startup_messages():
-    b="🤖 *KETS STRATEGY ENGINE ONLINE*\n━━━━━━━━━━━━━━━━━━\n✅ Backend connected\n📊 Timeframe: 1 minute\n🔄 Scan interval: 1 minute\n⏰ Trading hours: 06:00-11:00 & 14:30-17:30 EAT\n💰 Monday-Friday: GOLD ONLY\n₿ Weekend: BTC ONLY\n🧠 Advanced intelligence ON\n━━━━━━━━━━━━━━━━━━\nℹ️ Strength is strategy alignment, not guaranteed win probability."
-    c="🤖 *KETS STRATEGY ENGINE ONLINE*\n━━━━━━━━━━━━━━━━━━\n✅ Signal system online\n📊 1-minute monitoring\n🔄 Analysis every 1 minute\n⏰ Active: 06:00-11:00 & 14:30-17:30 EAT\n⚡ Early-entry detection ON\n━━━━━━━━━━━━━━━━━━\n📡 KETS is monitoring the market."
+    b="🤖 *KETS STRATEGY ENGINE ONLINE*\n━━━━━━━━━━━━━━━━━━\n✅ Backend connected\n📊 Timeframe: 1 minute\n🔄 Scan interval: 1 minute\n⏰ Trading hours: 06:00-11:00 & 15:00-18:00 EAT\n💰 Monday-Friday: GOLD ONLY\n⏸️ Saturday-Sunday: OFFLINE\n🧠 Advanced intelligence ON\n━━━━━━━━━━━━━━━━━━\nℹ️ Strength is strategy alignment, not guaranteed win probability."
+    c="🤖 *KETS STRATEGY ENGINE ONLINE*\n━━━━━━━━━━━━━━━━━━\n✅ Signal system online\n📊 1-minute monitoring\n🔄 Analysis every 1 minute\n⏰ Active: 06:00-11:00 & 15:00-18:00 EAT\n⚡ Early-entry detection ON\n━━━━━━━━━━━━━━━━━━\n📡 KETS is monitoring the market."
     return b,c
 
 
