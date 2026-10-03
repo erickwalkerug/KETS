@@ -453,8 +453,8 @@ def init_db():
                     ("min_quality", "DOUBLE PRECISION DEFAULT 40"),
                     ("strong_only", "INTEGER DEFAULT 0"),
                     ("smc_only", "INTEGER DEFAULT 0"),
-                    ("strategy_selection_json", "TEXT DEFAULT '[]'"),
-                    ("kets_strategy_enabled", "INTEGER DEFAULT 1"),
+                    ("strategy_selection_json", "TEXT DEFAULT '[\"smc\"]'"),
+                    ("kets_strategy_enabled", "INTEGER DEFAULT 0"),
                     ("low_stability_entry", "INTEGER DEFAULT 0"),
                     ("high_stability_entry", "INTEGER DEFAULT 0"),
                     ("opposite_signal_confirmation", "INTEGER DEFAULT 0"),
@@ -486,6 +486,14 @@ def init_db():
                     except Exception:
                         # Duplicate-column errors are expected on repeat boots.
                         pass
+            # Make SMC the default Auto-Trader signal source for legacy rows
+            # that have never selected an independent strategy. This changes
+            # only the signal source default; all existing entry/reversal/risk
+            # rules remain untouched.
+            try:
+                db_execute(conn, "UPDATE ctrader_connections SET strategy_selection_json=?, kets_strategy_enabled=0 WHERE (strategy_selection_json IS NULL OR TRIM(strategy_selection_json)='' OR strategy_selection_json='[]')", ('["smc"]',))
+            except Exception:
+                pass
             conn.commit()
         finally:
             conn.close()
@@ -1515,9 +1523,9 @@ def managed_status():
             "auto_profit_total":_num(row.get("auto_profit_total")),
             "min_quality":_num(row.get("min_quality")) if row.get("min_quality") is not None else 40,
             "strong_only":bool(row.get("strong_only")),
-            "smc_only":bool(row.get("smc_only")),
-            "kets_strategy_enabled":bool(row.get("kets_strategy_enabled") if row.get("kets_strategy_enabled") is not None else 1),
-            "strategy_selection":json.loads(row.get("strategy_selection_json") or "[]") if str(row.get("strategy_selection_json") or "").strip() else [],
+            "smc_only":False,
+            "kets_strategy_enabled":bool(row.get("kets_strategy_enabled") if row.get("kets_strategy_enabled") is not None else 0),
+            "strategy_selection":json.loads(row.get("strategy_selection_json") or '["smc"]') if str(row.get("strategy_selection_json") or "").strip() else ["smc"],
             "low_stability_entry":bool(row.get("low_stability_entry")),
             "high_stability_entry":bool(row.get("high_stability_entry")),
             "max_lot":_num(row.get("max_lot")) or 10,
@@ -1556,10 +1564,10 @@ def managed_settings():
         except Exception: quality=40
         strong=1 if bool(body.get("strong_only",row.get("strong_only") or 0)) else 0
         smc_only=1 if bool(body.get("smc_only",row.get("smc_only") or 0)) else 0
-        allowed_strategies={"trend_following","breakout","mean_reversion","momentum","price_action","support_resistance","supply_demand","vwap","moving_average_cross","macd","rsi","bollinger_bands","fibonacci","scalping","volatility_expansion"}
+        allowed_strategies={"smc","trend_following","breakout","mean_reversion","momentum","price_action","support_resistance","supply_demand","vwap","moving_average_cross","macd","rsi","bollinger_bands","fibonacci","scalping","volatility_expansion"}
         raw_strategies=body.get("strategy_selection", None)
         if raw_strategies is None:
-            try: selected_strategies=json.loads(row.get("strategy_selection_json") or "[]")
+            try: selected_strategies=json.loads(row.get("strategy_selection_json") or '["smc"]')
             except Exception: selected_strategies=[]
         else:
             if isinstance(raw_strategies,str):
@@ -1572,7 +1580,7 @@ def managed_settings():
         # enabled by default for backward compatibility. Additional strategies
         # can run alongside it; if KETS is OFF, only the selected additional
         # strategy candidates are eligible to generate entries.
-        kets_strategy_enabled=1 if bool(body.get("kets_strategy_enabled", row.get("kets_strategy_enabled") if row.get("kets_strategy_enabled") is not None else 1)) else 0
+        kets_strategy_enabled=1 if bool(body.get("kets_strategy_enabled", row.get("kets_strategy_enabled") if row.get("kets_strategy_enabled") is not None else 0)) else 0
         low_stability=1 if bool(body.get("low_stability_entry",row.get("low_stability_entry") or 0)) else 0
         high_stability=1 if bool(body.get("high_stability_entry",row.get("high_stability_entry") or 0)) else 0
         opposite_confirmation=1 if bool(body.get("opposite_signal_confirmation",row.get("opposite_signal_confirmation") or 0)) else 0
@@ -1589,7 +1597,7 @@ def managed_settings():
         with DB_LOCK:
             conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET lot_size=?,profit_target=?,target_profit_total=?,min_quality=?,strong_only=?,smc_only=?,strategy_selection_json=?,kets_strategy_enabled=?,low_stability_entry=?,high_stability_entry=?,opposite_signal_confirmation=?,max_lot=?,max_open_trades=?,allocation_pct=?,break_even_enabled=?,trailing_stop_enabled=?,auto_symbol=?,updated_at=? WHERE id=?",(lot,target,target,quality,strong,smc_only,strategy_selection_json,kets_strategy_enabled,low_stability,high_stability,opposite_confirmation,max_lot,max_open,allocation,break_even,trailing,auto_symbol,_now_iso(),row["id"])); conn.commit(); conn.close()
         row=_ctrader_row_for_user(user["id"])
-    return jsonify({"ok":True,"lot_size":_num(row.get("lot_size")) or .01,"profit_target":_num(row.get("target_profit_total")) if row.get("target_profit_total") is not None else (_num(row.get("profit_target")) if row.get("profit_target") is not None else 25),"target_profit_total":_num(row.get("target_profit_total")) if row.get("target_profit_total") is not None else (_num(row.get("profit_target")) if row.get("profit_target") is not None else 25),"min_quality":_num(row.get("min_quality")) if row.get("min_quality") is not None else 40,"strong_only":bool(row.get("strong_only")),"smc_only":bool(row.get("smc_only")),"kets_strategy_enabled":bool(row.get("kets_strategy_enabled") if row.get("kets_strategy_enabled") is not None else 1),"strategy_selection":json.loads(row.get("strategy_selection_json") or "[]") if str(row.get("strategy_selection_json") or "").strip() else [],"low_stability_entry":bool(row.get("low_stability_entry")),"high_stability_entry":bool(row.get("high_stability_entry")),"opposite_signal_confirmation":bool(row.get("opposite_signal_confirmation")),"max_lot":_num(row.get("max_lot")) or 10,"max_open_trades":int(row.get("max_open_trades") or 1),"allocation_pct":_num(row.get("allocation_pct")) or 10,"break_even_enabled":bool(row.get("break_even_enabled")),"trailing_stop_enabled":bool(row.get("trailing_stop_enabled")),"auto_symbol":str(row.get("auto_symbol") or "XAUUSD").upper()})
+    return jsonify({"ok":True,"lot_size":_num(row.get("lot_size")) or .01,"profit_target":_num(row.get("target_profit_total")) if row.get("target_profit_total") is not None else (_num(row.get("profit_target")) if row.get("profit_target") is not None else 25),"target_profit_total":_num(row.get("target_profit_total")) if row.get("target_profit_total") is not None else (_num(row.get("profit_target")) if row.get("profit_target") is not None else 25),"min_quality":_num(row.get("min_quality")) if row.get("min_quality") is not None else 40,"strong_only":bool(row.get("strong_only")),"smc_only":False,"kets_strategy_enabled":bool(row.get("kets_strategy_enabled") if row.get("kets_strategy_enabled") is not None else 0),"strategy_selection":json.loads(row.get("strategy_selection_json") or '["smc"]') if str(row.get("strategy_selection_json") or "").strip() else ["smc"],"low_stability_entry":bool(row.get("low_stability_entry")),"high_stability_entry":bool(row.get("high_stability_entry")),"opposite_signal_confirmation":bool(row.get("opposite_signal_confirmation")),"max_lot":_num(row.get("max_lot")) or 10,"max_open_trades":int(row.get("max_open_trades") or 1),"allocation_pct":_num(row.get("allocation_pct")) or 10,"break_even_enabled":bool(row.get("break_even_enabled")),"trailing_stop_enabled":bool(row.get("trailing_stop_enabled")),"auto_symbol":str(row.get("auto_symbol") or "XAUUSD").upper()})
 
 @app.route("/api/managed/move-break-even", methods=["POST"])
 def managed_move_break_even():
@@ -2169,8 +2177,8 @@ def _latest_selected_strategy_signal(requested_symbol, selected_strategies):
         "score":score,
         "market_price":price,
         "entry":price,
-        "take_profit":0,
-        "stop_loss":0,
+        "take_profit":_num(item.get("take_profit")) or 0,
+        "stop_loss":_num(item.get("stop_loss")) or 0,
         "timestamp":stamp,
         "timestamp_utc":stamp,
         "strategy":name,
@@ -2239,23 +2247,15 @@ def _ctrader_autotrade_once():
             # repeated same-direction signals are ignored. If opposite-signal
             # confirmation is ON, reversal requires two distinct opposite signals.
             try:
-                selected_strategies=json.loads(row.get("strategy_selection_json") or "[]")
+                selected_strategies=json.loads(row.get("strategy_selection_json") or '["smc"]')
             except Exception:
                 selected_strategies=[]
-            kets_strategy_enabled=bool(row.get("kets_strategy_enabled") if row.get("kets_strategy_enabled") is not None else 1)
+            kets_strategy_enabled=bool(row.get("kets_strategy_enabled") if row.get("kets_strategy_enabled") is not None else 0)
             sig=_latest_autotrader_signal(auto_symbol, kets_strategy_enabled, selected_strategies)
             if not sig:
                 continue
             sid=_signal_id(sig)
             direction=str(sig.get("direction") or sig.get("signal") or "").upper()
-
-            # Optional SMC Auto-Trader filter. OFF by default. When enabled,
-            # only signals carrying a matching SMC confirmation may execute.
-            # Manual trading and the underlying KETS signal strategy are not changed.
-            if bool(row.get("smc_only")):
-                smc_ok=bool(sig.get("smc_confirmed")) and str(sig.get("smc_direction") or "").upper()==direction
-                if not smc_ok:
-                    continue
 
             # Refresh account equity only when the cached row does not yet have
             # a baseline. The dashboard itself refreshes these fields every few

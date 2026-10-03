@@ -944,9 +944,9 @@ async function refreshManagedStatus(){
   if($("atLowStability"))$("atLowStability").checked=!!st.low_stability_entry;
   if($("atHighStability"))$("atHighStability").checked=!!st.high_stability_entry;
   if($("atStrongReversal"))$("atStrongReversal").checked=!!st.strong_only;
-  if($("atSMC"))$("atSMC").checked=!!st.smc_only;
-  if($("atKetsStrategy"))$("atKetsStrategy").checked=st.kets_strategy_enabled !== false;
-  const selectedStrategies=Array.isArray(st.strategy_selection)?st.strategy_selection:[];
+  const selectedStrategies=Array.isArray(st.strategy_selection)?st.strategy_selection:["smc"];
+  if($("atSMC"))$("atSMC").checked=selectedStrategies.includes("smc");
+  if($("atKetsStrategy"))$("atKetsStrategy").checked=st.kets_strategy_enabled === true;
   KETS_ADDITIONAL_STRATEGY_CONTROLS.forEach(([id,key])=>{
     const el=$(id);
     if(el){el.disabled=!connected; el.checked=selectedStrategies.includes(key);}
@@ -1174,6 +1174,7 @@ async function saveSelectedStrategyControls(){
   saveAutoTraderBrowserState();
   const selected=KETS_ADDITIONAL_STRATEGY_CONTROLS
     .filter(([id])=>$(id)?.checked).map(([,key])=>key);
+  if($("atSMC")?.checked) selected.unshift("smc");
   try{
     setManagedActionMessage("Saving strategy selection…","busy");
     await api("/api/managed/settings",{method:"POST",headers:{"Content-Type":"application/json"},
@@ -1192,12 +1193,13 @@ async function saveAutoTraderSettings(){
   const browser=saveAutoTraderBrowserState();
   const selected=KETS_ADDITIONAL_STRATEGY_CONTROLS
     .filter(([id])=>$(id)?.checked).map(([,key])=>key);
+  if($("atSMC")?.checked) selected.unshift("smc");
   const body={
     opposite_signal_confirmation:!!$("atTwoSignal")?.checked,
     low_stability_entry:!!$("atLowStability")?.checked,
     high_stability_entry:!!$("atHighStability")?.checked,
     strong_only:!!$("atStrongReversal")?.checked,
-    smc_only:!!$("atSMC")?.checked,
+    smc_only:false,
     kets_strategy_enabled:!!$("atKetsStrategy")?.checked,
     strategy_selection:selected,
     break_even_enabled:!!$("atBreakEven")?.checked,
@@ -1270,7 +1272,7 @@ function initAutoTraderControls(){
         low_stability_entry:!!$("atLowStability")?.checked,
         high_stability_entry:!!$("atHighStability")?.checked,
         strong_only:!!$("atStrongReversal")?.checked,
-        smc_only:!!$("atSMC")?.checked
+        smc_only:false
       })});
       setManagedActionMessage("2-SIGNAL DIRECTION CHANGE CONFIRMATION saved.","ok");
     }catch(e){setManagedActionMessage(e.message||"Could not save the control.","error");}
@@ -1298,9 +1300,10 @@ function initAutoTraderControls(){
           low_stability_entry:!!$("atLowStability")?.checked,
           high_stability_entry:!!$("atHighStability")?.checked,
           strong_only:!!$("atStrongReversal")?.checked,
-          smc_only:!!$("atSMC")?.checked
+          smc_only:false,
+          strategy_selection:[...(KETS_ADDITIONAL_STRATEGY_CONTROLS.filter(([id])=>$(id)?.checked).map(([,key])=>key)), ...($("atSMC")?.checked?["smc"]:[])]
         })});
-        setManagedActionMessage(id==="atSMC" ? (el.checked ? "SMC Strategy is ON — Auto-Trader will require SMC confirmation." : "SMC Strategy is OFF — Auto-Trader uses the existing entry rules.") : `${el.parentElement?.parentElement?.querySelector(".auto-control-name")?.textContent||"Entry control"} saved.`,"ok");
+        setManagedActionMessage(id==="atSMC" ? (el.checked ? "SMC Strategy is ON — SMC is an independent Auto-Trader signal source." : "SMC Strategy is OFF — SMC signals are excluded; existing Auto-Trader rules remain unchanged.") : `${el.parentElement?.parentElement?.querySelector(".auto-control-name")?.textContent||"Entry control"} saved.`,"ok");
       }catch(e){setManagedActionMessage(e.message||"Could not save the control.","error");}
     });
   });
@@ -1310,12 +1313,12 @@ function initAutoTraderControls(){
     try{
       await api("/api/managed/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
         kets_strategy_enabled:!!$("atKetsStrategy").checked,
-        strategy_selection:KETS_ADDITIONAL_STRATEGY_CONTROLS.filter(([id])=>$(id)?.checked).map(([,key])=>key),
+        strategy_selection:[...(KETS_ADDITIONAL_STRATEGY_CONTROLS.filter(([id])=>$(id)?.checked).map(([,key])=>key)), ...($("atSMC")?.checked?["smc"]:[])],
         opposite_signal_confirmation:!!$("atTwoSignal")?.checked,
         low_stability_entry:!!$("atLowStability")?.checked,
         high_stability_entry:!!$("atHighStability")?.checked,
         strong_only:!!$("atStrongReversal")?.checked,
-        smc_only:!!$("atSMC")?.checked,
+        smc_only:false,
         break_even_enabled:!!$("atBreakEven")?.checked,
         trailing_stop_enabled:!!$("atTrailingStop")?.checked
       })});
