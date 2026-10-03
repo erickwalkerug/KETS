@@ -2,9 +2,7 @@
 
 KETS uses EAT (UTC+3) with the saved working schedule:
 
-- Monday-Friday: 06:00–11:00 EAT — ACTIVE
-- Monday-Friday: 11:00–15:00 EAT — IDLE / market scanning paused
-- Monday-Friday: 15:00–18:00 EAT — ACTIVE
+- Monday-Friday: 06:00–18:00 EAT — ACTIVE
 - Monday-Friday: outside those windows — OUTSIDE HOURS / market scanning paused
 - Saturday-Sunday: OFFLINE
 

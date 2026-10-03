@@ -1,8 +1,7 @@
 KETS FINAL CONFIGURATION
 
 Working schedule (EAT / UTC+3):
-- Monday-Friday: 06:00-11:00
-- Monday-Friday: 15:00-18:00
+- Monday-Friday: 06:00-18:00
 - Saturday-Sunday: OFFLINE
 
 Outside active windows, new signal scanning/entries are paused. Existing cTrader position-protection logic is not force-closed solely because a session ends.

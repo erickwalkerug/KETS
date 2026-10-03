@@ -38,8 +38,7 @@ def _num(value, default=0.0):
         return default
 
 TRADING_SESSIONS = (
-    (datetime.time(6, 0), datetime.time(11, 0), "ACTIVE"),
-    (datetime.time(15, 0), datetime.time(18, 0), "ACTIVE"),
+    (datetime.time(6, 0), datetime.time(18, 0), "ACTIVE"),
 )
 
 def trading_session(now=None):
@@ -58,12 +57,12 @@ def trading_session(now=None):
 
     if t < datetime.time(6, 0):
         next_boundary = datetime.datetime.combine(now.date(), datetime.time(6, 0), tzinfo=EAT)
-    elif t < datetime.time(15, 0):
-        next_boundary = datetime.datetime.combine(now.date(), datetime.time(15, 0), tzinfo=EAT)
+    elif t < datetime.time(18, 0):
+        next_boundary = datetime.datetime.combine(now.date(), datetime.time(18, 0), tzinfo=EAT)
     else:
         next_boundary = datetime.datetime.combine(now.date() + datetime.timedelta(days=1), datetime.time(6, 0), tzinfo=EAT)
 
-    mode = "IDLE" if datetime.time(11, 0) <= t < datetime.time(15, 0) else "OUTSIDE_HOURS"
+    mode = "OUTSIDE_HOURS"
     return {"mode": mode, "active": False, "next_boundary": next_boundary}
 
 def trading_hours_open(now=None):
@@ -505,7 +504,7 @@ init_db()
 # restart/redeploy does not silently revert it.
 def _load_saved_schedule_from_meta():
     global TRADING_SESSIONS
-    default = {"timezone":"EAT","weekdays":[0,1,2,3,4],"sessions":[["06:00","11:00"],["15:00","18:00"]],"weekend":"OFFLINE"}
+    default = {"timezone":"EAT","weekdays":[0,1,2,3,4],"sessions":[["06:00","18:00"]],"weekend":"OFFLINE"}
     try:
         with DB_LOCK:
             conn=db_conn()
@@ -517,6 +516,11 @@ def _load_saved_schedule_from_meta():
             else:
                 raw = row["value"] if isinstance(row, dict) else row[0]
                 cfg=json.loads(raw)
+                if cfg.get("sessions") == [["06:00", "11:00"], ["15:00", "18:00"]]:
+                    cfg["sessions"] = [["06:00", "18:00"]]
+                    db_execute(conn, "UPDATE app_meta SET value=? WHERE key=?",
+                               (json.dumps(cfg, separators=(",", ":")), "trading_schedule"))
+                    conn.commit()
             conn.close()
         sessions=[]
         for start,end in cfg.get("sessions",[]):
@@ -2734,7 +2738,7 @@ def api_public_welcome():
         "markets": list(get_markets(now).keys()),
         "trading_days": "Monday-Friday",
         "weekend_mode": "OFFLINE",
-        "trading_hours_eat": "06:00-11:00 and 15:00-18:00",
+        "trading_hours_eat": "06:00-18:00",
         "history": history[-30:],
     })
 
@@ -3091,7 +3095,7 @@ def api_access():
         "plan":access.get("plan") if access else None,
         "expires":access.get("expires") if access else None,
         "user":_safe_user(user),
-        "trading_hours_eat":"06:00-11:00 and 15:00-18:00",
+        "trading_hours_eat":"06:00-18:00",
         "provider":"Pesapal",
     })
 
@@ -4200,8 +4204,8 @@ def analyze_market(asset, symbol, candles):
 
 # ------------------------- ENGINE ----------------------------
 def build_startup_messages():
-    b="🤖 *KETS STRATEGY ENGINE ONLINE*\n━━━━━━━━━━━━━━━━━━\n✅ Backend connected\n📊 Timeframe: 1 minute\n🔄 Scan interval: 1 minute\n⏰ Trading hours: 06:00-11:00 & 15:00-18:00 EAT\n💰 Monday-Friday: GOLD ONLY\n⏸️ Saturday-Sunday: OFFLINE\n🧠 Advanced intelligence ON\n━━━━━━━━━━━━━━━━━━\nℹ️ Strength is strategy alignment, not guaranteed win probability."
-    c="🤖 *KETS STRATEGY ENGINE ONLINE*\n━━━━━━━━━━━━━━━━━━\n✅ Signal system online\n📊 1-minute monitoring\n🔄 Analysis every 1 minute\n⏰ Active: 06:00-11:00 & 15:00-18:00 EAT\n⚡ Early-entry detection ON\n━━━━━━━━━━━━━━━━━━\n📡 KETS is monitoring the market."
+    b="🤖 *KETS STRATEGY ENGINE ONLINE*\n━━━━━━━━━━━━━━━━━━\n✅ Backend connected\n📊 Timeframe: 1 minute\n🔄 Scan interval: 1 minute\n⏰ Trading hours: 06:00-18:00 EAT\n💰 Monday-Friday: GOLD ONLY\n⏸️ Saturday-Sunday: OFFLINE\n🧠 Advanced intelligence ON\n━━━━━━━━━━━━━━━━━━\nℹ️ Strength is strategy alignment, not guaranteed win probability."
+    c="🤖 *KETS STRATEGY ENGINE ONLINE*\n━━━━━━━━━━━━━━━━━━\n✅ Signal system online\n📊 1-minute monitoring\n🔄 Analysis every 1 minute\n⏰ Active: 06:00-18:00 EAT\n⚡ Early-entry detection ON\n━━━━━━━━━━━━━━━━━━\n📡 KETS is monitoring the market."
     return b,c
 
 
