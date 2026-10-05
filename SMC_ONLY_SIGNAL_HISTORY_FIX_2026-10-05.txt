@@ -1,0 +1,40 @@
+KETS SMC-ONLY SIGNAL HISTORY FIX — 2026-10-05
+
+Purpose
+-------
+Create a dedicated Signal History feed containing ONLY canonical independent
+SMC signals, and make SMC Auto-Trader use that feed as its source of truth.
+
+Rules
+-----
+- Normal KETS Signal History remains available and is not deleted.
+- /api/smc-signals returns ONLY signals with the complete canonical SMC markers:
+    is_smc_signal = true
+    signal_source = smc
+    source_type = independent_smc
+    strategy = smc
+    strategy_name = smc
+- SMC is never inferred from BUY/SELL text, classification, or a field that only
+  happens to contain the letters "smc".
+- When SMC is selected in Auto-Trader, it reads the SMC-only history feed.
+- If no valid SMC signal exists, Auto-Trader has no eligible signal and cannot
+  open a signal-driven trade from generic KETS history.
+
+Preserved
+---------
+- Existing SMC strategy logic and generation.
+- Existing KETS/non-SMC history.
+- cTrader connection and execution.
+- TP/SL, lot size, total target profit, opposite-signal confirmation,
+  break-even and trailing behavior.
+- Existing website UI/setup and other strategy controls.
+
+Flow
+----
+Independent SMC bot
+ -> POST /api/signals
+ -> canonical SMC markers
+ -> SMC-only Signal History
+ -> SMC Auto-Trader gate
+ -> existing entry rules
+ -> cTrader

@@ -1977,7 +1977,8 @@ def _latest_history_signal(requested_symbol=None, source_filter=None):
     its existing Signal History behaviour.
     """
     candidates=[]
-    for sig in _history_items():
+    history_source = _smc_history_items() if str(source_filter or "").strip().lower() == "smc" else _history_items()
+    for sig in history_source:
         if not _signal_matches_symbol(sig, requested_symbol):
             continue
         direction=str(sig.get("direction") or sig.get("signal") or "").upper()
@@ -1990,8 +1991,9 @@ def _latest_history_signal(requested_symbol=None, source_filter=None):
             # deliberately stricter than merely accepting any BUY/SELL in
             # Signal History whose text happens to contain "smc".
             if requested_source == "smc":
-                is_smc = bool(sig.get("is_smc_signal")) or str(sig.get("source_type") or "").strip().lower() == "independent_smc"
-                if not is_smc:
+                # SMC Auto-Trader must read the dedicated SMC-only history
+                # identity, never a generic BUY/SELL or text containing "smc".
+                if not _is_smc_history_signal(sig):
                     continue
             else:
                 source_values={
@@ -2665,6 +2667,55 @@ def _history_items():
     result = list(merged.values())
     result.sort(key=lambda x: str(x.get("timestamp") or x.get("created_at") or ""))
     return result[-500:]
+
+
+def _is_smc_history_signal(sig):
+    """Return True only for signals explicitly belonging to the independent SMC feed.
+
+    Do not infer SMC from free-form text, classification, or direction.  The
+    canonical markers are written at the SMC ingress so a normal KETS/additional
+    strategy BUY/SELL can never enter the SMC history feed by accident.
+    """
+    return (
+        bool(sig.get("is_smc_signal")) and
+        str(sig.get("source_type") or "").strip().lower() == "independent_smc" and
+        str(sig.get("signal_source") or "").strip().lower() == "smc" and
+        str(sig.get("strategy_name") or "").strip().lower() == "smc"
+    )
+
+
+def _smc_history_items():
+    """Dedicated SMC-only Signal History feed.
+
+    It reads the same persisted Signal History store but returns only signals
+    carrying the complete canonical SMC identity.  This keeps the existing
+    KETS history available for the dashboard while giving Auto-Trader a source
+    that cannot be satisfied by an unrelated BUY/SELL.
+    """
+    return [sig for sig in _history_items() if _is_smc_history_signal(sig)]
+
+
+@app.route("/api/smc-signals", methods=["GET"])
+def api_smc_signals():
+    """Return Signal History containing ONLY canonical independent SMC signals.
+
+    This is the source-of-truth feed for SMC Auto-Trader.  It deliberately
+    cannot return KETS strategy or additional-strategy signals.
+    """
+    if not _source_request_authorized():
+        user, error = _require_active_access()
+        if error:
+            return error
+    history = _smc_history_items()
+    return jsonify({
+        "ok": True,
+        "source": "smc",
+        "source_type": "independent_smc",
+        "signals": _latest_signal_map(history),
+        "history": history,
+        "count": len(history),
+        "time_eat": get_eat_time().isoformat(),
+    })
 
 
 @app.route("/api/signals", methods=["GET", "POST"])
