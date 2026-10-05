@@ -1,0 +1,39 @@
+KETS SMC SIGNAL SOURCE GATE FIX — 2026-10-05
+
+Purpose
+-------
+Fix Auto-Trader so selecting SMC cannot execute an unrelated BUY/SELL that happens
+only to be present in KETS Signal History.
+
+Rules preserved
+---------------
+- SMC remains an independent Auto-Trader signal source.
+- No SMC strategy conditions were changed.
+- No TP/SL, lot-size, target-profit, opposite-signal confirmation,
+  break-even, trailing-stop, max-open-trades, trading-hours, or cTrader
+  execution rules were changed.
+- Existing KETS Strategy behavior remains available when KETS Strategy is
+  explicitly selected without SMC.
+- Additional strategy candidate logic remains unchanged, except SMC is no
+  longer duplicated through the generic additional-strategy feed.
+
+Fix
+---
+1. Signals received through POST /api/signals (the independent SMC bot ingress)
+   are explicitly tagged:
+       signal_source = smc
+       source = smc
+       strategy = smc
+       strategy_name = smc
+2. When SMC is selected, Auto-Trader searches Signal History only for a
+   BUY/SELL carrying one of those SMC source markers.
+3. A generic BUY/SELL from KETS Signal History cannot satisfy the SMC source
+   anymore.
+4. Existing signals are not rewritten; only newly received SMC ingress signals
+   are tagged. This avoids falsely classifying historical non-SMC signals.
+
+Result
+------
+SMC path:
+Independent SMC bot -> POST /api/signals -> SMC-tagged Signal History ->
+SMC Auto-Trader gate -> existing Auto-Trader rules -> cTrader.

@@ -1962,12 +1962,12 @@ def _stability_entry_allowed(row):
     current=_current_stability_label()
     return (low and current == "LOW STABILITY") or (high and current == "HIGH STABILITY")
 
-def _latest_history_signal(requested_symbol=None):
-    """Get the newest BUY/SELL trading-bot signal visible in Signal History.
+def _latest_history_signal(requested_symbol=None, source_filter=None):
+    """Get the newest BUY/SELL signal from Signal History.
 
-    Auto-Trade intentionally does not require the dashboard's READY display
-    state. Signal History is the execution feed: any actual BUY/SELL signal
-    recorded there can trigger the existing auto-trade rules.
+    ``source_filter`` is used only when an independent source has been
+    explicitly selected (currently SMC).  The normal KETS strategy path keeps
+    its existing Signal History behaviour.
     """
     candidates=[]
     for sig in _history_items():
@@ -1976,6 +1976,15 @@ def _latest_history_signal(requested_symbol=None):
         direction=str(sig.get("direction") or sig.get("signal") or "").upper()
         if direction not in {"BUY","SELL"}:
             continue
+        if source_filter:
+            source_values={
+                str(sig.get("signal_source") or "").strip().lower(),
+                str(sig.get("source") or "").strip().lower(),
+                str(sig.get("strategy") or "").strip().lower(),
+                str(sig.get("strategy_name") or "").strip().lower(),
+            }
+            if str(source_filter).strip().lower() not in source_values:
+                continue
         candidates.append(sig)
     if not candidates:
         return None
@@ -2207,13 +2216,23 @@ def _latest_autotrader_signal(requested_symbol, kets_strategy_enabled=True, sele
     the original KETS-only path.
     """
     candidates=[]
-    if kets_strategy_enabled:
+    selected_set={str(x).strip().lower() for x in (selected_strategies or [])}
+    # SMC is an independent signal source in this build.  When SMC is selected,
+    # consume only signals explicitly tagged as SMC by the independent signal
+    # ingress.  Never fall back to an arbitrary BUY/SELL from Signal History.
+    if "smc" in selected_set:
+        sig=_latest_history_signal(requested_symbol, source_filter="smc")
+        if sig:
+            score=_num(sig.get("score") or sig.get("strength") or sig.get("signal_strength"))
+            candidates.append((score, str(sig.get("timestamp") or sig.get("timestamp_utc") or ""), "SMC", sig))
+    if kets_strategy_enabled and "smc" not in selected_set:
         sig=_latest_history_signal(requested_symbol)
         if sig:
             score=_num(sig.get("score") or sig.get("strength") or sig.get("signal_strength"))
             candidates.append((score, str(sig.get("timestamp") or sig.get("timestamp_utc") or ""), "KETS Strategy", sig))
     if selected_strategies:
-        sig=_latest_selected_strategy_signal(requested_symbol, selected_strategies)
+        non_smc=[x for x in selected_strategies if str(x).strip().lower() != "smc"]
+        sig=_latest_selected_strategy_signal(requested_symbol, non_smc)
         if sig:
             score=_num(sig.get("strategy_score") or sig.get("score"))
             candidates.append((score, str(sig.get("timestamp") or sig.get("timestamp_utc") or ""), str(sig.get("strategy_name") or sig.get("strategy") or "Additional Strategy"), sig))
@@ -2640,6 +2659,15 @@ def api_signals():
             return jsonify({"error": "Signal must include asset and BUY/SELL direction."}), 400
         now = get_eat_time()
         item = dict(body)
+        # This endpoint is the independent SMC signal ingress used by the
+        # external SMC trading bot.  Preserve the SMC source identity all the
+        # way into Signal History so Auto-Trade can distinguish it from KETS
+        # strategy/additional-strategy signals.  This does not alter the SMC
+        # strategy rules or the signal values themselves.
+        item["signal_source"] = "smc"
+        item["source"] = "smc"
+        item["strategy"] = "smc"
+        item["strategy_name"] = "smc"
         item["asset"] = asset
         item["market"] = item.get("market") or asset
         item["direction"] = direction
