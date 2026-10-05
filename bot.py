@@ -453,7 +453,7 @@ def init_db():
                     ("strong_only", "INTEGER DEFAULT 0"),
                     ("smc_only", "INTEGER DEFAULT 0"),
                     ("strategy_selection_json", "TEXT DEFAULT '[\"smc\"]'"),
-                    ("kets_strategy_enabled", "INTEGER DEFAULT 0"),
+                    ("kets_strategy_enabled", "INTEGER DEFAULT 1"),
                     ("low_stability_entry", "INTEGER DEFAULT 0"),
                     ("high_stability_entry", "INTEGER DEFAULT 0"),
                     ("opposite_signal_confirmation", "INTEGER DEFAULT 0"),
@@ -2254,7 +2254,16 @@ def _ctrader_autotrade_once():
                 selected_strategies=json.loads(row.get("strategy_selection_json") or '["smc"]')
             except Exception:
                 selected_strategies=[]
-            kets_strategy_enabled=bool(row.get("kets_strategy_enabled") if row.get("kets_strategy_enabled") is not None else 0)
+            # The independent trading bot sends SMC BUY/SELL signals directly
+            # into KETS Signal History.  "smc" in the Auto-Trader strategy
+            # selection therefore means that feed must be eligible even when a
+            # legacy connection row still has kets_strategy_enabled=0.
+            # This preserves the user's SMC source selection and prevents a
+            # valid bot signal from being silently ignored by Auto-Trade.
+            kets_strategy_enabled=bool(
+                row.get("kets_strategy_enabled")
+                if row.get("kets_strategy_enabled") is not None else 0
+            ) or ("smc" in {str(x).strip().lower() for x in (selected_strategies or [])})
             sig=_latest_autotrader_signal(auto_symbol, kets_strategy_enabled, selected_strategies)
             if not sig:
                 continue
