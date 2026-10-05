@@ -1977,14 +1977,24 @@ def _latest_history_signal(requested_symbol=None, source_filter=None):
         if direction not in {"BUY","SELL"}:
             continue
         if source_filter:
-            source_values={
-                str(sig.get("signal_source") or "").strip().lower(),
-                str(sig.get("source") or "").strip().lower(),
-                str(sig.get("strategy") or "").strip().lower(),
-                str(sig.get("strategy_name") or "").strip().lower(),
-            }
-            if str(source_filter).strip().lower() not in source_values:
-                continue
+            requested_source=str(source_filter).strip().lower()
+            # SMC is an independent source. Require the canonical boolean
+            # marker or the explicit independent-SMC source marker. This is
+            # deliberately stricter than merely accepting any BUY/SELL in
+            # Signal History whose text happens to contain "smc".
+            if requested_source == "smc":
+                is_smc = bool(sig.get("is_smc_signal")) or str(sig.get("source_type") or "").strip().lower() == "independent_smc"
+                if not is_smc:
+                    continue
+            else:
+                source_values={
+                    str(sig.get("signal_source") or "").strip().lower(),
+                    str(sig.get("source") or "").strip().lower(),
+                    str(sig.get("strategy") or "").strip().lower(),
+                    str(sig.get("strategy_name") or "").strip().lower(),
+                }
+                if requested_source not in source_values:
+                    continue
         candidates.append(sig)
     if not candidates:
         return None
@@ -2664,8 +2674,14 @@ def api_signals():
         # way into Signal History so Auto-Trade can distinguish it from KETS
         # strategy/additional-strategy signals.  This does not alter the SMC
         # strategy rules or the signal values themselves.
+        # This POST endpoint is the dedicated ingress for the independent SMC
+        # signal bot. Keep a single canonical marker plus compatibility aliases
+        # so Signal History, persistence, and Auto-Trader all recognize the
+        # exact same source without changing any SMC strategy conditions.
+        item["is_smc_signal"] = True
         item["signal_source"] = "smc"
         item["source"] = "smc"
+        item["source_type"] = "independent_smc"
         item["strategy"] = "smc"
         item["strategy_name"] = "smc"
         item["asset"] = asset
