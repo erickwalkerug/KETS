@@ -1,0 +1,29 @@
+KETS SMC-ONLY AUTO-TRADE — FINAL ENTRY GATE FIX — 2026-10-05
+
+Root cause found:
+- The previous KETS /api/signals POST handler unconditionally stamped every
+  incoming BUY/SELL as:
+    is_smc_signal=true
+    signal_source=smc
+    source_type=independent_smc
+    strategy=smc
+    strategy_name=smc
+- That made unrelated signals appear to be valid SMC history entries.
+
+Fixed:
+1. /api/signals now preserves SMC identity only when the incoming payload
+   explicitly identifies itself as SMC (or sends X-KETS-SIGNAL-SOURCE: smc).
+2. Non-SMC signals are explicitly marked non-SMC and cannot satisfy the SMC
+   history gate.
+3. Auto-Trade is hard-gated to SMC for signal-driven new entries.
+   KETS/additional strategy signals cannot open a new automatic position.
+4. A historical SMC signal older than 180 seconds cannot be used as a new
+   entry trigger. It remains visible in history but is not an entry command.
+5. Existing cTrader connection, TP/SL, break-even, trailing, opposite-signal
+   confirmation, total-profit target, trading hours and other setup are not
+   changed.
+
+Important:
+- The actual SMC source must explicitly identify its payload as SMC.
+- Existing SMC payloads that already contain an SMC marker continue to work.
+- This fix does not change the SMC strategy-generation rules.

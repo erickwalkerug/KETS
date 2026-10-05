@@ -23,3 +23,6 @@ Preserved:
 - Existing UI/setup and other strategy controls.
 
 This is an entry-source gate only; it does not modify the SMC strategy itself.
+
+
+FINAL 2026-10-05 correction: generic /api/signals POST payloads are no longer automatically relabeled as SMC. Auto-Trade new entries are hard-gated to canonical SMC signals only, and stale SMC history older than 180 seconds cannot trigger a new entry.

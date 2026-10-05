@@ -2236,14 +2236,34 @@ def _latest_autotrader_signal(requested_symbol, kets_strategy_enabled=True, sele
     """
     candidates=[]
     selected_set={str(x).strip().lower() for x in (selected_strategies or [])}
+
+    # HARD ENTRY SAFETY GATE:
+    # This build is SMC-only for signal-driven Auto-Trade.  If SMC is not
+    # explicitly selected, there is no automatic entry from KETS Strategy or
+    # any additional strategy.  Position management/exit logic remains
+    # unchanged elsewhere in the worker.
+    if "smc" not in selected_set:
+        return None
+
     # SMC is an independent signal source in this build.  When SMC is selected,
     # consume only signals explicitly tagged as SMC by the independent signal
     # ingress.  Never fall back to an arbitrary BUY/SELL from Signal History.
     if "smc" in selected_set:
         sig=_latest_history_signal(requested_symbol, source_filter="smc")
         if sig:
-            score=_num(sig.get("score") or sig.get("strength") or sig.get("signal_strength"))
-            candidates.append((score, str(sig.get("timestamp") or sig.get("timestamp_utc") or ""), "SMC", sig))
+            # A historical SMC record is display/history data, not a new entry
+            # trigger.  Only a recent SMC signal may open a new cTrader trade.
+            raw_ts=sig.get("timestamp") or sig.get("timestamp_utc") or sig.get("created_at")
+            try:
+                sig_dt=datetime.datetime.fromisoformat(str(raw_ts).replace("Z","+00:00"))
+                if sig_dt.tzinfo is None:
+                    sig_dt=sig_dt.replace(tzinfo=EAT)
+                age=(get_eat_time()-sig_dt).total_seconds()
+            except Exception:
+                age=10**9
+            if 0 <= age <= 180:
+                score=_num(sig.get("score") or sig.get("strength") or sig.get("signal_strength"))
+                candidates.append((score, str(sig.get("timestamp") or sig.get("timestamp_utc") or ""), "SMC", sig))
         # SMC is an independent, explicitly selected signal source. When SMC
         # is enabled, it is the ONLY source allowed to create a new
         # signal-driven Auto-Trade entry. Do not append KETS or additional
@@ -2736,21 +2756,45 @@ def api_signals():
             return jsonify({"error": "Signal must include asset and BUY/SELL direction."}), 400
         now = get_eat_time()
         item = dict(body)
-        # This endpoint is the independent SMC signal ingress used by the
-        # external SMC trading bot.  Preserve the SMC source identity all the
-        # way into Signal History so Auto-Trade can distinguish it from KETS
-        # strategy/additional-strategy signals.  This does not alter the SMC
-        # strategy rules or the signal values themselves.
-        # This POST endpoint is the dedicated ingress for the independent SMC
-        # signal bot. Keep a single canonical marker plus compatibility aliases
-        # so Signal History, persistence, and Auto-Trader all recognize the
-        # exact same source without changing any SMC strategy conditions.
-        item["is_smc_signal"] = True
-        item["signal_source"] = "smc"
-        item["source"] = "smc"
-        item["source_type"] = "independent_smc"
-        item["strategy"] = "smc"
-        item["strategy_name"] = "smc"
+
+        # IMPORTANT: /api/signals must NOT turn every BUY/SELL into an SMC
+        # signal.  Older builds did exactly that, which made ordinary signals
+        # appear in the SMC-only history and allowed Auto-Trade to enter from
+        # the wrong source.
+        #
+        # SMC is accepted only when the incoming payload explicitly identifies
+        # itself as the independent SMC source.  The SMC bot can identify itself
+        # using any of these canonical fields (or the source header):
+        #   is_smc_signal=true
+        #   signal_source/source/strategy/strategy_name = "smc"
+        #   source_type = "independent_smc"
+        #   X-KETS-SIGNAL-SOURCE: smc
+        source_header = str(request.headers.get("X-KETS-SIGNAL-SOURCE") or "").strip().lower()
+        declared_values = {
+            str(item.get("signal_source") or "").strip().lower(),
+            str(item.get("source") or "").strip().lower(),
+            str(item.get("strategy") or "").strip().lower(),
+            str(item.get("strategy_name") or "").strip().lower(),
+        }
+        declared_smc = (
+            bool(item.get("is_smc_signal")) and str(item.get("is_smc_signal")).lower() not in {"false","0","no"}
+        ) or "smc" in declared_values or str(item.get("source_type") or "").strip().lower() == "independent_smc" or source_header == "smc"
+
+        if declared_smc:
+            item["is_smc_signal"] = True
+            item["signal_source"] = "smc"
+            item["source"] = "smc"
+            item["source_type"] = "independent_smc"
+            item["strategy"] = "smc"
+            item["strategy_name"] = "smc"
+        else:
+            # Explicitly mark this as non-SMC so stale/legacy source fields
+            # cannot accidentally satisfy the SMC gate.
+            item["is_smc_signal"] = False
+            if not str(item.get("signal_source") or "").strip():
+                item["signal_source"] = "kets"
+            if not str(item.get("source_type") or "").strip():
+                item["source_type"] = "generic_signal"
         item["asset"] = asset
         item["market"] = item.get("market") or asset
         item["direction"] = direction
