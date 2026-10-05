@@ -595,9 +595,11 @@ function renderHistory(){
   const cls=noSetup?"wait":direction.toLowerCase();
   const strength=s.score??s.strength??0;
   const price=s.price??s.current_price??s.market_price;
+  const isSmc=!!s.is_smc_signal || String(s.source_type||"").toLowerCase()==="independent_smc" || [s.signal_source,s.source,s.strategy,s.strategy_name].some(v=>String(v||"").toLowerCase()==="smc");
+  const sourceBadge=isSmc?`<span class="history-source-badge smc">SMC</span>`:"";
   return `<div class="history-row">
     <div>
-      <div class="history-market">${esc(s.market||s.asset||"")}</div>
+      <div class="history-market">${esc(s.market||s.asset||"")} ${sourceBadge}</div>
       <div class="history-meta">${esc(Number.isFinite(parseSignalTime(s))?new Date(parseSignalTime(s)).toLocaleString():(s.timestamp||""))}</div>
     </div>
     <div class="history-dir ${cls}">${esc(direction)}${noSetup?"":" · "+esc(strength)+"%"}</div>

@@ -1467,13 +1467,19 @@ def managed_status():
     # the status endpoint responds immediately from the last known state.
     # A background refresh updates balance/positions without blocking the web UI.
     if connected and row.get("selected_account_id") and snapshot is None:
+        # Do not manufacture a USD 0 balance before the first successful
+        # ProtoOATrader snapshot. A zero here used to look like a real account
+        # balance and hid the fact that cTrader data was still loading.
+        stored_balance = row.get("balance")
+        has_stored_snapshot = stored_balance is not None and str(stored_balance).strip() != "" and _num(stored_balance) != 0
         snapshot={
-            "balance":_num(row.get("balance")),
-            "equity":_num(row.get("equity")),
-            "free_margin":_num(row.get("free_margin")),
+            "balance":_num(stored_balance) if has_stored_snapshot else None,
+            "equity":_num(row.get("equity")) if has_stored_snapshot else None,
+            "free_margin":_num(row.get("free_margin")) if has_stored_snapshot else None,
             "positions":positions if "positions" in locals() else [],
             "today_pnl":0, "realized_pnl":0, "unrealized_pnl":0,
-            "currency":"USD", "server_time":_now_iso()
+            "currency":"USD", "server_time":_now_iso(),
+            "snapshot_loaded":has_stored_snapshot,
         }
     if connected and row.get("selected_account_id"):
         def _refresh_status_async(r, uid):
@@ -1506,9 +1512,10 @@ def managed_status():
         "broker":"cTrader",
         "selected_account_id":row.get("selected_account_id"),
         "currency":(snapshot or {}).get("currency") or "USD",
-        "balance":(snapshot or {}).get("balance",row.get("balance",0)),
-        "equity":(snapshot or {}).get("equity",row.get("equity",0)),
-        "free_margin":(snapshot or {}).get("free_margin",row.get("free_margin",0)),
+        "balance":(snapshot or {}).get("balance",row.get("balance")) if snapshot is not None else row.get("balance"),
+        "equity":(snapshot or {}).get("equity",row.get("equity")) if snapshot is not None else row.get("equity"),
+        "free_margin":(snapshot or {}).get("free_margin",row.get("free_margin")) if snapshot is not None else row.get("free_margin"),
+        "balance_loaded":bool(snapshot and snapshot.get("snapshot_loaded", True)) or _num(row.get("balance")) != 0,
         "today_pnl":(snapshot or {}).get("today_pnl",0),
         "realized_pnl":(snapshot or {}).get("realized_pnl",0),
         "unrealized_pnl":(snapshot or {}).get("unrealized_pnl",0),
