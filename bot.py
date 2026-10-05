@@ -2242,7 +2242,16 @@ def _latest_autotrader_signal(requested_symbol, kets_strategy_enabled=True, sele
         if sig:
             score=_num(sig.get("score") or sig.get("strength") or sig.get("signal_strength"))
             candidates.append((score, str(sig.get("timestamp") or sig.get("timestamp_utc") or ""), "SMC", sig))
-    if kets_strategy_enabled and "smc" not in selected_set:
+        # SMC is an independent, explicitly selected signal source. When SMC
+        # is enabled, it is the ONLY source allowed to create a new
+        # signal-driven Auto-Trade entry. Do not append KETS or additional
+        # strategy candidates here, even when they are also enabled. This
+        # prevents an unrelated strategy from opening a cTrader trade when no
+        # SMC signal exists in Signal History. Existing position management,
+        # exits, TP/SL, break-even, trailing and profit-target logic are
+        # intentionally untouched.
+        return candidates[0][3] if candidates else None
+    if kets_strategy_enabled:
         sig=_latest_history_signal(requested_symbol)
         if sig:
             score=_num(sig.get("score") or sig.get("strength") or sig.get("signal_strength"))

@@ -1,0 +1,25 @@
+KETS SMC AUTO-TRADE ONLY GATE FIX — 2026-10-05
+
+Purpose:
+Prevent Auto-Trader from opening a new signal-driven cTrader trade from a
+non-SMC strategy when SMC is selected but no valid SMC signal exists in KETS
+Signal History.
+
+Change made:
+- If "smc" is selected, _latest_autotrader_signal() now considers ONLY the
+  explicitly SMC-marked Signal History feed.
+- If there is no valid SMC signal, it returns None and no new automatic entry
+  is created.
+- KETS Strategy and additional-strategy candidates are not used as fallback
+  while SMC is selected.
+- If SMC is not selected, the existing non-SMC selection behavior remains.
+
+Preserved:
+- SMC signal-generation strategy/rules.
+- Signal History SMC markers and display.
+- cTrader connection/execution.
+- TP/SL, break-even, trailing, opposite-signal confirmation and total-profit
+  target behavior.
+- Existing UI/setup and other strategy controls.
+
+This is an entry-source gate only; it does not modify the SMC strategy itself.
