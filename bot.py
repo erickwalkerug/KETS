@@ -18,6 +18,13 @@ MARKET_STATE = {}
 SIGNAL_HISTORY = []
 SIGNAL_HISTORY_DAYS = 2
 MAX_IN_MEMORY_SIGNALS = 500
+# IMPORTANT: Auto-Trader never reads SIGNAL_HISTORY for SMC entries.
+# This short-lived feed contains only the latest canonical SMC signal received
+# directly from the independent SMC source. It is intentionally separate from
+# dashboard history so history can never become an execution trigger.
+SMC_LIVE_SIGNAL = {}
+SMC_LIVE_LOCK = Lock()
+SMC_LIVE_TTL_SECONDS = 180
 STRATEGY_SCAN_FEED = {}
 STRATEGY_SCAN_TTL_MINUTES = 10
 STRATEGY_SCAN_LOCK = Lock()
@@ -109,7 +116,8 @@ def api_integration_status():
     """Fast health check for the actual production connection path.
 
     Signal flow is intentionally one-way and local to this KETS service:
-    trading bot -> POST /api/signals -> Signal History -> Auto-Trade -> cTrader.
+    independent SMC bot -> POST /api/signals -> direct SMC live feed -> Auto-Trade -> cTrader.
+    Signal History is display/audit only and is not an Auto-Trade entry source.
     This endpoint never polls the bot or cTrader, so the dashboard cannot
     time out while checking connection status.
     """
@@ -119,7 +127,7 @@ def api_integration_status():
         "ok": True,
         "website": {"ok": True},
         "signal_feed": {
-            "mode": "website-local-history",
+            "mode": "direct-smc-live",
             "configured": True,
             "history_count": len(history),
             "latest_signal_id": str((latest or {}).get("id") or ""),
@@ -2126,17 +2134,20 @@ def _queue_and_execute_ctrader(row, sig, automatic=True):
     if not entry: raise RuntimeError("The current KETS signal has no entry price.")
     sid=_signal_id(sig)
     lot=max(.01,min(_num(row.get("lot_size")) or .01,_num(row.get("max_lot")) or 10))
-    # Automatic trading follows Current KETS signal direction only. Its exit is
-    # the next opposite KETS signal, so do not attach the signal TP/SL to auto
-    # positions. Manual orders keep their optional SL/TP behavior unchanged.
+    # Automatic SMC entries keep the existing opposite-SMC exit logic, but a
+    # hard SMC stop-loss is now always attached. This caps downside even when
+    # break-even/trailing controls are disabled. The SMC take-profit is not
+    # forced onto automatic positions, so the existing direction/reversal and
+    # total-profit behaviour remains intact. Manual orders keep their optional
+    # SL/TP behaviour unchanged.
     order={"symbol":str(row.get("auto_symbol") or sig.get("symbol") or ("XAUUSD" if str(sig.get("asset")).upper() in ("GOLD","XAUUSD") else "BTCUSD")),"direction":direction,"volume":lot,"entry":entry}
     tp=_num(sig.get("take_profit") or sig.get("tp") or sig.get("target"))
     sl=_num(sig.get("stop_loss") or sig.get("sl") or sig.get("stop"))
     if not automatic:
         if not tp or not sl: raise RuntimeError("The current signal has no complete entry, target and stop-loss plan.")
         order["take_profit"]=tp; order["stop_loss"]=sl
-    elif bool(row.get("break_even_enabled")) or bool(row.get("trailing_stop_enabled")):
-        if not sl: raise RuntimeError("Auto-Trader protection is enabled, but this signal has no Stop Loss risk anchor.")
+    else:
+        if not sl: raise RuntimeError("SMC Auto-Trader requires the SMC signal Stop Loss risk anchor.")
         order["stop_loss"]=sl
     result,selected=_ctrader_execute_order(row,order,auto_label=automatic)
     with DB_LOCK:
@@ -2225,54 +2236,89 @@ def _latest_selected_strategy_signal(requested_symbol, selected_strategies):
         ],
     }
 
-def _latest_autotrader_signal(requested_symbol, kets_strategy_enabled=True, selected_strategies=None):
-    """Select the Auto-Trader entry source(s).
+def _smc_live_entry_guard(sig):
+    """Execution-only quality guard for a canonical SMC signal.
 
-    KETS Strategy is the original KETS signal feed. Additional strategies are
-    independent candidates. When both are enabled, the strongest confirmed
-    candidate is used. When KETS is OFF, KETS Signal History is excluded.
-    When KETS is ON and no additional strategy is selected, behavior is exactly
-    the original KETS-only path.
+    This does not generate, score, or replace an SMC signal. It only refuses an
+    automatic entry when the SMC payload itself explicitly says the setup is
+    structurally rejected/overextended or when its supplied risk plan is poor.
+    Missing optional fields are not invented, so the underlying SMC strategy
+    remains unchanged.
     """
-    candidates=[]
-    selected_set={str(x).strip().lower() for x in (selected_strategies or [])}
+    if not _is_smc_history_signal(sig):
+        return False, "not-canonical-smc"
+    direction=str(sig.get("direction") or sig.get("signal") or "").upper()
+    if direction not in {"BUY","SELL"}:
+        return False, "invalid-direction"
+    entry=_num(sig.get("market_price") or sig.get("price") or sig.get("entry"))
+    sl=_num(sig.get("stop_loss") or sig.get("sl") or sig.get("stop"))
+    tp=_num(sig.get("take_profit") or sig.get("tp") or sig.get("target"))
+    if entry <= 0 or sl <= 0:
+        return False, "missing-stop-risk-anchor"
+    if direction == "BUY" and sl >= entry:
+        return False, "invalid-buy-stop"
+    if direction == "SELL" and sl <= entry:
+        return False, "invalid-sell-stop"
 
-    # HARD ENTRY SAFETY GATE:
-    # This build is SMC-only for signal-driven Auto-Trade.  If SMC is not
-    # explicitly selected, there is no automatic entry from KETS Strategy or
-    # any additional strategy.  Position management/exit logic remains
-    # unchanged elsewhere in the worker.
+    # If the SMC source exposes its existing entry-quality veto, honor it.
+    eq=sig.get("entry_quality") if isinstance(sig.get("entry_quality"),dict) else {}
+    eqd=sig.get("entry_quality_details") if isinstance(sig.get("entry_quality_details"),dict) else {}
+    hard_fail=eq.get("hard_fail") if isinstance(eq.get("hard_fail"),list) else eqd.get("hard_fail") if isinstance(eqd.get("hard_fail"),list) else []
+    status=str(eq.get("status") or "").upper()
+    if hard_fail or status.startswith("REJECT"):
+        return False, "smc-entry-quality-reject"
+
+    reversal=eq.get("clear_reversal")
+    if reversal is None and isinstance(eqd.get("reversal"),dict):
+        reversal=eqd["reversal"].get("clear_reversal")
+    if reversal is True:
+        return False, "smc-reversal-veto"
+
+    extension=eqd.get("extension") if isinstance(eqd.get("extension"),dict) else {}
+    if extension.get("extended") is True:
+        return False, "smc-overextended"
+
+    # The existing SMC engine normally produces a 2R target. If a target is
+    # supplied, do not execute a materially weaker risk/reward setup.
+    if tp > 0:
+        risk=abs(entry-sl)
+        reward=(tp-entry) if direction=="BUY" else (entry-tp)
+        if risk <= 0 or reward <= 0 or reward/risk < 1.5:
+            return False, "smc-risk-reward-below-1.5R"
+    return True, "ok"
+
+def _latest_smc_live_signal(requested_symbol=None):
+    """Return the newest direct SMC signal, never Signal History."""
+    with SMC_LIVE_LOCK:
+        sig=dict(SMC_LIVE_SIGNAL) if SMC_LIVE_SIGNAL else None
+    if not sig or not _signal_matches_symbol(sig, requested_symbol):
+        return None
+    raw_ts=sig.get("timestamp") or sig.get("timestamp_utc") or sig.get("created_at")
+    try:
+        sig_dt=datetime.datetime.fromisoformat(str(raw_ts).replace("Z","+00:00"))
+        if sig_dt.tzinfo is None:
+            sig_dt=sig_dt.replace(tzinfo=EAT)
+        age=(get_eat_time()-sig_dt).total_seconds()
+    except Exception:
+        return None
+    if age < 0 or age > SMC_LIVE_TTL_SECONDS:
+        return None
+    ok, reason=_smc_live_entry_guard(sig)
+    if not ok:
+        return None
+    return sig
+
+def _latest_autotrader_signal(requested_symbol, kets_strategy_enabled=True, selected_strategies=None):
+    """Select the Auto-Trader entry source.
+
+    This build is deliberately SMC-only. Auto-Trader consumes the short-lived
+    direct SMC ingress, not Signal History. Signal History remains display/audit
+    data only and can never create a new automatic cTrader entry.
+    """
+    selected_set={str(x).strip().lower() for x in (selected_strategies or [])}
     if "smc" not in selected_set:
         return None
-
-    # SMC is an independent signal source in this build.  When SMC is selected,
-    # consume only signals explicitly tagged as SMC by the independent signal
-    # ingress.  Never fall back to an arbitrary BUY/SELL from Signal History.
-    if "smc" in selected_set:
-        sig=_latest_history_signal(requested_symbol, source_filter="smc")
-        if sig:
-            # A historical SMC record is display/history data, not a new entry
-            # trigger.  Only a recent SMC signal may open a new cTrader trade.
-            raw_ts=sig.get("timestamp") or sig.get("timestamp_utc") or sig.get("created_at")
-            try:
-                sig_dt=datetime.datetime.fromisoformat(str(raw_ts).replace("Z","+00:00"))
-                if sig_dt.tzinfo is None:
-                    sig_dt=sig_dt.replace(tzinfo=EAT)
-                age=(get_eat_time()-sig_dt).total_seconds()
-            except Exception:
-                age=10**9
-            if 0 <= age <= 180:
-                score=_num(sig.get("score") or sig.get("strength") or sig.get("signal_strength"))
-                candidates.append((score, str(sig.get("timestamp") or sig.get("timestamp_utc") or ""), "SMC", sig))
-        # SMC is an independent, explicitly selected signal source. When SMC
-        # is enabled, it is the ONLY source allowed to create a new
-        # signal-driven Auto-Trade entry. Do not append KETS or additional
-        # strategy candidates here, even when they are also enabled. This
-        # prevents an unrelated strategy from opening a cTrader trade when no
-        # SMC signal exists in Signal History. Existing position management,
-        # exits, TP/SL, break-even, trailing and profit-target logic are
-        # intentionally untouched.
-        return candidates[0][3] if candidates else None
+    return _latest_smc_live_signal(requested_symbol)
     if kets_strategy_enabled:
         sig=_latest_history_signal(requested_symbol)
         if sig:
@@ -2311,12 +2357,11 @@ def _ctrader_autotrade_once():
             # preserved, but no new signal-driven automatic entry is processed.
             if not session["active"]:
                 continue
-            # Auto-Trade uses only the trading-bot signals already stored in this
-            # website's Signal History. No external signal URL is polled.
-            # The entry/exit
-            # rules do not change: BUY/SELL signals in Signal History are actionable,
-            # repeated same-direction signals are ignored. If opposite-signal
-            # confirmation is ON, reversal requires two distinct opposite signals.
+            # Auto-Trade entry source is the direct SMC live feed only. Signal
+            # History is display/audit data and has ZERO authority to open a new
+            # automatic trade. Repeated same-direction signals are ignored. If
+            # opposite-signal confirmation is ON, reversal still requires two
+            # distinct opposite SMC signals.
             try:
                 selected_strategies=json.loads(row.get("strategy_selection_json") or '["smc"]')
             except Exception:
@@ -2803,6 +2848,15 @@ def api_signals():
         item = normalize_signal_payload(item, asset)
         item["timestamp"] = str(item.get("timestamp") or item.get("timestamp_utc") or now.isoformat())
         item["id"] = str(item.get("id") or f"{asset}-{direction}-{item['timestamp']}")
+
+        # DIRECT SMC EXECUTION FEED: keep the newest canonical SMC signal in a
+        # separate short-lived runtime slot. Auto-Trader reads this slot only.
+        # It never queries SIGNAL_HISTORY to create an entry.
+        if declared_smc and _is_smc_history_signal(item):
+            with SMC_LIVE_LOCK:
+                SMC_LIVE_SIGNAL.clear()
+                SMC_LIVE_SIGNAL.update(dict(item))
+
         with API_LOCK:
             existing = {str(x.get("id")) for x in SIGNAL_HISTORY}
             if item["id"] not in existing:

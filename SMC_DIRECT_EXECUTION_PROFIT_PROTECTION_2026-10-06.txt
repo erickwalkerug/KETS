@@ -1,0 +1,16 @@
+KETS SMC DIRECT EXECUTION + PROFIT PROTECTION — 2026-10-06
+
+WHAT WAS CHANGED
+1. Auto-Trader no longer reads Signal History to create a new automatic entry.
+2. A separate short-lived DIRECT SMC LIVE FEED stores only the newest canonical SMC signal received from POST /api/signals.
+3. Auto-Trader can open a new automatic trade only from that direct canonical SMC live signal.
+4. Generic KETS/additional strategy signals cannot trigger automatic entries.
+5. Old SMC history records cannot trigger a fresh entry after a restart or if no new direct SMC signal has arrived.
+6. The existing SMC source identity requirements remain strict: is_smc_signal + independent_smc + signal_source=smc + strategy_name=smc.
+7. Existing SMC entry-quality vetoes are honored when supplied by the SMC payload: explicit REJECT/hard-fail, clear reversal, and overextension.
+8. If an SMC take-profit and stop-loss are supplied, the automatic execution gate rejects a setup below 1.5R reward/risk. The existing SMC engine normally produces 2R.
+9. Every automatic SMC trade now receives the SMC stop-loss as a hard risk anchor even when break-even/trailing is disabled. The existing opposite-SMC exit behavior remains intact; the SMC TP is not forced onto automatic positions.
+10. Existing lot size, max open trades, trading hours, market schedule, opposite-signal confirmation, break-even, trailing, target-profit and cTrader connection logic were retained.
+
+IMPORTANT
+This is a risk/quality improvement, not a guarantee of profit. No trading strategy can guarantee more winning money than losing money. The purpose is to prevent history/fallback entries, reject explicitly weak SMC execution conditions, and cap downside with the SMC stop-loss while preserving the SMC strategy.
