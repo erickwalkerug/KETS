@@ -25,6 +25,13 @@ MAX_IN_MEMORY_SIGNALS = 500
 SMC_LIVE_SIGNAL = {}
 SMC_LIVE_LOCK = Lock()
 SMC_LIVE_TTL_SECONDS = 180
+# KETS-owned completed 1M candles used only by the independent SMC execution gate.
+# The cache is bounded and refreshed by the existing 1-minute market scan.
+SMC_MARKET_CANDLES = {}
+SMC_MARKET_LOCK = Lock()
+SMC_STRUCTURE_CACHE = {}
+SMC_STRUCTURE_LOCK = Lock()
+SMC_STRUCTURE_TTL_SECONDS = 45
 STRATEGY_SCAN_FEED = {}
 STRATEGY_SCAN_TTL_MINUTES = 10
 STRATEGY_SCAN_LOCK = Lock()
@@ -2236,23 +2243,274 @@ def _latest_selected_strategy_signal(requested_symbol, selected_strategies):
         ],
     }
 
-def _smc_live_entry_guard(sig):
-    """Execution-only quality guard for a canonical SMC signal.
+def _smc_candle_dt(c):
+    raw = c.get("datetime") or c.get("timestamp") or c.get("time")
+    if not raw:
+        return None
+    try:
+        dt = datetime.datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except Exception:
+        try:
+            dt = datetime.datetime.strptime(str(raw), "%Y-%m-%d %H:%M:%S")
+        except Exception:
+            return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=EAT)
+    return dt
 
-    This does not generate, score, or replace an SMC signal. It only refuses an
-    automatic entry when the SMC payload itself explicitly says the setup is
-    structurally rejected/overextended or when its supplied risk plan is poor.
-    Missing optional fields are not invented, so the underlying SMC strategy
-    remains unchanged.
+
+def _smc_true_range(c, prev_close=None):
+    h, l = _num(c.get("high")), _num(c.get("low"))
+    if h <= 0 or l <= 0 or h < l:
+        return 0.0
+    pc = _num(prev_close)
+    return max(h-l, abs(h-pc), abs(l-pc)) if pc > 0 else h-l
+
+
+def _smc_swing_points(candles, left=2, right=2):
+    highs, lows = [], []
+    for i in range(left, len(candles)-right):
+        h = _num(candles[i].get("high"))
+        l = _num(candles[i].get("low"))
+        if h <= 0 or l <= 0:
+            continue
+        if h >= max(_num(candles[j].get("high")) for j in range(i-left, i+right+1)) and \
+           h > max(_num(candles[j].get("high")) for j in range(i-left, i)) and \
+           h >= max(_num(candles[j].get("high")) for j in range(i+1, i+right+1)):
+            highs.append((i, h))
+        if l <= min(_num(candles[j].get("low")) for j in range(i-left, i+right+1)) and \
+           l < min(_num(candles[j].get("low")) for j in range(i-left, i)) and \
+           l <= min(_num(candles[j].get("low")) for j in range(i+1, i+right+1)):
+            lows.append((i, l))
+    return highs, lows
+
+
+def _smc_structure_analysis(candles, direction):
+    """KETS-owned SMC structure detector used only as an execution gate.
+
+    Required sequence:
+      liquidity sweep -> displacement -> BOS/CHOCH -> order block ->
+      OB retest -> premium/discount -> direction confirmation.
+
+    It deliberately does not read KETS entry-quality scores, reversal flags,
+    extension flags, generic scores, or Signal History.
+    """
+    direction = str(direction or "").upper()
+    if direction not in {"BUY", "SELL"} or len(candles) < 60:
+        return False, {"reason": "insufficient-kets-candles"}
+
+    cs = [c for c in candles if _num(c.get("close")) > 0]
+    if len(cs) < 60:
+        return False, {"reason": "invalid-kets-candles"}
+
+    # Work with completed candles only. The existing market feed already returns
+    # completed 1M candles; this additional slice keeps the detector bounded.
+    cs = cs[-120:]
+    highs, lows = _smc_swing_points(cs)
+    if len(highs) < 2 or len(lows) < 2:
+        return False, {"reason": "no-confirmed-swings"}
+
+    # ATR-like baseline from completed candles.
+    trs = []
+    for i, c in enumerate(cs):
+        pc = cs[i-1].get("close") if i else None
+        tr = _smc_true_range(c, pc)
+        if tr > 0:
+            trs.append(tr)
+    if len(trs) < 20:
+        return False, {"reason": "no-range-baseline"}
+    baseline = sorted(trs[-50:])[len(trs[-50:])//2]
+    if baseline <= 0:
+        return False, {"reason": "invalid-range-baseline"}
+
+    # Search newest-to-oldest for a complete structural sequence. The sweep must
+    # happen before displacement, which must happen before BOS/CHOCH and retest.
+    search_start = max(8, len(cs)-70)
+    candidates = []
+    for sweep_i in range(search_start, len(cs)-6):
+        c = cs[sweep_i]
+        body = abs(_num(c.get("close"))-_num(c.get("open")))
+        rng = _num(c.get("high"))-_num(c.get("low"))
+        if rng <= 0:
+            continue
+
+        # A liquidity sweep takes a recent confirmed swing and returns back
+        # through it on the same candle.
+        prior_highs = [(i,p) for i,p in highs if i < sweep_i]
+        prior_lows = [(i,p) for i,p in lows if i < sweep_i]
+        if direction == "BUY":
+            pool = prior_lows[-3:]
+            sweep = next(((idx,level) for idx,level in reversed(pool)
+                          if _num(c.get("low")) < level and _num(c.get("close")) > level), None)
+        else:
+            pool = prior_highs[-3:]
+            sweep = next(((idx,level) for idx,level in reversed(pool)
+                          if _num(c.get("high")) > level and _num(c.get("close")) < level), None)
+        if not sweep:
+            continue
+
+        # Displacement: decisive same-direction candle after the sweep.
+        disp_i = None
+        for j in range(sweep_i+1, min(len(cs)-1, sweep_i+6)):
+            dj = cs[j]
+            dr = _num(dj.get("high"))-_num(dj.get("low"))
+            db = abs(_num(dj.get("close"))-_num(dj.get("open")))
+            if dr <= 0 or db/dr < 0.55 or dr < baseline*1.15:
+                continue
+            if (direction == "BUY" and _num(dj.get("close")) > _num(dj.get("open"))) or \
+               (direction == "SELL" and _num(dj.get("close")) < _num(dj.get("open"))):
+                disp_i = j
+                break
+        if disp_i is None:
+            continue
+
+        # BOS/CHOCH must break the latest pre-displacement swing in direction.
+        bos_i = None
+        if direction == "BUY":
+            broken = [(i,p) for i,p in highs if sweep_i <= i < disp_i]
+            reference = broken[-1][1] if broken else (prior_highs[-1][1] if prior_highs else 0)
+            if reference <= 0:
+                continue
+            for j in range(disp_i+1, min(len(cs), disp_i+8)):
+                if _num(cs[j].get("close")) > reference:
+                    bos_i = j
+                    break
+        else:
+            broken = [(i,p) for i,p in lows if sweep_i <= i < disp_i]
+            reference = broken[-1][1] if broken else (prior_lows[-1][1] if prior_lows else 0)
+            if reference <= 0:
+                continue
+            for j in range(disp_i+1, min(len(cs), disp_i+8)):
+                if _num(cs[j].get("close")) < reference:
+                    bos_i = j
+                    break
+        if bos_i is None:
+            continue
+
+        # Order block = final opposite candle before the displacement leg.
+        ob_i = None
+        for j in range(disp_i-1, sweep_i-1, -1):
+            oc = _num(cs[j].get("open")); cc = _num(cs[j].get("close"))
+            if direction == "BUY" and cc < oc:
+                ob_i = j; break
+            if direction == "SELL" and cc > oc:
+                ob_i = j; break
+        if ob_i is None:
+            continue
+
+        ob_high = _num(cs[ob_i].get("high"))
+        ob_low = _num(cs[ob_i].get("low"))
+        if ob_high <= ob_low:
+            continue
+
+        # OB retest must occur after BOS. The latest qualifying retest is used.
+        retest_i = None
+        for j in range(bos_i+1, len(cs)):
+            cj = cs[j]
+            cl, ch, cc = _num(cj.get("low")), _num(cj.get("high")), _num(cj.get("close"))
+            if direction == "BUY":
+                touched = cl <= ob_high and ch >= ob_low
+                rejected = cc >= ob_high
+            else:
+                touched = ch >= ob_low and cl <= ob_high
+                rejected = cc <= ob_low
+            if touched and rejected:
+                retest_i = j
+        if retest_i is None:
+            continue
+
+        # The retest itself must be recent. An old, completed SMC pattern is
+        # not allowed to become a new cTrader entry.
+        if len(cs) - retest_i > 3:
+            continue
+
+        # Premium/discount is measured against the most recent meaningful
+        # structural range surrounding the BOS/retest. Location is checked at
+        # the retest, not against a later breakout price.
+        range_highs = [p for i,p in highs if i <= bos_i]
+        range_lows = [p for i,p in lows if i <= bos_i]
+        if not range_highs or not range_lows:
+            continue
+        hi, lo = max(range_highs[-4:]), min(range_lows[-4:])
+        if hi <= lo:
+            continue
+        midpoint = (hi+lo)/2.0
+        retest_price = _num(cs[retest_i].get("close"))
+        if direction == "BUY":
+            location_ok = retest_price <= midpoint
+        else:
+            location_ok = retest_price >= midpoint
+        if not location_ok:
+            continue
+
+        # Direction confirmation: price must remain on the correct side of the
+        # broken structure and the latest completed candle must agree.
+        last = cs[-1]
+        if direction == "BUY":
+            confirmation = (_num(last.get("close")) > _num(last.get("open")) and
+                            _num(last.get("close")) >= ob_high)
+        else:
+            confirmation = (_num(last.get("close")) < _num(last.get("open")) and
+                            _num(last.get("close")) <= ob_low)
+        if not confirmation:
+            continue
+
+        candidates.append({
+            "sweep_index": sweep_i, "displacement_index": disp_i,
+            "bos_index": bos_i, "order_block_index": ob_i,
+            "retest_index": retest_i, "ob_high": ob_high, "ob_low": ob_low,
+            "range_high": hi, "range_low": lo, "midpoint": midpoint,
+            "reference": reference, "price": latest_price,
+        })
+
+    if not candidates:
+        return False, {"reason": "complete-smc-structure-not-confirmed"}
+
+    # Newest valid structure wins.
+    result = max(candidates, key=lambda x: x["retest_index"])
+    result["direction"] = direction
+    result["reason"] = "liquidity-sweep-displacement-bos-choch-ob-retest-premium-discount-direction-confirmed"
+    return True, result
+
+
+def _kets_smc_candles(symbol):
+    asset = "GOLD" if str(symbol).upper().replace("/", "") in {"XAUUSD", "GOLD"} else str(symbol).upper()
+    with SMC_MARKET_LOCK:
+        cached = list(SMC_MARKET_CANDLES.get(asset, []))
+    if len(cached) >= 60:
+        return cached
+
+    # Fallback only when the normal KETS market scanner has not populated its
+    # private candle cache yet. This is not Signal History and does not create
+    # a new signal source.
+    key = os.environ.get("TWELVE_DATA_API_KEY")
+    if not key:
+        return []
+    try:
+        fetched = fetch_1m_candles(symbol, key)
+        return fetched[-120:] if fetched else []
+    except Exception:
+        return []
+
+
+def _smc_live_entry_guard(sig):
+    """Independent SMC execution gate.
+
+    Signal History, generic score, entry_quality, reversal flags and extension
+    flags have ZERO authority here. The incoming signal supplies only the
+    direction/identity/risk anchor; KETS independently verifies the complete
+    SMC structure from its own completed 1M candles.
     """
     if not _is_smc_history_signal(sig):
         return False, "not-canonical-smc"
-    direction=str(sig.get("direction") or sig.get("signal") or "").upper()
-    if direction not in {"BUY","SELL"}:
+
+    direction = str(sig.get("direction") or sig.get("signal") or "").upper()
+    if direction not in {"BUY", "SELL"}:
         return False, "invalid-direction"
-    entry=_num(sig.get("market_price") or sig.get("price") or sig.get("entry"))
-    sl=_num(sig.get("stop_loss") or sig.get("sl") or sig.get("stop"))
-    tp=_num(sig.get("take_profit") or sig.get("tp") or sig.get("target"))
+
+    entry = _num(sig.get("market_price") or sig.get("price") or sig.get("entry"))
+    sl = _num(sig.get("stop_loss") or sig.get("sl") or sig.get("stop"))
+    tp = _num(sig.get("take_profit") or sig.get("tp") or sig.get("target"))
     if entry <= 0 or sl <= 0:
         return False, "missing-stop-risk-anchor"
     if direction == "BUY" and sl >= entry:
@@ -2260,32 +2518,60 @@ def _smc_live_entry_guard(sig):
     if direction == "SELL" and sl <= entry:
         return False, "invalid-sell-stop"
 
-    # If the SMC source exposes its existing entry-quality veto, honor it.
-    eq=sig.get("entry_quality") if isinstance(sig.get("entry_quality"),dict) else {}
-    eqd=sig.get("entry_quality_details") if isinstance(sig.get("entry_quality_details"),dict) else {}
-    hard_fail=eq.get("hard_fail") if isinstance(eq.get("hard_fail"),list) else eqd.get("hard_fail") if isinstance(eqd.get("hard_fail"),list) else []
-    status=str(eq.get("status") or "").upper()
-    if hard_fail or status.startswith("REJECT"):
-        return False, "smc-entry-quality-reject"
+    # KETS-owned live-price/candle attachment check. A detached signal cannot
+    # trigger simply because its source payload is still within the 180-second
+    # direct-feed TTL.
+    candles = _kets_smc_candles(sig.get("symbol") or sig.get("asset") or "XAUUSD")
+    if len(candles) < 60:
+        return False, "kets-scm-data-not-ready"
+    latest = candles[-1]
+    kets_price = _num(latest.get("close"))
+    if kets_price <= 0:
+        return False, "missing-kets-candle-price"
+    raw_sig_time = sig.get("timestamp") or sig.get("timestamp_utc") or sig.get("created_at")
+    raw_candle_time = latest.get("datetime")
+    sig_dt = _smc_candle_dt({"datetime": raw_sig_time})
+    candle_dt = _smc_candle_dt({"datetime": raw_candle_time})
+    if sig_dt and candle_dt:
+        age = abs((candle_dt - sig_dt).total_seconds())
+        if age > 120:
+            return False, "smc-signal-detached-from-kets-candle"
+    tr = _smc_true_range(latest, candles[-2].get("close") if len(candles) > 1 else None)
+    max_delta = max(tr * 0.75, kets_price * 0.00012)
+    if abs(kets_price-entry) > max_delta:
+        return False, "smc-live-price-detached"
 
-    reversal=eq.get("clear_reversal")
-    if reversal is None and isinstance(eqd.get("reversal"),dict):
-        reversal=eqd["reversal"].get("clear_reversal")
-    if reversal is True:
-        return False, "smc-reversal-veto"
+    # Cache the KETS structure result for less than one scan interval so the
+    # cTrader worker does not repeatedly recompute the same structure.
+    symbol = str(sig.get("symbol") or sig.get("asset") or "XAUUSD").upper()
+    cache_key = f"{symbol}:{direction}:{latest.get('datetime')}"
+    now_ts = time.time()
+    with SMC_STRUCTURE_LOCK:
+        cached = SMC_STRUCTURE_CACHE.get(cache_key)
+        if cached and now_ts - cached[0] <= SMC_STRUCTURE_TTL_SECONDS:
+            ok, detail = cached[1], cached[2]
+        else:
+            ok, detail = _smc_structure_analysis(candles, direction)
+            SMC_STRUCTURE_CACHE[cache_key] = (now_ts, ok, detail)
+            # Keep the cache bounded.
+            if len(SMC_STRUCTURE_CACHE) > 8:
+                oldest = sorted(SMC_STRUCTURE_CACHE.items(), key=lambda kv: kv[1][0])[:-8]
+                for key_old, _ in oldest:
+                    SMC_STRUCTURE_CACHE.pop(key_old, None)
+    if not ok:
+        return False, str(detail.get("reason") if isinstance(detail, dict) else detail)
 
-    extension=eqd.get("extension") if isinstance(eqd.get("extension"),dict) else {}
-    if extension.get("extended") is True:
-        return False, "smc-overextended"
-
-    # The existing SMC engine normally produces a 2R target. If a target is
-    # supplied, do not execute a materially weaker risk/reward setup.
+    # The SMC source must still provide a valid hard risk anchor. The target
+    # remains informational for automatic execution; existing Auto-Trader
+    # target-profit/opposite-direction rules remain authoritative.
     if tp > 0:
-        risk=abs(entry-sl)
-        reward=(tp-entry) if direction=="BUY" else (entry-tp)
+        risk = abs(entry-sl)
+        reward = (tp-entry) if direction == "BUY" else (entry-tp)
         if risk <= 0 or reward <= 0 or reward/risk < 1.5:
             return False, "smc-risk-reward-below-1.5R"
+
     return True, "ok"
+
 
 def _latest_smc_live_signal(requested_symbol=None):
     """Return the newest direct SMC signal, never Signal History."""
@@ -3640,6 +3926,23 @@ def update_market_state(asset, symbol, candles, signal=None):
     if not candles:
         return
     c = candles[-1]
+    # Keep only a small private copy for the execution-only SMC structure gate.
+    # This does not expose candle history through the dashboard API.
+    compact = []
+    for x in candles[-120:]:
+        try:
+            compact.append({
+                "datetime": x.get("datetime"),
+                "open": _num(x.get("open")),
+                "high": _num(x.get("high")),
+                "low": _num(x.get("low")),
+                "close": _num(x.get("close")),
+                "volume": _num(x.get("volume")),
+            })
+        except Exception:
+            continue
+    with SMC_MARKET_LOCK:
+        SMC_MARKET_CANDLES[str(asset).upper()] = compact
     with API_LOCK:
         MARKET_STATE[asset] = {
             "asset": asset,

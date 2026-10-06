@@ -14,3 +14,49 @@ WHAT WAS CHANGED
 
 IMPORTANT
 This is a risk/quality improvement, not a guarantee of profit. No trading strategy can guarantee more winning money than losing money. The purpose is to prevent history/fallback entries, reject explicitly weak SMC execution conditions, and cap downside with the SMC stop-loss while preserving the SMC strategy.
+
+
+UPDATED EXECUTION-GATE RULE — 2026-10-06
+The SMC execution gate is now structurally independent.
+
+KETS does NOT authorize an SMC entry from:
+- entry_quality
+- reversal flags
+- extension flags
+- generic score/strength
+- Signal History
+
+For every direct canonical SMC BUY/SELL, KETS independently checks its own
+completed 1-minute candles for this sequence:
+1. Liquidity sweep
+2. Displacement
+3. BOS/CHOCH
+4. Order block
+5. Recent order-block retest
+6. Premium/discount location at the retest
+7. Direction confirmation
+
+KETS also requires the direct SMC signal to remain attached to KETS' current
+candle data. The signal timestamp and KETS candle timestamp must be close, and
+the live KETS candle price must remain within a strict volatility-based
+distance from the SMC signal entry price.
+
+Only after the independent structure and live-price checks pass does the
+existing Auto-Trader flow continue to cTrader.
+
+The following existing execution/risk rules remain unchanged:
+- Direct canonical SMC source identity
+- 180-second direct SMC feed lifetime
+- SMC stop-loss as the automatic hard risk anchor
+- Existing 1.5R minimum check when the SMC payload supplies TP/SL
+- Existing opposite-signal confirmation
+- Existing same-direction duplicate protection
+- Existing lot-size/max-open-trades controls
+- Existing trading hours and weekday market schedule
+- Existing break-even and trailing protection
+- Existing target-profit behavior
+- Existing cTrader connection/account selection and order execution
+
+This gate is intentionally strict. A bot-provided SMC BUY/SELL cannot cause a
+trade unless KETS itself can verify the complete SMC structure from its own
+market candles.

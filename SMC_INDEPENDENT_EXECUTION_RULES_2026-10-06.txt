@@ -1,0 +1,36 @@
+KETS — INDEPENDENT SMC EXECUTION RULES
+=========================================
+
+AUTHORITATIVE ENTRY GATE
+KETS itself must verify:
+Liquidity Sweep -> Displacement -> BOS/CHOCH -> Order Block ->
+OB Retest -> Premium/Discount -> Direction Confirmation -> cTrader Entry.
+
+NOT AUTHORIZATION SOURCES
+- entry_quality
+- reversal flags
+- extension flags
+- generic score/strength
+- Signal History
+
+DETACHMENT PROTECTION
+- Direct SMC feed remains short-lived.
+- Signal timestamp must remain close to KETS completed-candle timestamp.
+- Direct SMC entry price must remain close to KETS current candle price.
+- A stale/detached SMC signal is rejected.
+
+PRESERVED EXISTING RULES
+- cTrader connection/account selection
+- SMC source identity
+- SMC hard stop-loss risk anchor
+- 1.5R check when TP/SL are supplied
+- opposite-signal confirmation
+- same-direction duplicate protection
+- lot size/max open trades
+- trading hours and weekday market schedule
+- break-even/trailing
+- target-profit behavior
+- existing dashboard/layout and strategy controls
+
+This build changes the SMC execution authorization only. It does not replace
+the existing KETS strategy or alter unrelated Auto-Trader controls.
