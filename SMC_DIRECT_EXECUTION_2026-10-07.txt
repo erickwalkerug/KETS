@@ -1,0 +1,9 @@
+KETS SMC DIRECT EXECUTION — 2026-10-07
+
+Changes in this build:
+- Removed the KETS-side independent SMC execution gate and its private 1-minute candle/structure cache.
+- KETS Auto-Trader now consumes the canonical SMC BUY/SELL signal produced by the trading bot.
+- KETS validates only signal identity, symbol, freshness, and valid SL/TP risk levels before cTrader execution.
+- KETS still sends stopLoss and takeProfit directly with the cTrader market order.
+- KETS still verifies/enforces broker-side TP/SL after execution.
+- Existing cTrader connection/account selection, lot size, opposite-signal rules, position management, and website layout are preserved.
