@@ -1,0 +1,28 @@
+KETS SMC DIRECT EXECUTION FIX — 2026-10-07
+
+Purpose
+- Make confirmed SMC signals from the trading bot eligible for direct cTrader execution.
+- Do NOT recalculate SMC structure in KETS.
+- Do NOT add a second candle/structure execution gate.
+- Keep cTrader as the authority for the actual broker-side Stop Loss and Take Profit.
+
+Execution flow
+Trading Bot SMC evaluation
+ -> KETS SMC ingress
+ -> Auto-Trader existing controls
+ -> cTrader market order
+ -> cTrader receives the supplied SL + TP
+
+Changes
+1. SMC live signal lifetime increased from 180 seconds to 300 seconds so a normal polling/network delay does not unnecessarily expire a fresh signal.
+2. KETS now recognizes explicit SMC source markers plus compatible SMC payload/source fields and SMC structural fields.
+3. Added POST /api/smc-signals as a dedicated authenticated SMC ingress for bots that cannot add generic /api/signals source markers.
+4. The dedicated SMC ingress normalizes the signal into the same canonical SMC identity used by Auto-Trader.
+5. Existing Auto-Trader direction/reversal rules remain unchanged.
+6. Existing SMC TP/SL broker-side enforcement remains unchanged. Automatic SMC orders still require valid TP and SL and cTrader confirmation.
+7. No SMC strategy-generation logic was changed.
+
+Important
+- KETS does not decide whether liquidity sweep, displacement, BOS/CHOCH or order block is valid. Those SMC conditions remain the responsibility of the trading bot.
+- The SMC Strategy switch must remain ON for SMC Auto-Trader entries.
+- Auto-Trader must be ON and the cTrader account must be CONNECTED.

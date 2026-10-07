@@ -23,7 +23,7 @@ MAX_IN_MEMORY_SIGNALS = 500
 # does not maintain a second candle/structure execution gate.
 SMC_LIVE_SIGNAL = {}
 SMC_LIVE_LOCK = Lock()
-SMC_LIVE_TTL_SECONDS = 180
+SMC_LIVE_TTL_SECONDS = 300
 STRATEGY_SCAN_FEED = {}
 STRATEGY_SCAN_TTL_MINUTES = 10
 STRATEGY_SCAN_LOCK = Lock()
@@ -2794,13 +2794,38 @@ def _smc_history_items():
     return [sig for sig in _history_items() if _is_smc_history_signal(sig)]
 
 
-@app.route("/api/smc-signals", methods=["GET"])
+@app.route("/api/smc-signals", methods=["GET", "POST"])
 def api_smc_signals():
-    """Return Signal History containing ONLY canonical independent SMC signals.
+    """Return the SMC-only feed, or accept a direct SMC signal.
 
-    This is the source-of-truth feed for SMC Auto-Trader.  It deliberately
-    cannot return KETS strategy or additional-strategy signals.
+    POST is a compatibility ingress for SMC bots that cannot add the generic
+    /api/signals source markers. The payload is explicitly tagged SMC here;
+    no second SMC structure/candle gate is performed by KETS.
     """
+    if request.method == "POST":
+        if not _source_request_authorized():
+            return jsonify({"error": "SMC signal receiver authentication failed."}), 401
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            return jsonify({"error": "JSON SMC signal payload required."}), 400
+        body = dict(body)
+        body["is_smc_signal"] = True
+        body["signal_source"] = "smc"
+        body["source"] = "smc"
+        body["source_type"] = "independent_smc"
+        body["strategy"] = "smc"
+        body["strategy_name"] = "smc"
+        # Reuse the canonical ingress so persistence, live-feed refresh and
+        # normalization stay identical for every SMC signal.
+        with app.test_request_context(
+            "/api/signals",
+            method="POST",
+            json=body,
+            headers={"X-KETS-API-KEY": request.headers.get("X-KETS-API-KEY", ""), "X-KETS-SIGNAL-SOURCE": "smc"},
+        ):
+            result = api_signals()
+        return result
+
     if not _source_request_authorized():
         user, error = _require_active_access()
         if error:
@@ -2854,10 +2879,20 @@ def api_signals():
             str(item.get("source") or "").strip().lower(),
             str(item.get("strategy") or "").strip().lower(),
             str(item.get("strategy_name") or "").strip().lower(),
+            str(item.get("strategy_source") or "").strip().lower(),
+            str(item.get("signal_origin") or "").strip().lower(),
         }
+        # IMPORTANT: SMC identity is explicit only. Never infer SMC from
+        # message text, interpretation, signal strength, BOS/order-block fields,
+        # or any other strategy data. Those fields can exist on non-SMC signals.
+        # The dedicated /api/smc-signals endpoint also applies these canonical
+        # markers before forwarding into the common signal store.
         declared_smc = (
-            bool(item.get("is_smc_signal")) and str(item.get("is_smc_signal")).lower() not in {"false","0","no"}
-        ) or "smc" in declared_values or str(item.get("source_type") or "").strip().lower() == "independent_smc" or source_header == "smc"
+            (bool(item.get("is_smc_signal")) and str(item.get("is_smc_signal")).lower() not in {"false","0","no"})
+            or "smc" in declared_values
+            or str(item.get("source_type") or "").strip().lower() == "independent_smc"
+            or source_header == "smc"
+        )
 
         if declared_smc:
             item["is_smc_signal"] = True
