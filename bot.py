@@ -2455,6 +2455,7 @@ def _smc_structure_analysis(candles, direction):
         if not confirmation:
             continue
 
+        latest_price = _num(cs[-1].get("close"))
         candidates.append({
             "sweep_index": sweep_i, "displacement_index": disp_i,
             "bos_index": bos_i, "order_block_index": ob_i,
@@ -2523,7 +2524,7 @@ def _smc_live_entry_guard(sig):
     # direct-feed TTL.
     candles = _kets_smc_candles(sig.get("symbol") or sig.get("asset") or "XAUUSD")
     if len(candles) < 60:
-        return False, "kets-scm-data-not-ready"
+        return False, "kets-smc-data-not-ready"
     latest = candles[-1]
     kets_price = _num(latest.get("close"))
     if kets_price <= 0:

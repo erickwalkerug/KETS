@@ -1,0 +1,21 @@
+KETS SMC AUTO-TRADE EXECUTION BUGFIX — 2026-10-06
+
+Issue fixed:
+When KETS' independent SMC execution gate found a valid complete SMC structure, the final candidate record referenced an undefined variable named `latest_price`. This raised a NameError at the exact point where the valid SMC signal should have been accepted, so the Auto-Trader could skip execution before the cTrader order call.
+
+Fix:
+`latest_price` is now taken from the latest KETS completed 1-minute candle close before the validated SMC candidate is recorded.
+
+Also corrected the internal typo in the SMC data-not-ready diagnostic label.
+
+Rules preserved:
+- SMC remains an independent signal source.
+- Auto-Trader still reads the direct SMC live feed, not Signal History, for entry authority.
+- The independent SMC execution gate still requires:
+  liquidity sweep -> displacement -> BOS/CHOCH -> order block -> OB retest -> premium/discount -> direction confirmation.
+- SMC generic score, entry_quality, reversal flags, extension flags and Signal History do not authorize execution.
+- Existing Auto-Trader direction-change, confirmation, risk-management, profit-protection and cTrader account rules are unchanged.
+- The automatic SMC stop-loss risk anchor remains required.
+
+Validation:
+- bot.py and app.py pass Python bytecode compilation (`python -m py_compile`).
