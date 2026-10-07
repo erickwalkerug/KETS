@@ -25,6 +25,9 @@ MAX_IN_MEMORY_SIGNALS = 500
 SMC_LIVE_SIGNAL = {}
 SMC_LIVE_LOCK = Lock()
 SMC_LIVE_TTL_SECONDS = 180
+SMC_LAST_GATE_REASON = ""
+SMC_LAST_GATE_TIME = 0.0
+SMC_GATE_LOCK = Lock()
 # KETS-owned completed 1M candles used only by the independent SMC execution gate.
 # The cache is bounded and refreshed by the existing 1-minute market scan.
 SMC_MARKET_CANDLES = {}
@@ -1919,6 +1922,8 @@ def _ctrader_execute_order(row, order, auto_label=False):
                 "position_id": rp.get("positionId") or (rp.get("position") or {}).get("positionId"),
                 "execution_type": rp.get("executionType"),
                 "execution_price": rp.get("executionPrice") or (rp.get("deal") or {}).get("executionPrice"),
+                "requested_stop_loss": sl,
+                "requested_take_profit": tp,
                 "raw": rp,
             }
 
@@ -2134,6 +2139,77 @@ def _manage_auto_positions_from_row(row):
     except Exception as exc:
         app.logger.warning("KETS Auto-Trader protection check failed: %s",exc)
 
+def _verify_and_enforce_broker_protection(row, result, requested_sl, requested_tp, automatic=True):
+    """Verify the actual cTrader position has the requested SL and TP.
+
+    The market-order request is the first protection layer. This second layer
+    checks the broker's actual position and repairs a missing/mismatched level.
+    Automatic trades are never intentionally left unprotected.
+    """
+    pid = result.get("position_id") if isinstance(result, dict) else None
+    if not pid:
+        # A market execution can briefly return without a position id. Give
+        # cTrader a few seconds to publish the position before declaring it
+        # unverified.
+        for _ in range(4):
+            try:
+                snap = _ctrader_account_snapshot(row)
+                matches = [x for x in (snap.get("positions") or [])
+                           if str(x.get("label") or "").upper() == ("KETS_AUTO" if automatic else "KETS")]
+                if matches:
+                    matches.sort(key=lambda x: str(x.get("open_timestamp") or ""), reverse=True)
+                    pid = matches[0].get("positionId")
+                    if pid:
+                        break
+            except Exception:
+                pass
+            time.sleep(0.75)
+    if not pid:
+        raise RuntimeError("cTrader executed the order but KETS could not verify the resulting position protection.")
+
+    def _near(a, b):
+        try:
+            a=float(a); b=float(b)
+            return abs(a-b) <= max(0.01, abs(b)*1e-7)
+        except (TypeError, ValueError):
+            return False
+
+    snap = _ctrader_account_snapshot(row)
+    positions = [x for x in (snap.get("positions") or []) if str(x.get("positionId")) == str(pid)]
+    if not positions:
+        raise RuntimeError("cTrader position was executed but is no longer visible for protection verification.")
+    pos = positions[0]
+    actual_sl = pos.get("stop_loss")
+    actual_tp = pos.get("take_profit")
+    if _near(actual_sl, requested_sl) and _near(actual_tp, requested_tp):
+        result["position_id"] = pid
+        result["broker_stop_loss"] = actual_sl
+        result["broker_take_profit"] = actual_tp
+        result["protection_verified"] = True
+        return result
+
+    # Repair both levels together. cTrader owns the resulting protection.
+    _ctrader_amend_position(row, pid, stop_loss=requested_sl, take_profit=requested_tp)
+    time.sleep(0.35)
+    snap = _ctrader_account_snapshot(row)
+    positions = [x for x in (snap.get("positions") or []) if str(x.get("positionId")) == str(pid)]
+    pos = positions[0] if positions else None
+    if not pos or not _near(pos.get("stop_loss"), requested_sl) or not _near(pos.get("take_profit"), requested_tp):
+        if automatic:
+            # Never leave an automatic trade running without the source TP/SL.
+            try:
+                _ctrader_close_positions(row, auto_only=True)
+            except Exception as close_exc:
+                raise RuntimeError(f"cTrader TP/SL verification failed and emergency close also failed: {close_exc}")
+        raise RuntimeError("cTrader did not confirm the requested Stop Loss and Take Profit.")
+
+    result["position_id"] = pid
+    result["broker_stop_loss"] = pos.get("stop_loss")
+    result["broker_take_profit"] = pos.get("take_profit")
+    result["protection_verified"] = True
+    result["protection_repaired"] = True
+    return result
+
 def _queue_and_execute_ctrader(row, sig, automatic=True):
     direction=str(sig.get("direction") or sig.get("signal") or "").upper()
     if direction not in {"BUY","SELL"}: raise RuntimeError("Signal is not a BUY/SELL entry.")
@@ -2141,12 +2217,11 @@ def _queue_and_execute_ctrader(row, sig, automatic=True):
     if not entry: raise RuntimeError("The current KETS signal has no entry price.")
     sid=_signal_id(sig)
     lot=max(.01,min(_num(row.get("lot_size")) or .01,_num(row.get("max_lot")) or 10))
-    # Automatic SMC entries keep the existing opposite-SMC exit logic, but a
-    # hard SMC stop-loss is now always attached. This caps downside even when
-    # break-even/trailing controls are disabled. The SMC take-profit is not
-    # forced onto automatic positions, so the existing direction/reversal and
-    # total-profit behaviour remains intact. Manual orders keep their optional
-    # SL/TP behaviour unchanged.
+    # Automatic SMC entries keep the existing opposite-SMC exit logic, while
+    # the exact SL and TP supplied by the SMC signal are now both mandatory
+    # broker-side protections. They are sent directly in the cTrader market
+    # order so cTrader owns the actual stop-loss and take-profit. KETS does not
+    # simulate either level. Manual orders keep their existing SL/TP behaviour.
     order={"symbol":str(row.get("auto_symbol") or sig.get("symbol") or ("XAUUSD" if str(sig.get("asset")).upper() in ("GOLD","XAUUSD") else "BTCUSD")),"direction":direction,"volume":lot,"entry":entry}
     tp=_num(sig.get("take_profit") or sig.get("tp") or sig.get("target"))
     sl=_num(sig.get("stop_loss") or sig.get("sl") or sig.get("stop"))
@@ -2154,9 +2229,19 @@ def _queue_and_execute_ctrader(row, sig, automatic=True):
         if not tp or not sl: raise RuntimeError("The current signal has no complete entry, target and stop-loss plan.")
         order["take_profit"]=tp; order["stop_loss"]=sl
     else:
-        if not sl: raise RuntimeError("SMC Auto-Trader requires the SMC signal Stop Loss risk anchor.")
-        order["stop_loss"]=sl
+        # SMC automatic execution requires BOTH levels from the source signal.
+        # Never open an automatic trade with only one side of its protection.
+        if not sl: raise RuntimeError("SMC Auto-Trader requires the SMC signal Stop Loss.")
+        if not tp: raise RuntimeError("SMC Auto-Trader requires the SMC signal Take Profit.")
+        if direction == "BUY" and (sl >= entry or tp <= entry):
+            raise RuntimeError("SMC BUY has invalid broker-side SL/TP levels.")
+        if direction == "SELL" and (sl <= entry or tp >= entry):
+            raise RuntimeError("SMC SELL has invalid broker-side SL/TP levels.")
+        order["take_profit"]=tp; order["stop_loss"]=sl
     result,selected=_ctrader_execute_order(row,order,auto_label=automatic)
+    result = _verify_and_enforce_broker_protection(
+        row, result, sl, tp, automatic=automatic
+    )
     with DB_LOCK:
         conn=db_conn()
         db_execute(conn,"UPDATE ctrader_connections SET selected_account_id=?,last_signal_id=?,auto_entry_signal_id=?,auto_direction=?,last_error=NULL,status=?,updated_at=? WHERE id=?",(selected,sid,sid,direction,"CONNECTED",_now_iso(),row["id"]))
@@ -2535,10 +2620,10 @@ def _smc_live_entry_guard(sig):
     candle_dt = _smc_candle_dt({"datetime": raw_candle_time})
     if sig_dt and candle_dt:
         age = abs((candle_dt - sig_dt).total_seconds())
-        if age > 120:
+        if age > 180:
             return False, "smc-signal-detached-from-kets-candle"
     tr = _smc_true_range(latest, candles[-2].get("close") if len(candles) > 1 else None)
-    max_delta = max(tr * 0.75, kets_price * 0.00012)
+    max_delta = max(tr * 1.25, kets_price * 0.00020)
     if abs(kets_price-entry) > max_delta:
         return False, "smc-live-price-detached"
 
@@ -2574,11 +2659,21 @@ def _smc_live_entry_guard(sig):
     return True, "ok"
 
 
+def _smc_gate_status(reason):
+    global SMC_LAST_GATE_REASON, SMC_LAST_GATE_TIME
+    with SMC_GATE_LOCK:
+        SMC_LAST_GATE_REASON = str(reason or "unknown")
+        SMC_LAST_GATE_TIME = time.time()
+
 def _latest_smc_live_signal(requested_symbol=None):
-    """Return the newest direct SMC signal, never Signal History."""
+    """Return the newest direct SMC signal and preserve a useful gate reason."""
     with SMC_LIVE_LOCK:
         sig=dict(SMC_LIVE_SIGNAL) if SMC_LIVE_SIGNAL else None
-    if not sig or not _signal_matches_symbol(sig, requested_symbol):
+    if not sig:
+        _smc_gate_status("waiting-for-smc-signal")
+        return None
+    if not _signal_matches_symbol(sig, requested_symbol):
+        _smc_gate_status("smc-symbol-mismatch")
         return None
     raw_ts=sig.get("timestamp") or sig.get("timestamp_utc") or sig.get("created_at")
     try:
@@ -2587,12 +2682,16 @@ def _latest_smc_live_signal(requested_symbol=None):
             sig_dt=sig_dt.replace(tzinfo=EAT)
         age=(get_eat_time()-sig_dt).total_seconds()
     except Exception:
+        _smc_gate_status("smc-invalid-timestamp")
         return None
     if age < 0 or age > SMC_LIVE_TTL_SECONDS:
+        _smc_gate_status("smc-signal-expired")
         return None
     ok, reason=_smc_live_entry_guard(sig)
     if not ok:
+        _smc_gate_status(reason)
         return None
+    _smc_gate_status("ready-for-ctrader")
     return sig
 
 def _latest_autotrader_signal(requested_symbol, kets_strategy_enabled=True, selected_strategies=None):
@@ -2665,6 +2764,16 @@ def _ctrader_autotrade_once():
             ) or ("smc" in {str(x).strip().lower() for x in (selected_strategies or [])})
             sig=_latest_autotrader_signal(auto_symbol, kets_strategy_enabled, selected_strategies)
             if not sig:
+                with SMC_GATE_LOCK:
+                    gate_reason = SMC_LAST_GATE_REASON
+                    gate_time = SMC_LAST_GATE_TIME
+                # Only expose a recent SMC gate state; do not overwrite a real
+                # execution error indefinitely while the worker is idle.
+                if gate_reason and (time.time() - gate_time) < 15:
+                    with DB_LOCK:
+                        conn=db_conn(); db_execute(conn,
+                            "UPDATE ctrader_connections SET last_error=?,updated_at=? WHERE id=?",
+                            ("SMC Auto-Trader gate: "+gate_reason,_now_iso(),row["id"])); conn.commit(); conn.close()
                 continue
             sid=_signal_id(sig)
             direction=str(sig.get("direction") or sig.get("signal") or "").upper()

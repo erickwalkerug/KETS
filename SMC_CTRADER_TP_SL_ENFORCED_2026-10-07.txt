@@ -1,0 +1,18 @@
+KETS SMC cTrader TP/SL ENFORCEMENT — 2026-10-07
+
+CHANGE MADE
+- SMC Auto-Trader now requires BOTH the signal Stop Loss and Take Profit.
+- Both levels are sent directly in the cTrader MARKET order payload.
+- cTrader is the system that actually places the broker-side SL/TP.
+- KETS does not treat TP as informational for an automatic SMC trade.
+- An automatic SMC trade is refused if either SL or TP is missing.
+- The existing SMC independent execution gate remains unchanged.
+- Existing opposite-direction confirmation, duplicate-signal handling, profit target,
+  break-even, trailing, and other Auto-Trader controls remain unchanged.
+- Manual trading behaviour remains unchanged.
+
+IMPORTANT
+The broker/cTrader can still reject an order if the supplied SL/TP violates the
+broker's minimum distance, price precision, market state, or other trading rules.
+In that case KETS records the cTrader rejection instead of opening an unprotected
+automatic SMC position.

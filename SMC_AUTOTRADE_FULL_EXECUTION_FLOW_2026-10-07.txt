@@ -1,0 +1,23 @@
+KETS SMC AUTO-TRADER — FULL EXECUTION FLOW — 2026-10-07
+
+1. Independent SMC signal is received through /api/signals.
+2. Only canonical independent SMC signals are accepted by the SMC execution source.
+3. Auto-Trader reads the short-lived direct SMC feed; Signal History is audit/display only.
+4. The SMC execution gate checks direction, entry/SL validity, live candle attachment,
+   live price distance, and KETS-owned SMC structure:
+   liquidity sweep -> displacement -> BOS/CHOCH -> order block -> retest ->
+   premium/discount -> direction confirmation.
+5. The SMC signal must contain BOTH Stop Loss and Take Profit for automatic execution.
+6. Risk/reward must remain at least 1.5R when TP is supplied.
+7. Repeated same-direction signals do not create duplicate automatic positions.
+8. Existing opposite-direction handling and optional two-signal confirmation are preserved.
+9. cTrader receives a MARKET order with the source SMC Stop Loss and Take Profit attached.
+10. After execution, KETS verifies the actual cTrader position contains BOTH requested levels.
+11. If either level is missing/mismatched, KETS sends a broker-side position amendment.
+12. KETS verifies again. If an automatic trade still cannot be protected, KETS attempts
+    to close it rather than leave an unprotected automatic position running.
+13. Break-even/trailing management remains available through the existing Auto-Trader controls.
+14. Gate failures are now surfaced in the cTrader connection last_error field instead of
+    being silently ignored, making missed SMC executions diagnosable.
+15. No generic KETS score, entry_quality, reversal flag, extension flag, or Signal History
+    entry is used as authorization for an independent SMC trade.
