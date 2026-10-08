@@ -2252,8 +2252,21 @@ def _queue_and_execute_ctrader(row, sig, automatic=True):
             raise RuntimeError("SMC SELL has invalid broker-side SL/TP levels.")
         order["take_profit"]=tp; order["stop_loss"]=sl
     result,selected=_ctrader_execute_order(row,order,auto_label=automatic)
+    # _ctrader_execute_order normalizes source SL/TP to the broker symbol's
+    # allowed precision before the market order is sent. Use those exact
+    # broker-facing values for verification/amendment too. Passing the raw SMC
+    # decimals here can make cTrader reject the protection amendment AFTER the
+    # market order has already opened. The old retry path then treated that as
+    # a failed entry and retried the same signal every second, creating duplicate
+    # positions.
+    broker_sl = result.get("requested_stop_loss") if isinstance(result, dict) else None
+    broker_tp = result.get("requested_take_profit") if isinstance(result, dict) else None
+    if broker_sl is None:
+        broker_sl = sl
+    if broker_tp is None:
+        broker_tp = tp
     result = _verify_and_enforce_broker_protection(
-        row, result, sl, tp, automatic=automatic
+        row, result, broker_sl, broker_tp, automatic=automatic
     )
     with DB_LOCK:
         conn=db_conn()
