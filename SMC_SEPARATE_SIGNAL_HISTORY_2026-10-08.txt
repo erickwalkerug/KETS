@@ -1,0 +1,13 @@
+KETS — SEPARATE SMC SIGNAL HISTORY — 2026-10-08
+
+Implemented:
+- Added a dedicated smc_signal_history database table.
+- Added a separate in-memory SMC_SIGNAL_HISTORY collection.
+- Only canonical independent SMC signals enter this history.
+- Existing explicitly-tagged SMC records are migrated from the legacy generic signals table into the dedicated SMC store.
+- Added /api/smc-history for the dedicated feed.
+- Auto-Trader now reads only the dedicated SMC Signal History when SMC is selected.
+- Normal KETS Signal History remains unchanged and cannot authorize an SMC trade.
+- Existing SMC live slot remains as a mirror/debug feed but is no longer an Auto-Trader entry source.
+- TP/SL execution/protection logic is unchanged.
+- SMC strategy generation remains the responsibility of the independent trading bot; KETS does not recalculate SMC structure.

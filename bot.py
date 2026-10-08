@@ -16,6 +16,7 @@ app = Flask(__name__)
 API_LOCK = Lock()
 MARKET_STATE = {}
 SIGNAL_HISTORY = []
+SMC_SIGNAL_HISTORY = []
 SIGNAL_HISTORY_DAYS = 2
 MAX_IN_MEMORY_SIGNALS = 500
 # Auto-Trader consumes only the latest canonical SMC signal received directly
@@ -115,7 +116,7 @@ def api_integration_status():
     """Fast health check for the actual production connection path.
 
     Signal flow is intentionally one-way and local to this KETS service:
-    independent SMC bot -> POST /api/signals -> direct SMC live feed -> Auto-Trade -> cTrader.
+    independent SMC bot -> POST /api/signals -> dedicated SMC Signal History -> Auto-Trade -> cTrader.
     Signal History is display/audit only and is not an Auto-Trade entry source.
     This endpoint never polls the bot or cTrader, so the dashboard cannot
     time out while checking connection status.
@@ -126,7 +127,7 @@ def api_integration_status():
         "ok": True,
         "website": {"ok": True},
         "signal_feed": {
-            "mode": "direct-smc-live",
+            "mode": "dedicated-smc-history",
             "configured": True,
             "history_count": len(history),
             "latest_signal_id": str((latest or {}).get("id") or ""),
@@ -314,6 +315,16 @@ def _init_core_db():
                 created_at TEXT NOT NULL
             );
             CREATE INDEX IF NOT EXISTS idx_signals_timestamp ON signals(timestamp);
+            CREATE TABLE IF NOT EXISTS smc_signal_history (
+                id TEXT PRIMARY KEY,
+                asset TEXT NOT NULL,
+                direction TEXT,
+                score DOUBLE PRECISION,
+                timestamp TEXT,
+                payload TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_smc_signal_history_timestamp ON smc_signal_history(timestamp);
             CREATE TABLE IF NOT EXISTS app_meta (key TEXT PRIMARY KEY, value TEXT);
             """)
         print("✅ KETS Render Postgres storage enabled")
@@ -358,6 +369,16 @@ def _init_core_db():
             created_at TEXT NOT NULL
         );
         CREATE INDEX IF NOT EXISTS idx_signals_timestamp ON signals(timestamp);
+        CREATE TABLE IF NOT EXISTS smc_signal_history (
+            id TEXT PRIMARY KEY,
+            asset TEXT NOT NULL,
+            direction TEXT,
+            score REAL,
+            timestamp TEXT,
+            payload TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_smc_signal_history_timestamp ON smc_signal_history(timestamp);
         CREATE TABLE IF NOT EXISTS app_meta (key TEXT PRIMARY KEY, value TEXT);
         """)
     print(f"✅ KETS local SQLite fallback: {DB_PATH}")
@@ -2395,23 +2416,18 @@ def _latest_smc_history_signal(requested_symbol=None):
 def _latest_autotrader_signal(requested_symbol, kets_strategy_enabled=True, selected_strategies=None):
     """Select the Auto-Trader entry source.
 
-    SMC is an independent source. Prefer the direct live SMC feed for lowest
-    latency, then recover the same explicitly tagged signal from persistent
-    Signal History if the runtime slot was lost. Ordinary BUY/SELL history can
-    never satisfy either path.
+    SMC is an independent source. Auto-Trader reads ONLY the dedicated SMC
+    Signal History store. The live SMC slot is no longer an execution source;
+    it is only a low-latency mirror/debug aid. This gives one auditable source
+    of truth for every automatic SMC entry.
     """
     selected_set={str(x).strip().lower() for x in (selected_strategies or [])}
     if "smc" not in selected_set:
         return None
-
-    live = _latest_smc_live_signal(requested_symbol)
-    if live:
-        return live
-
     recovered = _latest_smc_history_signal(requested_symbol)
     if recovered:
-        app.logger.info("KETS Auto-Trader: recovered fresh SMC signal %s from persistent history after live-slot miss", _signal_id(recovered))
-    return recovered
+        return recovered
+    return None
 
 
 def _ctrader_autotrade_once():
@@ -2433,17 +2449,16 @@ def _ctrader_autotrade_once():
             # preserved, but no new signal-driven automatic entry is processed.
             if not session["active"]:
                 continue
-            # Auto-Trade entry source is the direct SMC live feed only. Signal
-            # History is display/audit data and has ZERO authority to open a new
-            # automatic trade. Repeated same-direction signals are ignored. If
+            # Auto-Trade entry source is the dedicated SMC Signal History only.
+            # Normal KETS Signal History has ZERO authority to open an SMC trade. Repeated same-direction signals are ignored. If
             # opposite-signal confirmation is ON, reversal still requires two
             # distinct opposite SMC signals.
             try:
                 selected_strategies=json.loads(row.get("strategy_selection_json") or '["smc"]')
             except Exception:
                 selected_strategies=[]
-            # The independent trading bot sends SMC BUY/SELL signals directly
-            # into KETS Signal History. "smc" in the Auto-Trader strategy
+            # The independent trading bot sends SMC BUY/SELL signals into the
+            # dedicated SMC Signal History store. "smc" in the Auto-Trader strategy
             # selection therefore means that direct feed must be eligible even
             # when a legacy connection row still has kets_strategy_enabled=0.
             # This preserves the user's SMC source selection and prevents a
@@ -2825,15 +2840,107 @@ def _is_smc_history_signal(sig):
     )
 
 
-def _smc_history_items():
-    """Dedicated SMC-only Signal History feed.
+def _persist_smc_signal(item):
+    """Persist an explicitly identified SMC signal in its own history store."""
+    if not _is_smc_history_signal(item):
+        return False
+    try:
+        now = get_eat_time().isoformat()
+        payload = json.dumps(item, separators=(",", ":"), default=str)
+        with DB_LOCK:
+            conn = db_conn()
+            if using_postgres():
+                db_execute(conn, """INSERT INTO smc_signal_history(id,asset,direction,score,timestamp,payload,created_at)
+                    VALUES(?,?,?,?,?,?,?)
+                    ON CONFLICT (id) DO UPDATE SET
+                        payload=EXCLUDED.payload, asset=EXCLUDED.asset,
+                        direction=EXCLUDED.direction, score=EXCLUDED.score,
+                        timestamp=EXCLUDED.timestamp""",
+                    (str(item.get("id")), str(item.get("asset", "UNKNOWN")),
+                     str(item.get("direction", "")), float(item.get("score", 0)),
+                     str(item.get("timestamp", now)), payload, now))
+            else:
+                db_execute(conn, """INSERT OR REPLACE INTO smc_signal_history
+                    (id,asset,direction,score,timestamp,payload,created_at)
+                    VALUES(?,?,?,?,?,?,?)""",
+                    (str(item.get("id")), str(item.get("asset", "UNKNOWN")),
+                     str(item.get("direction", "")), float(item.get("score", 0)),
+                     str(item.get("timestamp", now)), payload, now))
+            conn.commit(); conn.close()
+        return True
+    except Exception as exc:
+        print(f"⚠️ SMC signal history persistence failed: {str(exc)[:300]}")
+        return False
 
-    It reads the same persisted Signal History store but returns only signals
-    carrying the complete canonical SMC identity.  This keeps the existing
-    KETS history available for the dashboard while giving Auto-Trader a source
-    that cannot be satisfied by an unrelated BUY/SELL.
+def _load_persistent_smc_signals():
+    """Load recent SMC signals only from the dedicated SMC history table."""
+    cutoff = get_eat_time() - datetime.timedelta(days=SIGNAL_HISTORY_DAYS)
+    try:
+        with DB_LOCK:
+            conn = db_conn()
+            rows = db_execute(conn,
+                "SELECT payload FROM smc_signal_history WHERE timestamp >= ? ORDER BY timestamp ASC",
+                (cutoff.isoformat(),)).fetchall()
+            conn.close()
+        result=[]
+        for row in rows:
+            try:
+                payload = row["payload"] if isinstance(row, dict) else row[0]
+                item=json.loads(payload)
+                if _is_smc_history_signal(item): result.append(item)
+            except Exception:
+                continue
+        # One-time compatibility migration: older builds stored SMC signals
+        # only inside the generic signals table. Copy only canonically tagged
+        # SMC records into the new dedicated store; ordinary KETS signals are
+        # never migrated.
+        with DB_LOCK:
+            conn = db_conn()
+            legacy_rows = db_execute(conn,
+                "SELECT payload FROM signals WHERE timestamp >= ? ORDER BY timestamp ASC",
+                (cutoff.isoformat(),)).fetchall()
+            conn.close()
+        known={str(x.get("id")) for x in result}
+        for row in legacy_rows:
+            try:
+                payload = row["payload"] if isinstance(row, dict) else row[0]
+                item=json.loads(payload)
+                sid=str(item.get("id") or "")
+                if sid and sid not in known and _is_smc_history_signal(item):
+                    _persist_smc_signal(item)
+                    result.append(item); known.add(sid)
+            except Exception:
+                continue
+        return result[-500:]
+    except Exception as exc:
+        print(f"⚠️ SMC signal history read failed: {str(exc)[:300]}")
+        return []
+
+def _smc_history_items():
+    """Dedicated SMC-only Signal History feed backed by its own data store.
+
+    Unlike the normal KETS Signal History, this collection can only contain
+    signals explicitly tagged as independent SMC. Auto-Trader uses this feed
+    as its SMC entry source.
     """
-    return [sig for sig in _history_items() if _is_smc_history_signal(sig)]
+    cutoff = get_eat_time() - datetime.timedelta(days=SIGNAL_HISTORY_DAYS)
+    with API_LOCK:
+        memory=[dict(x) for x in SMC_SIGNAL_HISTORY]
+    persistent=_load_persistent_smc_signals()
+    merged={}
+    for item in persistent + memory:
+        if not _is_smc_history_signal(item):
+            continue
+        try:
+            dt=_signal_dt(item)
+            if dt < cutoff: continue
+        except Exception:
+            pass
+        key=str(item.get("id") or f"{item.get('asset')}-{item.get('direction')}-{item.get('timestamp')}")
+        merged[key]=item
+    result=list(merged.values())
+    result.sort(key=lambda x:str(x.get("timestamp") or x.get("created_at") or ""))
+    return result[-500:]
 
 
 @app.route("/api/smc-signals", methods=["GET", "POST"])
@@ -2967,6 +3074,18 @@ def api_signals():
             with SMC_LIVE_LOCK:
                 SMC_LIVE_SIGNAL.clear()
                 SMC_LIVE_SIGNAL.update(dict(item))
+            with API_LOCK:
+                existing_smc = {str(x.get("id")) for x in SMC_SIGNAL_HISTORY}
+                if item["id"] not in existing_smc:
+                    SMC_SIGNAL_HISTORY.append(dict(item))
+                else:
+                    for idx, existing in enumerate(SMC_SIGNAL_HISTORY):
+                        if str(existing.get("id")) == item["id"]:
+                            SMC_SIGNAL_HISTORY[idx] = dict(item)
+                            break
+                cutoff_smc = now - datetime.timedelta(days=SIGNAL_HISTORY_DAYS)
+                SMC_SIGNAL_HISTORY[:] = [x for x in SMC_SIGNAL_HISTORY if _signal_dt(x) >= cutoff_smc][-MAX_IN_MEMORY_SIGNALS:]
+            _persist_smc_signal(item)
 
         with API_LOCK:
             existing = {str(x.get("id")) for x in SIGNAL_HISTORY}
@@ -3078,6 +3197,16 @@ def api_history():
     if error:
         return error
     return jsonify({"ok": True, "history": _history_items(), "days": SIGNAL_HISTORY_DAYS})
+
+
+@app.route("/api/smc-history", methods=["GET"])
+def api_smc_history():
+    """Dedicated SMC-only history used by Auto-Trader and the SMC dashboard."""
+    user, error = _require_active_access()
+    if error:
+        return error
+    history=_smc_history_items()
+    return jsonify({"ok": True, "history": history, "days": SIGNAL_HISTORY_DAYS, "source":"dedicated_smc_history"})
 
 
 @app.route("/api/developer/signals")
@@ -3773,6 +3902,8 @@ def _persist_signal(item):
     Flow: trading bot -> /api/signals -> KETS website -> Render persistent disk.
     The browser never writes signals directly to the database. The complete
     normalized signal is retained in payload JSON and signal IDs are idempotent.
+    SMC signals are additionally persisted into the dedicated smc_signal_history
+    table so Auto-Trader has an isolated SMC-only source of truth.
     """
     try:
         now = get_eat_time().isoformat()

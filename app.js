@@ -4,7 +4,7 @@ const hashToken=freshHash.get("login")||"";
 const storedToken=sessionStorage.getItem("kets_user_token")||"";
 const initialToken=hashToken||storedToken;
 if(hashToken)sessionStorage.setItem("kets_user_token",hashToken);
-const state={token:initialToken,user:null,access:null,signals:{},history:[],payments:[],status:{},plans:{},clockOffsetMs:0,signalWindowDeadlineMs:0,nextBroadcastDeadlineMs:0,nextRefreshDeadlineMs:0,welcomeWindowDeadlineMs:0,welcomeClockOffsetMs:0,welcomeRefreshDeadlineMs:0,welcomeWindowMode:"OUTSIDE_HOURS",loading:false,refreshInProgress:false};
+const state={token:initialToken,user:null,access:null,signals:{},history:[],smcHistory:[],payments:[],status:{},plans:{},clockOffsetMs:0,signalWindowDeadlineMs:0,nextBroadcastDeadlineMs:0,nextRefreshDeadlineMs:0,welcomeWindowDeadlineMs:0,welcomeClockOffsetMs:0,welcomeRefreshDeadlineMs:0,welcomeWindowMode:"OUTSIDE_HOURS",loading:false,refreshInProgress:false};
 const $=id=>document.getElementById(id);
 function headers(extra={}){return {Accept:"application/json",...(state.token?{Authorization:`Bearer ${state.token}`}:{}) ,...extra};}
 async function api(path,opts={}){
@@ -246,6 +246,8 @@ function renderWelcomeHistory(history){
      <div class="history-price">${signalMoney(price)}</div>
    </div>`;
  }).join("");
+ targets.forEach(el=>el.innerHTML=rows);
+ if(updated) updated.textContent=`${state.smcHistory.length} SMC signal${state.smcHistory.length===1?"":"s"} · live feed`;
 }
 let welcomePreviewInProgress=false;
 async function loadWelcomePreview(){
@@ -666,6 +668,32 @@ function renderHistory(){
  }).join("");
  strongEl.innerHTML=header+rows;
 }
+function renderSMCHistory(){
+ const targets=[$("smcHistoryList"),$("smcHistoryPageList")].filter(Boolean);
+ if(!targets.length) return;
+ const updated=$("smcHistoryLastUpdated");
+ if(!state.smcHistory.length){
+  targets.forEach(el=>el.innerHTML=`<div class="empty">No SMC signals received yet.</div>`);
+  if(updated) updated.textContent="No SMC signals received yet";
+  return;
+ }
+ const rows=state.smcHistory.slice().reverse().slice(0,80).map(s=>{
+  const direction=String(s.direction||s.signal||"--").toUpperCase();
+  const cls=direction==="BUY"?"buy":direction==="SELL"?"sell":"wait";
+  const price=s.entry??s.market_price??s.price??s.current_price;
+  const tp=s.take_profit??s.tp;
+  const sl=s.stop_loss??s.sl;
+  return `<div class="history-row smc-history-row">
+   <div><div class="history-market">${esc(s.market||s.asset||"XAUUSD")} <span class="history-source-badge smc">SMC</span></div>
+   <div class="history-meta">${esc(Number.isFinite(parseSignalTime(s))?new Date(parseSignalTime(s)).toLocaleString():(s.timestamp||""))}</div></div>
+   <div class="history-dir ${cls}">${esc(direction)} · ${esc(s.score??s.strength??0)}%</div>
+   <div class="history-price">ENTRY ${signalMoney(price)} · TP ${signalMoney(tp)} · SL ${signalMoney(sl)}</div>
+  </div>`;
+ }).join("");
+ targets.forEach(el=>el.innerHTML=rows);
+ if(updated) updated.textContent=`${state.smcHistory.length} SMC signal${state.smcHistory.length===1?"":"s"} · live feed`;
+}
+
 function renderPayments(){
  const el=$("paymentHistory");if(!state.payments.length){el.innerHTML=`<div class="empty">No payments yet.</div>`;return;}
  el.innerHTML=state.payments.map(p=>`<div class="history-row"><div><div class="history-market">${esc(state.plans[p.plan]?.name||p.plan)}</div><div class="history-meta">${esc(new Date(p.created_at).toLocaleString())} · ${esc(p.network||"Pesapal")}</div></div><div class="history-dir ${p.status==="COMPLETED"?"buy":"wait"}">${esc(p.status)}</div><div class="history-price">${money(p.amount,p.currency||planCurrency())}</div></div>`).join("");
@@ -770,7 +798,7 @@ function renderManagedTrading(){
  el.innerHTML=`<div class="managed-trade-head"><div><span class="eyebrow">${esc(market)}</span><h3>${direction==='BUY'?'🟢 BUY / LONG':'🔴 SELL / SHORT'}</h3></div><span class="managed-quality">Signal strength ${esc(score)}%</span></div><div class="managed-level-grid"><div><span>ENTRY</span><b>${signalMoney(price)}</b></div><div><span>TAKE PROFIT</span><b>${signalMoney(tp)}</b></div><div><span>STOP LOSS</span><b>${signalMoney(sl)}</b></div><div><span>STATUS</span><b>READY</b></div></div><p class="managed-execution-note"><strong>${esc(targetText)}</strong><br>This is the current KETS manual-trading plan. Use these levels only when the status shows READY. Automatic trading uses its separate Signal History flow.</p>`;
 }
 
-const PAGE_IDS={dashboard:"dashboardHome",live:"liveMarketsPage",plans:"accessPlansPage",payments:"paymentHistoryPage",stop:"stopLossPage",history:"bullBearHistoryPage",managed:"managedTradingPage",autoTrader:"autoTraderPage"};
+const PAGE_IDS={dashboard:"dashboardHome",live:"liveMarketsPage",plans:"accessPlansPage",payments:"paymentHistoryPage",stop:"stopLossPage",history:"bullBearHistoryPage",managed:"managedTradingPage",autoTrader:"autoTraderPage",smcHistory:"smcHistoryPage"};
 function showPage(name,updateHash=true){
  Object.values(PAGE_IDS).forEach(id=>$(id)?.classList.add("hidden"));
  const target=$(PAGE_IDS[name]||PAGE_IDS.dashboard);
@@ -778,8 +806,9 @@ function showPage(name,updateHash=true){
  target.classList.remove("hidden");
  if(name==="stop")renderStopManagement();
  if(name==="managed"){renderManagedTrading();refreshCTraderStatus();}
+ if(name==="smcHistory"){renderSMCHistory();}
  if(updateHash){
-   const hash={live:"#live-markets",plans:"#access-plans",payments:"#payment-history",stop:"#stop-loss-management",history:"#bullish-bearish-history",managed:"#managed-trading",autoTrader:"#auto-trader",dashboard:""}[name]||"";
+   const hash={live:"#live-markets",plans:"#access-plans",payments:"#payment-history",stop:"#stop-loss-management",history:"#bullish-bearish-history",managed:"#managed-trading",autoTrader:"#auto-trader",smcHistory:"#smc-history",dashboard:""}[name]||"";
    try{history.replaceState({},document.title,location.pathname+location.search+hash);}catch(e){}
  }
  window.scrollTo({top:0,behavior:"smooth"});
@@ -795,6 +824,7 @@ function handleHistoryRoute(){
  else if(h==="#stop-loss-management")showPage("stop",false);
  else if(h==="#managed-trading")showPage("managed",false);
  else if(h==="#auto-trader")showPage("autoTrader",false);
+ else if(h==="#smc-history")showPage("smcHistory",false);
  else showPage("dashboard",false);
 }
 
@@ -807,11 +837,13 @@ if($("stopLossBtn")) $("stopLossBtn").onclick=()=>showPage("stop");
 if($("bullBearHistoryBtn")) $("bullBearHistoryBtn").onclick=showBullBearHistoryPage;
 if($("managedTradingBtn")) $("managedTradingBtn").onclick=()=>showPage("managed");
 if($("autoTraderBtn")) $("autoTraderBtn").onclick=()=>showPage("autoTrader");
+if($("smcHistoryBtn")) $("smcHistoryBtn").onclick=()=>showPage("smcHistory");
 if($("dashboardLiveMarkets")) $("dashboardLiveMarkets").onclick=()=>showPage("live");
 if($("dashboardStopLoss")) $("dashboardStopLoss").onclick=()=>showPage("stop");
 if($("dashboardAccessPlans")) $("dashboardAccessPlans").onclick=()=>showPage("plans");
 if($("dashboardPaymentHistory")) $("dashboardPaymentHistory").onclick=()=>showPage("payments");
 if($("dashboardManagedTrading")) $("dashboardManagedTrading").onclick=()=>showPage("managed");
+if($("dashboardSMCHistory")) $("dashboardSMCHistory").onclick=()=>showPage("smcHistory");
 async function refreshCTraderStatus(){
  try{
   const d=await api("/api/ctrader/status",{timeoutMs:10000});
@@ -1418,7 +1450,10 @@ async function loadAll(){
      renderStatus(); renderSignals(); renderStopManagement();
    }).catch(()=>{});
 
-  api("/api/history",{timeoutMs:12000}).then(d=>{state.history=d.history||[];renderHistory();}).catch(()=>{});
+  Promise.all([api("/api/history",{timeoutMs:12000}),api("/api/smc-history",{timeoutMs:12000})]).then(([d,smc])=>{state.history=d.history||[];state.smcHistory=smc.history||[];renderHistory();renderSMCHistory();}).catch(()=>{
+   api("/api/history",{timeoutMs:12000}).then(d=>{state.history=d.history||[];renderHistory();}).catch(()=>{});
+   api("/api/smc-history",{timeoutMs:12000}).then(d=>{state.smcHistory=d.history||[];renderSMCHistory();}).catch(()=>{});
+  });
   api("/api/plans",{timeoutMs:8000}).then(d=>{if(d?.plans){state.plans=d.plans;renderPlans();renderAuthPlans(d.plans);}}).catch(()=>{});
   api("/api/payments/history",{timeoutMs:12000}).then(d=>{state.payments=d.payments||[];renderPayments();}).catch(()=>{});
  }catch(e){
@@ -1442,9 +1477,10 @@ async function refreshDisplayedSignals(){
  try{
   // Signal display is refreshed independently so a payment/profile/API hiccup
   // cannot prevent a newly available signal from reaching the page.
-  const [signalFeed, historyFeed, statusFeed, accessFeed]=await Promise.all([
+  const [signalFeed, historyFeed, smcHistoryFeed, statusFeed, accessFeed]=await Promise.all([
    api("/api/signals"),
    api("/api/history"),
+   api("/api/smc-history"),
    api("/api/status"),
    api("/api/access")
   ]);
@@ -1452,6 +1488,7 @@ async function refreshDisplayedSignals(){
   state.signalMode="live";
   state.signalDelayMinutes=0;
   state.history=historyFeed.history||[];
+  state.smcHistory=smcHistoryFeed.history||[];
   state.status=statusFeed;
   state.access=accessFeed;
   setTimerDeadlines(statusFeed);
@@ -1461,6 +1498,7 @@ async function refreshDisplayedSignals(){
   renderManagedTrading();
   renderStopManagement();
   renderHistory();
+  renderSMCHistory();
 
   const stamp=$("signalsLastUpdated");
   if(stamp){

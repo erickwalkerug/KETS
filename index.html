@@ -64,7 +64,7 @@
 <div id="app" class="hidden">
 <header class="topbar">
   <div class="brand"><div><strong>KETS</strong><span>Market Signal Intelligence</span></div></div>
-  <div class="header-actions"><span class="header-status"><i></i><span id="engineStatus">Connecting...</span></span><div class="page-nav" aria-label="KETS pages"><button class="ghost-btn page-nav-btn" id="liveMarketsBtn">Live Markets</button><button class="ghost-btn page-nav-btn" id="accessPlansBtn">Access Plans</button><button class="ghost-btn page-nav-btn" id="paymentHistoryBtn">Payment History</button><button class="ghost-btn page-nav-btn" id="stopLossBtn">Stop Loss</button><button class="ghost-btn page-nav-btn" id="bullBearHistoryBtn">Bullish / Bearish History</button><button class="ghost-btn page-nav-btn" id="managedTradingBtn">G&B Tracking System</button><button class="ghost-btn page-nav-btn" id="autoTraderBtn">🤖 Auto Trader</button></div><button class="profile-mini" id="profileBtn"><span id="miniName">Profile</span></button></div>
+  <div class="header-actions"><span class="header-status"><i></i><span id="engineStatus">Connecting...</span></span><div class="page-nav" aria-label="KETS pages"><button class="ghost-btn page-nav-btn" id="liveMarketsBtn">Live Markets</button><button class="ghost-btn page-nav-btn" id="accessPlansBtn">Access Plans</button><button class="ghost-btn page-nav-btn" id="paymentHistoryBtn">Payment History</button><button class="ghost-btn page-nav-btn" id="stopLossBtn">Stop Loss</button><button class="ghost-btn page-nav-btn" id="bullBearHistoryBtn">Bullish / Bearish History</button><button class="ghost-btn page-nav-btn" id="managedTradingBtn">G&B Tracking System</button><button class="ghost-btn page-nav-btn" id="autoTraderBtn">🤖 Auto Trader</button><button class="ghost-btn page-nav-btn" id="smcHistoryBtn">SMC History</button></div><button class="profile-mini" id="profileBtn"><span id="miniName">Profile</span></button></div>
 </header>
 
 <main>
@@ -101,6 +101,9 @@
 
 <section class="section-head"><div><span class="eyebrow">SIGNALS</span><h2>Signal history</h2></div><span class="muted">7 days · live updates</span></section>
 <section class="history-card" id="historyList"><div class="empty">Loading...</div></section>
+
+<section class="section-head"><div><span class="eyebrow">SMC AUTOTRADE SOURCE</span><h2>SMC Signal History</h2></div><span class="muted">Dedicated SMC-only feed · used by Auto-Trader</span></section>
+<section class="history-card" id="smcHistoryList"><div class="empty">Loading SMC history...</div></section>
 
 <section class="support-card"><div><span class="eyebrow">SUPPORT</span><h2>Need help?</h2><p>Contact the KETS support team for account or payment assistance.</p></div><a class="primary-btn" href="mailto:kets2026ug@gmail.com">kets2026ug@gmail.com</a></section>
 
@@ -228,6 +231,15 @@
   <section class="history-card" id="managedTradeHistory"><div class="empty">No managed trades recorded yet.</div></section>
 </section>
 
+
+<section id="smcHistoryPage" class="history-page hidden">
+  <div class="history-page-head">
+    <div><span class="eyebrow">SMC AUTOTRADE SOURCE</span><h2>SMC Signal History</h2><p class="muted">Independent SMC signals only · this is the signal source used by SMC Auto-Trader.</p></div>
+    <button class="ghost-btn page-back-btn" data-page="dashboard">← Dashboard</button>
+  </div>
+  <div class="live-page-status"><span class="live-dot">SMC LIVE</span><small id="smcHistoryLastUpdated">Waiting for SMC signal feed…</small></div>
+  <section class="history-card" id="smcHistoryPageList"><div class="empty">Loading SMC history…</div></section>
+</section>
 
 <section id="autoTraderPage" class="history-page hidden">
   <div class="history-page-head">
