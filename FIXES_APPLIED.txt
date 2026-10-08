@@ -59,3 +59,14 @@ DEPLOYMENT FIX — 2026-09-07
 - Fixed Require strong reversal only: toggle now saves immediately and auto-trading skips every signal that is not explicitly classified as STRONG REVERSAL ENTRY.
 
 - cTrader price precision fix: broker-facing Stop Loss and Take Profit prices are rounded to the selected symbol's actual digits before market orders are sent. This prevents errors such as 'Order price = 4361.47941 has more digits than symbol allows. Allowed 2 digits'. Existing KETS signal/strategy logic is unchanged.
+
+2026-10-08 — SMC AUTO-TRADER EXECUTION RECOVERY
+- Auto-Trader keeps the direct SMC live feed as the first execution source.
+- Added a fresh persisted-SMC recovery path when the live runtime SMC slot is
+  unavailable after restart/missed ingress.
+- Recovery requires the complete canonical independent-SMC identity and the
+  same 5-minute freshness + hard SL/TP validation.
+- Ordinary BUY/SELL signals remain excluded from SMC execution.
+- No KETS-side BOS/CHOCH/order-block/candle gate was added.
+- Existing cTrader execution, reversal, lot-size and broker TP/SL protection
+  rules remain unchanged.

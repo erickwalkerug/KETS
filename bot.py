@@ -2320,17 +2320,14 @@ def _latest_selected_strategy_signal(requested_symbol, selected_strategies):
         ],
     }
 
-def _latest_smc_live_signal(requested_symbol=None):
-    """Return the newest canonical SMC signal from the trading bot.
+def _validate_fresh_smc_signal(sig, requested_symbol=None, max_age_seconds=SMC_LIVE_TTL_SECONDS):
+    """Validate a canonical SMC signal without recalculating its strategy.
 
-    SMC structure is already fully evaluated by the trading bot. KETS does not
-    fetch candles, recalculate BOS/CHoCH/order blocks, or apply a second SMC
-    execution check. KETS only validates source identity, symbol, freshness and
-    the hard risk levels required for broker-side TP/SL protection.
+    The trading bot remains authoritative for SMC structure. KETS only checks
+    that the signal is explicitly SMC, belongs to the requested symbol, is
+    fresh, and contains a broker-safe BUY/SELL + SL/TP package.
     """
-    with SMC_LIVE_LOCK:
-        sig = dict(SMC_LIVE_SIGNAL) if SMC_LIVE_SIGNAL else None
-    if not sig:
+    if not isinstance(sig, dict) or not _is_smc_history_signal(sig):
         return None
     if not _signal_matches_symbol(sig, requested_symbol):
         return None
@@ -2343,7 +2340,7 @@ def _latest_smc_live_signal(requested_symbol=None):
         age = (get_eat_time() - sig_dt).total_seconds()
     except Exception:
         return None
-    if age < 0 or age > SMC_LIVE_TTL_SECONDS:
+    if age < 0 or age > max_age_seconds:
         return None
 
     direction = str(sig.get("direction") or sig.get("signal") or "").upper()
@@ -2353,26 +2350,68 @@ def _latest_smc_live_signal(requested_symbol=None):
     if direction not in {"BUY", "SELL"} or not entry or not sl or not tp:
         return None
 
-    # KETS keeps the hard broker-protection validation. It does not decide
-    # whether the SMC setup itself is valid; that decision belongs to the bot.
+    # Hard broker-protection validation only. SMC validity itself belongs to
+    # the independent trading bot and is never reconstructed in KETS.
     if direction == "BUY" and (sl >= entry or tp <= entry):
         return None
     if direction == "SELL" and (sl <= entry or tp >= entry):
         return None
-
     return sig
+
+def _latest_smc_live_signal(requested_symbol=None):
+    """Return the newest canonical SMC signal from the live runtime slot."""
+    with SMC_LIVE_LOCK:
+        sig = dict(SMC_LIVE_SIGNAL) if SMC_LIVE_SIGNAL else None
+    return _validate_fresh_smc_signal(sig, requested_symbol)
+
+def _latest_smc_history_signal(requested_symbol=None):
+    """Recover a fresh canonical SMC signal after runtime state is lost.
+
+    Signal History is NOT a second SMC strategy gate. It is only a durable
+    recovery copy of the exact signal that already passed the explicit SMC
+    ingress. This prevents a worker restart/missed runtime slot from turning a
+    valid SMC signal into a no-trade condition.
+    """
+    history = _smc_history_items()
+    if not history:
+        return None
+
+    def stamp(sig):
+        raw = sig.get("timestamp") or sig.get("timestamp_utc") or sig.get("created_at")
+        try:
+            dt = datetime.datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=EAT)
+            return dt.timestamp()
+        except Exception:
+            return 0.0
+
+    for sig in sorted(history, key=stamp, reverse=True):
+        valid = _validate_fresh_smc_signal(sig, requested_symbol)
+        if valid:
+            return valid
+    return None
 
 def _latest_autotrader_signal(requested_symbol, kets_strategy_enabled=True, selected_strategies=None):
     """Select the Auto-Trader entry source.
 
-    This build is deliberately SMC-only. Auto-Trader consumes the short-lived
-    direct SMC ingress, not Signal History. Signal History remains display/audit
-    data only and can never create a new automatic cTrader entry.
+    SMC is an independent source. Prefer the direct live SMC feed for lowest
+    latency, then recover the same explicitly tagged signal from persistent
+    Signal History if the runtime slot was lost. Ordinary BUY/SELL history can
+    never satisfy either path.
     """
     selected_set={str(x).strip().lower() for x in (selected_strategies or [])}
     if "smc" not in selected_set:
         return None
-    return _latest_smc_live_signal(requested_symbol)
+
+    live = _latest_smc_live_signal(requested_symbol)
+    if live:
+        return live
+
+    recovered = _latest_smc_history_signal(requested_symbol)
+    if recovered:
+        app.logger.info("KETS Auto-Trader: recovered fresh SMC signal %s from persistent history after live-slot miss", _signal_id(recovered))
+    return recovered
 
 
 def _ctrader_autotrade_once():

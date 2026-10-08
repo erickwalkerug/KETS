@@ -1,0 +1,48 @@
+KETS SMC AUTO-TRADER EXECUTION RECOVERY FIX — 2026-10-08
+
+Source build:
+- KETS-main (36)
+
+Problem addressed:
+- The Auto-Trader entry selector was reading only the short-lived in-memory
+  SMC_LIVE_SIGNAL slot.
+- If KETS restarted, the worker missed the live POST, or the runtime slot was
+  otherwise unavailable, a valid SMC signal could still be present in the
+  persisted Signal History while Auto-Trader saw no executable signal.
+- This caused the dashboard/history to show an SMC signal while cTrader had
+  zero automatic trades.
+
+Fix:
+- Auto-Trader still checks the direct live SMC signal first for lowest latency.
+- If the live SMC slot is unavailable, Auto-Trader now recovers the newest
+  fresh SMC signal from persisted Signal History.
+- The recovery signal must carry the complete canonical independent-SMC
+  identity:
+    is_smc_signal=true
+    source_type=independent_smc
+    signal_source=smc
+    strategy_name=smc
+- Recovery is limited to the same 5-minute freshness window as the direct
+  SMC feed.
+- BUY/SELL direction, entry, Stop Loss and Take Profit remain mandatory.
+- BUY/SELL SL/TP direction is still validated before cTrader execution.
+
+Important strategy rule:
+- KETS does NOT recalculate SMC.
+- KETS does NOT add a second BOS, CHOCH, liquidity-sweep, displacement or
+  order-block execution gate.
+- The trading bot remains responsible for deciding whether the SMC setup is
+  valid.
+- Ordinary KETS BUY/SELL signals cannot become SMC merely because they appear
+  in Signal History or contain SMC-like text.
+
+Existing execution rules preserved:
+- cTrader account selection and authorization.
+- Existing Auto-Trader direction/reversal confirmation rules.
+- Existing lot-size and maximum-open-trade controls.
+- Existing break-even/trailing/position-management controls.
+- Exact source SMC Stop Loss and Take Profit remain broker-side protections.
+- cTrader protection verification remains required after automatic execution.
+
+Validation:
+- bot.py passes Python syntax compilation.
