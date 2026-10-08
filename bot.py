@@ -1883,10 +1883,13 @@ def _ctrader_execute_order(row, order, auto_label=False):
 
             sl = _broker_price(order.get("stop_loss"))
             tp = _broker_price(order.get("take_profit"))
-            if sl is not None:
-                payload["stopLoss"] = sl
-            if tp is not None:
-                payload["takeProfit"] = tp
+
+            # IMPORTANT: cTrader Open API does not support absolute stopLoss /
+            # takeProfit fields on a MARKET order. Send the market entry first,
+            # then _verify_and_enforce_broker_protection() immediately applies
+            # the exact SMC SL/TP to the opened position using the position
+            # protection API. This keeps TP/SL broker-side without causing the
+            # entry itself to be rejected.
 
             response = await send(
                 CTRADER_PAYLOAD["NEW_ORDER_REQ"],

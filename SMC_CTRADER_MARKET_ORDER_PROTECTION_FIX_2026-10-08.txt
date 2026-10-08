@@ -1,0 +1,21 @@
+KETS SMC cTRADER MARKET-ORDER PROTECTION FIX — 2026-10-08
+
+Problem found
+- The automatic SMC execution path was putting absolute stopLoss and takeProfit fields directly into the initial cTrader MARKET order.
+- cTrader Open API does not support absolute stopLoss/takeProfit fields on MARKET orders.
+- This could cause the market entry request itself to be rejected, leaving 0 open trades even though the SMC signal had arrived.
+
+Fix
+- The initial cTrader MARKET order now sends only the market entry.
+- KETS keeps the exact SMC Stop Loss and Take Profit values from the source signal.
+- Immediately after the market position is opened, KETS applies those exact SL/TP values to the position through cTrader's position-protection operation.
+- KETS then reads the actual cTrader position and verifies both SL and TP.
+- If broker-side protection cannot be confirmed for an automatic trade, KETS attempts to close the automatic position rather than intentionally leaving it unprotected.
+
+Rules preserved
+- SMC remains an independent signal source.
+- SMC structure is evaluated by the trading bot, not recalculated by KETS.
+- No second candle/BOS/order-block execution gate was added.
+- SMC source identity remains explicit; ordinary BUY/SELL signals are not treated as SMC.
+- Existing Auto-Trader direction/reversal controls remain unchanged.
+- cTrader remains the authority for the actual broker-side SL/TP.
