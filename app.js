@@ -100,7 +100,7 @@ function tickTimers(){
  }
  const nextBroadcastSeconds=Math.max(0,Math.ceil((state.nextBroadcastDeadlineMs-now)/1000));
  if($("signalWindow")) $("signalWindow").textContent=countdown(signalSeconds);
- if($("windowLabel")){ const mode=w.mode||((w.active)?"ACTIVE":"OUTSIDE_HOURS"); $("windowLabel").textContent=mode==="ACTIVE"?"Time left before trading stops":(mode==="IDLE"?"Trading resumes 15:00 EAT":"Trading resumes 06:00 EAT"); }
+ if($("windowLabel")){ const mode=w.mode||((w.active)?"ACTIVE":"OUTSIDE_HOURS"); $("windowLabel").textContent=mode==="ACTIVE"?"Time left before trading stops":(mode==="IDLE"?"Trading resumes 06:00 EAT":"Trading resumes 06:00 EAT"); }
  if($("nextBroadcast")) $("nextBroadcast").textContent=countdown(nextBroadcastSeconds);
  const expiryEl=$("paymentExpiryTimer");
  if(expiryEl && state.access?.expires){
@@ -212,7 +212,7 @@ function tickWelcomePreview(){
  const seconds=Math.max(0,Math.ceil((state.welcomeWindowDeadlineMs-now)/1000));
  const active=state.welcomeWindowActive===true;
  timeEl.textContent=countdown(seconds);
- labelEl.textContent=state.welcomeWindowMode==="ACTIVE"?"Time left before trading stops":(state.welcomeWindowMode==="IDLE"?"Trading resumes 15:00 EAT":"Trading resumes 06:00 EAT");
+ labelEl.textContent=state.welcomeWindowMode==="ACTIVE"?"Time left before trading stops":(state.welcomeWindowMode==="IDLE"?"Trading resumes 06:00 EAT":"Trading resumes 06:00 EAT");
  if(state.welcomeRefreshDeadlineMs<=Date.now()){
    state.welcomeRefreshDeadlineMs=Date.now()+10000;
    loadWelcomePreview();
@@ -584,7 +584,7 @@ function renderHistory(){
  const el=$("historyList");
  const strongEl=$("strongReversalHistory");
  if(!state.history.length){
-  el.innerHTML=`<div class="empty">No engine scans recorded in the last 7 days.</div>`;
+  el.innerHTML=`<div class="empty">No engine scans recorded in the last 2 days.</div>`;
   if(strongEl) strongEl.innerHTML=`<div class="empty">No STRONG REVERSAL ENTRY history yet.</div>`;
   return;
  }
@@ -631,7 +631,7 @@ function renderHistory(){
    <div class="stability-metric ${stabilityClass}"><b>${stabilityLabel}</b><small>${riskLabel}</small></div>
  </div>
  <div class="bull-bear-table-head"><span>History</span><span>Bullish</span><span>Bearish</span><span>Difference</span><span>Stability</span><span>Risk</span></div>
- <div class="bull-bear-table-row"><span>Last 7 days · Strong Reversal Entry</span><span class="buy">${bullish}</span><span class="sell">${bearish}</span><span>${stabilityDifference}</span><span class="${stabilityClass}">${stabilityLabel}</span><span class="${stabilityClass}">${riskLabel}</span></div>`;
+ <div class="bull-bear-table-row"><span>Last 2 days · Strong Reversal Entry</span><span class="buy">${bullish}</span><span class="sell">${bearish}</span><span>${stabilityDifference}</span><span class="${stabilityClass}">${stabilityLabel}</span><span class="${stabilityClass}">${riskLabel}</span></div>`;
  const rows=reversals.map(s=>{
    const dir=String(s.direction||"").toUpperCase();
    const bullishDir=dir==="BUY";
@@ -706,7 +706,7 @@ function renderOrderFlowHistory(){
   return `<div class="history-row smc-history-row"><div><div class="history-market">${esc(item.asset||item.symbol||"MARKET")} <span class="history-source-badge">OHLC PROXY</span></div><div class="history-meta">${esc(when)} · ${esc(item.candle_count_used??0)} candles</div></div><div class="history-dir ${cls}">${esc(dir)}</div><div class="history-price">Bullish ${esc(item.bullish_pressure??"--")}% · Bearish ${esc(item.bearish_pressure??"--")}% · Price ${Number.isFinite(price)?signalMoney(price):"--"}</div><div class="history-meta">${esc(item.data_quality||"CANDLE_PROXY_ESTIMATE")} · ${esc(item.disclaimer||"Candle-based estimate only; not true order flow.")}</div></div>`;
  }).join("");
  el.innerHTML=rows||`<div class="empty">No order-flow proxy records received yet. The trading bot must be running and connected to this KETS website.</div>`;
- if(updated)updated.textContent=`${state.orderFlowHistory.length} proxy record${state.orderFlowHistory.length===1?"":"s"} · 7-day history`;
+ if(updated)updated.textContent=`${state.orderFlowHistory.length} proxy record${state.orderFlowHistory.length===1?"":"s"} · 2-day history`;
 }
 async function refreshOrderFlowHistory(){
  try{const d=await api("/api/order-flow?limit=200",{timeoutMs:10000});state.orderFlowHistory=d.history||[];renderOrderFlowHistory();}catch(e){const el=$("orderFlowHistoryList");if(el&&!state.orderFlowHistory.length)el.innerHTML=`<div class="empty">Order-flow history unavailable: ${esc(e.message)}</div>`;}
@@ -860,6 +860,7 @@ if($("autoTraderBtn")) $("autoTraderBtn").onclick=()=>showPage("autoTrader");
 if($("smcHistoryBtn")) $("smcHistoryBtn").onclick=()=>showPage("smcHistory");
 if($("orderFlowBtn")) $("orderFlowBtn").onclick=()=>showPage("orderFlow");
 if($("dashboardLiveMarkets")) $("dashboardLiveMarkets").onclick=()=>showPage("live");
+ if($("dashboardOrderFlow")) $("dashboardOrderFlow").onclick=()=>showPage("orderFlow");
 if($("dashboardStopLoss")) $("dashboardStopLoss").onclick=()=>showPage("stop");
 if($("dashboardAccessPlans")) $("dashboardAccessPlans").onclick=()=>showPage("plans");
 if($("dashboardPaymentHistory")) $("dashboardPaymentHistory").onclick=()=>showPage("payments");

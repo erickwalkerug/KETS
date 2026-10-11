@@ -1437,8 +1437,10 @@ def _current_signal(requested_symbol=None):
                 if signals.get(key): return signals[key]
         else:
             return signals.get(requested)
-    market="GOLD" if get_eat_time().weekday()<5 else "BTC"
-    return signals.get(market) or signals.get("XAUUSD" if market=="GOLD" else "BTCUSD")
+    # Weekends are fully offline: never fall back to stale BTC history.
+    if get_eat_time().weekday() >= 5:
+        return None
+    return signals.get("GOLD") or signals.get("XAUUSD") or signals.get("XAU")
 
 def _signal_is_low_risk(sig, min_quality=40):
     values=[]
@@ -3221,13 +3223,15 @@ def api_public_welcome():
     })
 
 
-ORDER_FLOW_HISTORY_DAYS = 7
+ORDER_FLOW_HISTORY_DAYS = 2
 ORDER_FLOW_AUTOTRADE_MAX_AGE_SECONDS = 180
 
 
 def _order_flow_items(asset=None, limit=200):
     """Read persisted candle-pressure proxy records, newest first."""
-    cutoff = get_eat_time() - datetime.timedelta(days=ORDER_FLOW_HISTORY_DAYS)
+    # Compare timestamps in one timezone. Stored timestamps are UTC; a local
+    # EAT cutoff compared as text can incorrectly omit records around midnight.
+    cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=ORDER_FLOW_HISTORY_DAYS)
     params = [cutoff.isoformat()]
     sql = "SELECT payload FROM order_flow_history WHERE timestamp >= ?"
     if asset:

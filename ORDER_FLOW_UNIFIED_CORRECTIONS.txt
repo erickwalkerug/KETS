@@ -1,0 +1,17 @@
+KETS UNIFIED SMC + ORDER-FLOW CORRECTIONS
+
+Preserved existing KETS Main 37 configuration and rules, including:
+- SIGNAL_HISTORY_DAYS = 2 (signal history remains separate from order-flow history)
+- Monday-Friday only; GOLD (XAU/USD) only
+- Trading window 06:00-18:00 EAT
+- Saturday-Sunday fully offline
+- Existing SMC entry and Auto-Trader risk/execution rules, with the added order-flow direction confirmation gate when SMC is selected
+
+Corrections in this build:
+- Order-flow history is retained for 2 days, separately from signal history.
+- Order-flow history retrieval uses UTC cutoff timestamps consistently with stored UTC timestamps.
+- Default current-signal lookup returns no signal on weekends rather than falling back to stale BTC history.
+- Removed stale dashboard text referring to a 15:00 EAT restart; the configured continuous session is 06:00-18:00 EAT.
+
+Order-flow data disclaimer:
+The trading bot independently estimates directional pressure from OHLC candles. This is a candle-based proxy, not actual bid/ask trade flow or verified absorption. A matching fresh BUY/SELL proxy is required as an additional confirmation when SMC is selected. Successful live execution still depends on broker connection, account configuration, risk checks, and cTrader's order response; deployment/live trading has not been tested by this archive build.
