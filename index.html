@@ -64,7 +64,7 @@
 <div id="app" class="hidden">
 <header class="topbar">
   <div class="brand"><div><strong>KETS</strong><span>Market Signal Intelligence</span></div></div>
-  <div class="header-actions"><span class="header-status"><i></i><span id="engineStatus">Connecting...</span></span><div class="page-nav" aria-label="KETS pages"><button class="ghost-btn page-nav-btn" id="liveMarketsBtn">Live Markets</button><button class="ghost-btn page-nav-btn" id="accessPlansBtn">Access Plans</button><button class="ghost-btn page-nav-btn" id="paymentHistoryBtn">Payment History</button><button class="ghost-btn page-nav-btn" id="stopLossBtn">Stop Loss</button><button class="ghost-btn page-nav-btn" id="bullBearHistoryBtn">Bullish / Bearish History</button><button class="ghost-btn page-nav-btn" id="managedTradingBtn">G&B Tracking System</button><button class="ghost-btn page-nav-btn" id="autoTraderBtn">🤖 Auto Trader</button><button class="ghost-btn page-nav-btn" id="smcHistoryBtn">SMC History</button></div><button class="profile-mini" id="profileBtn"><span id="miniName">Profile</span></button></div>
+  <div class="header-actions"><span class="header-status"><i></i><span id="engineStatus">Connecting...</span></span><div class="page-nav" aria-label="KETS pages"><button class="ghost-btn page-nav-btn" id="liveMarketsBtn">Live Markets</button><button class="ghost-btn page-nav-btn" id="accessPlansBtn">Access Plans</button><button class="ghost-btn page-nav-btn" id="paymentHistoryBtn">Payment History</button><button class="ghost-btn page-nav-btn" id="stopLossBtn">Stop Loss</button><button class="ghost-btn page-nav-btn" id="bullBearHistoryBtn">Bullish / Bearish History</button><button class="ghost-btn page-nav-btn" id="managedTradingBtn">G&B Tracking System</button><button class="ghost-btn page-nav-btn" id="autoTraderBtn">🤖 Auto Trader</button><button class="ghost-btn page-nav-btn" id="smcHistoryBtn">SMC History</button><button class="ghost-btn page-nav-btn" id="orderFlowBtn">Order Flow</button></div><button class="profile-mini" id="profileBtn"><span id="miniName">Profile</span></button></div>
 </header>
 
 <main>
@@ -239,6 +239,15 @@
   </div>
   <div class="live-page-status"><span class="live-dot">SMC LIVE</span><small id="smcHistoryLastUpdated">Waiting for SMC signal feed…</small></div>
   <section class="history-card" id="smcHistoryPageList"><div class="empty">Loading SMC history…</div></section>
+</section>
+
+<section id="orderFlowPage" class="history-page hidden">
+  <div class="history-page-head">
+    <div><span class="eyebrow">CANDLE-BASED PRESSURE PROXY</span><h2>Order Flow History</h2><p class="muted">Directional pressure is estimated from existing OHLC candles. This is not actual bid/ask volume, aggressor flow, or verified absorption.</p></div>
+    <button class="ghost-btn page-back-btn" data-page="dashboard">← Dashboard</button>
+  </div>
+  <div class="live-page-status"><span class="live-dot">PROXY FEED</span><small id="orderFlowLastUpdated">Waiting for order-flow proxy data…</small></div>
+  <section class="history-card" id="orderFlowHistoryList"><div class="empty">Loading order-flow history…</div></section>
 </section>
 
 <section id="autoTraderPage" class="history-page hidden">

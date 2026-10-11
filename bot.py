@@ -442,6 +442,13 @@ def init_db():
     );
     CREATE INDEX IF NOT EXISTS idx_managed_orders_connector_status
       ON managed_orders(connector_id, status);
+    CREATE TABLE IF NOT EXISTS order_flow_history (
+        id TEXT PRIMARY KEY, asset TEXT NOT NULL, symbol TEXT,
+        direction TEXT NOT NULL, timestamp TEXT NOT NULL, payload TEXT NOT NULL,
+        created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_order_flow_history_asset_time
+      ON order_flow_history(asset, timestamp);
     CREATE TABLE IF NOT EXISTS ctrader_connections (
         id TEXT PRIMARY KEY, user_id TEXT NOT NULL UNIQUE, broker TEXT,
         account_ids_json TEXT DEFAULT '[]', selected_account_id TEXT,
@@ -2483,6 +2490,16 @@ def _ctrader_autotrade_once():
             sig=_latest_autotrader_signal(auto_symbol, kets_strategy_enabled, selected_strategies)
             if not sig:
                 continue
+            # Unified SMC + candle-pressure proxy gate. This is an additional
+            # confirmation only for the explicitly selected SMC source; the
+            # original SMC signal, SL/TP, reversal confirmation and risk checks
+            # remain unchanged. Never call this true bid/ask order flow.
+            if "smc" in {str(x).strip().lower() for x in (selected_strategies or [])}:
+                flow = _latest_order_flow_for_asset(auto_symbol)
+                smc_direction = str(sig.get("direction") or sig.get("signal") or "").upper()
+                flow_direction = str((flow or {}).get("direction") or "").upper()
+                if not flow or flow_direction not in {"BUY", "SELL"} or flow_direction != smc_direction:
+                    continue
             sid=_signal_id(sig)
             direction=str(sig.get("direction") or sig.get("signal") or "").upper()
 
@@ -3202,6 +3219,122 @@ def api_public_welcome():
         "trading_hours_eat": "06:00-18:00",
         "history": history[-30:],
     })
+
+
+ORDER_FLOW_HISTORY_DAYS = 7
+ORDER_FLOW_AUTOTRADE_MAX_AGE_SECONDS = 180
+
+
+def _order_flow_items(asset=None, limit=200):
+    """Read persisted candle-pressure proxy records, newest first."""
+    cutoff = get_eat_time() - datetime.timedelta(days=ORDER_FLOW_HISTORY_DAYS)
+    params = [cutoff.isoformat()]
+    sql = "SELECT payload FROM order_flow_history WHERE timestamp >= ?"
+    if asset:
+        sql += " AND UPPER(asset)=UPPER(?)"
+        params.append(str(asset))
+    sql += " ORDER BY timestamp DESC LIMIT ?"
+    params.append(max(1, min(int(limit or 200), 500)))
+    try:
+        with DB_LOCK:
+            conn = db_conn()
+            rows = db_execute(conn, sql, params).fetchall()
+            conn.close()
+        items = []
+        for row in rows:
+            try:
+                raw = row["payload"] if isinstance(row, dict) or hasattr(row, "keys") else row[0]
+                item = json.loads(raw)
+                if isinstance(item, dict):
+                    items.append(item)
+            except Exception:
+                continue
+        return items
+    except Exception as exc:
+        app.logger.warning("Order-flow history read failed: %s", str(exc)[:250])
+        return []
+
+
+def _latest_order_flow_for_asset(requested_symbol=None):
+    """Return the newest fresh proxy record for an asset/symbol."""
+    history = _order_flow_items(limit=500)
+    for item in history:
+        if not _signal_matches_symbol(item, requested_symbol):
+            continue
+        if str(item.get("data_type") or "").upper() != "CANDLE_BASED_PRESSURE_PROXY":
+            continue
+        try:
+            raw = item.get("timestamp_utc") or item.get("timestamp")
+            dt = datetime.datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=EAT)
+            age = (datetime.datetime.now(datetime.timezone.utc) - dt.astimezone(datetime.timezone.utc)).total_seconds()
+        except Exception:
+            continue
+        if age < 0 or age > ORDER_FLOW_AUTOTRADE_MAX_AGE_SECONDS:
+            continue
+        return item
+    return None
+
+
+@app.route("/api/order-flow", methods=["GET", "POST"])
+def api_order_flow():
+    """Receive private candle-pressure proxy scans and serve signed-in history."""
+    if request.method == "POST":
+        if not _source_request_authorized():
+            return jsonify({"error": "Order-flow receiver authentication failed."}), 401
+        body = request.get_json(silent=True)
+        if not isinstance(body, dict):
+            return jsonify({"error": "JSON order-flow payload required."}), 400
+        asset = str(body.get("asset") or "").strip().upper()
+        direction = str(body.get("direction") or "").strip().upper()
+        data_type = str(body.get("data_type") or "").strip().upper()
+        flow_id = str(body.get("id") or "").strip()
+        if not asset or direction not in {"BUY", "SELL", "WAIT"} or data_type != "CANDLE_BASED_PRESSURE_PROXY" or not flow_id:
+            return jsonify({"error": "Invalid order-flow payload; asset, id, proxy data_type and BUY/SELL/WAIT direction are required."}), 400
+        raw_ts = body.get("timestamp_utc") or body.get("timestamp")
+        try:
+            dt = datetime.datetime.fromisoformat(str(raw_ts).replace("Z", "+00:00"))
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=datetime.timezone.utc)
+            stamp = dt.astimezone(datetime.timezone.utc).isoformat()
+        except Exception:
+            return jsonify({"error": "A valid timestamp_utc is required."}), 400
+        now = datetime.datetime.now(datetime.timezone.utc)
+        if (now - dt.astimezone(datetime.timezone.utc)).total_seconds() > 600 or (dt.astimezone(datetime.timezone.utc) - now).total_seconds() > 60:
+            return jsonify({"error": "Order-flow record timestamp is stale or in the future."}), 400
+        item = dict(body)
+        item.update({"asset": asset, "direction": direction, "data_type": data_type, "timestamp_utc": stamp})
+        created = get_eat_time().isoformat()
+        payload = json.dumps(item, separators=(",", ":"), default=str)
+        try:
+            with DB_LOCK:
+                conn = db_conn()
+                if using_postgres():
+                    db_execute(conn, """INSERT INTO order_flow_history(id,asset,symbol,direction,timestamp,payload,created_at)
+                        VALUES(?,?,?,?,?,?,?) ON CONFLICT (id) DO UPDATE SET payload=EXCLUDED.payload,
+                        asset=EXCLUDED.asset,symbol=EXCLUDED.symbol,direction=EXCLUDED.direction,timestamp=EXCLUDED.timestamp""",
+                        (flow_id, asset, str(item.get("symbol") or ""), direction, stamp, payload, created))
+                else:
+                    db_execute(conn, """INSERT OR REPLACE INTO order_flow_history
+                        (id,asset,symbol,direction,timestamp,payload,created_at) VALUES(?,?,?,?,?,?,?)""",
+                        (flow_id, asset, str(item.get("symbol") or ""), direction, stamp, payload, created))
+                cutoff = (now - datetime.timedelta(days=ORDER_FLOW_HISTORY_DAYS)).isoformat()
+                db_execute(conn, "DELETE FROM order_flow_history WHERE timestamp < ?", (cutoff,))
+                conn.commit(); conn.close()
+        except Exception as exc:
+            app.logger.exception("Order-flow history persistence failed")
+            return jsonify({"error": "Could not store order-flow history."}), 503
+        return jsonify({"ok": True, "id": flow_id, "stored": True}), 201
+
+    user, error = _require_active_access()
+    if error:
+        return error
+    asset = request.args.get("asset")
+    limit = request.args.get("limit", default=200, type=int)
+    items = _order_flow_items(asset=asset, limit=max(1, min(limit, 500)))
+    return jsonify({"ok": True, "history": items, "count": len(items), "days": ORDER_FLOW_HISTORY_DAYS,
+                    "data_type": "CANDLE_BASED_PRESSURE_PROXY"})
 
 
 @app.route("/api/history", methods=["GET"])

@@ -4,7 +4,7 @@ const hashToken=freshHash.get("login")||"";
 const storedToken=sessionStorage.getItem("kets_user_token")||"";
 const initialToken=hashToken||storedToken;
 if(hashToken)sessionStorage.setItem("kets_user_token",hashToken);
-const state={token:initialToken,user:null,access:null,signals:{},history:[],smcHistory:[],payments:[],status:{},plans:{},clockOffsetMs:0,signalWindowDeadlineMs:0,nextBroadcastDeadlineMs:0,nextRefreshDeadlineMs:0,welcomeWindowDeadlineMs:0,welcomeClockOffsetMs:0,welcomeRefreshDeadlineMs:0,welcomeWindowMode:"OUTSIDE_HOURS",loading:false,refreshInProgress:false};
+const state={token:initialToken,user:null,access:null,signals:{},history:[],smcHistory:[],orderFlowHistory:[],payments:[],status:{},plans:{},clockOffsetMs:0,signalWindowDeadlineMs:0,nextBroadcastDeadlineMs:0,nextRefreshDeadlineMs:0,welcomeWindowDeadlineMs:0,welcomeClockOffsetMs:0,welcomeRefreshDeadlineMs:0,welcomeWindowMode:"OUTSIDE_HOURS",loading:false,refreshInProgress:false};
 const $=id=>document.getElementById(id);
 function headers(extra={}){return {Accept:"application/json",...(state.token?{Authorization:`Bearer ${state.token}`}:{}) ,...extra};}
 async function api(path,opts={}){
@@ -694,6 +694,24 @@ function renderSMCHistory(){
  if(updated) updated.textContent=`${state.smcHistory.length} SMC signal${state.smcHistory.length===1?"":"s"} · live feed`;
 }
 
+function renderOrderFlowHistory(){
+ const el=$("orderFlowHistoryList");
+ if(!el)return;
+ const updated=$("orderFlowLastUpdated");
+ const rows=(state.orderFlowHistory||[]).slice(0,200).map(item=>{
+  const dir=String(item.direction||"WAIT").toUpperCase();
+  const cls=dir==="BUY"?"buy":dir==="SELL"?"sell":"wait";
+  const when=Number.isFinite(Date.parse(item.timestamp_utc||item.timestamp))?new Date(item.timestamp_utc||item.timestamp).toLocaleString():(item.timestamp||"--");
+  const price=Number(item.market_price);
+  return `<div class="history-row smc-history-row"><div><div class="history-market">${esc(item.asset||item.symbol||"MARKET")} <span class="history-source-badge">OHLC PROXY</span></div><div class="history-meta">${esc(when)} · ${esc(item.candle_count_used??0)} candles</div></div><div class="history-dir ${cls}">${esc(dir)}</div><div class="history-price">Bullish ${esc(item.bullish_pressure??"--")}% · Bearish ${esc(item.bearish_pressure??"--")}% · Price ${Number.isFinite(price)?signalMoney(price):"--"}</div><div class="history-meta">${esc(item.data_quality||"CANDLE_PROXY_ESTIMATE")} · ${esc(item.disclaimer||"Candle-based estimate only; not true order flow.")}</div></div>`;
+ }).join("");
+ el.innerHTML=rows||`<div class="empty">No order-flow proxy records received yet. The trading bot must be running and connected to this KETS website.</div>`;
+ if(updated)updated.textContent=`${state.orderFlowHistory.length} proxy record${state.orderFlowHistory.length===1?"":"s"} · 7-day history`;
+}
+async function refreshOrderFlowHistory(){
+ try{const d=await api("/api/order-flow?limit=200",{timeoutMs:10000});state.orderFlowHistory=d.history||[];renderOrderFlowHistory();}catch(e){const el=$("orderFlowHistoryList");if(el&&!state.orderFlowHistory.length)el.innerHTML=`<div class="empty">Order-flow history unavailable: ${esc(e.message)}</div>`;}
+}
+
 function renderPayments(){
  const el=$("paymentHistory");if(!state.payments.length){el.innerHTML=`<div class="empty">No payments yet.</div>`;return;}
  el.innerHTML=state.payments.map(p=>`<div class="history-row"><div><div class="history-market">${esc(state.plans[p.plan]?.name||p.plan)}</div><div class="history-meta">${esc(new Date(p.created_at).toLocaleString())} · ${esc(p.network||"Pesapal")}</div></div><div class="history-dir ${p.status==="COMPLETED"?"buy":"wait"}">${esc(p.status)}</div><div class="history-price">${money(p.amount,p.currency||planCurrency())}</div></div>`).join("");
@@ -798,7 +816,7 @@ function renderManagedTrading(){
  el.innerHTML=`<div class="managed-trade-head"><div><span class="eyebrow">${esc(market)}</span><h3>${direction==='BUY'?'🟢 BUY / LONG':'🔴 SELL / SHORT'}</h3></div><span class="managed-quality">Signal strength ${esc(score)}%</span></div><div class="managed-level-grid"><div><span>ENTRY</span><b>${signalMoney(price)}</b></div><div><span>TAKE PROFIT</span><b>${signalMoney(tp)}</b></div><div><span>STOP LOSS</span><b>${signalMoney(sl)}</b></div><div><span>STATUS</span><b>READY</b></div></div><p class="managed-execution-note"><strong>${esc(targetText)}</strong><br>This is the current KETS manual-trading plan. Use these levels only when the status shows READY. Automatic trading uses its separate Signal History flow.</p>`;
 }
 
-const PAGE_IDS={dashboard:"dashboardHome",live:"liveMarketsPage",plans:"accessPlansPage",payments:"paymentHistoryPage",stop:"stopLossPage",history:"bullBearHistoryPage",managed:"managedTradingPage",autoTrader:"autoTraderPage",smcHistory:"smcHistoryPage"};
+const PAGE_IDS={dashboard:"dashboardHome",live:"liveMarketsPage",plans:"accessPlansPage",payments:"paymentHistoryPage",stop:"stopLossPage",history:"bullBearHistoryPage",managed:"managedTradingPage",autoTrader:"autoTraderPage",smcHistory:"smcHistoryPage",orderFlow:"orderFlowPage"};
 function showPage(name,updateHash=true){
  Object.values(PAGE_IDS).forEach(id=>$(id)?.classList.add("hidden"));
  const target=$(PAGE_IDS[name]||PAGE_IDS.dashboard);
@@ -807,8 +825,9 @@ function showPage(name,updateHash=true){
  if(name==="stop")renderStopManagement();
  if(name==="managed"){renderManagedTrading();refreshCTraderStatus();}
  if(name==="smcHistory"){renderSMCHistory();}
+ if(name==="orderFlow"){refreshOrderFlowHistory();}
  if(updateHash){
-   const hash={live:"#live-markets",plans:"#access-plans",payments:"#payment-history",stop:"#stop-loss-management",history:"#bullish-bearish-history",managed:"#managed-trading",autoTrader:"#auto-trader",smcHistory:"#smc-history",dashboard:""}[name]||"";
+   const hash={live:"#live-markets",plans:"#access-plans",payments:"#payment-history",stop:"#stop-loss-management",history:"#bullish-bearish-history",managed:"#managed-trading",autoTrader:"#auto-trader",smcHistory:"#smc-history",orderFlow:"#order-flow",dashboard:""}[name]||"";
    try{history.replaceState({},document.title,location.pathname+location.search+hash);}catch(e){}
  }
  window.scrollTo({top:0,behavior:"smooth"});
@@ -825,6 +844,7 @@ function handleHistoryRoute(){
  else if(h==="#managed-trading")showPage("managed",false);
  else if(h==="#auto-trader")showPage("autoTrader",false);
  else if(h==="#smc-history")showPage("smcHistory",false);
+ else if(h==="#order-flow")showPage("orderFlow",false);
  else showPage("dashboard",false);
 }
 
@@ -838,6 +858,7 @@ if($("bullBearHistoryBtn")) $("bullBearHistoryBtn").onclick=showBullBearHistoryP
 if($("managedTradingBtn")) $("managedTradingBtn").onclick=()=>showPage("managed");
 if($("autoTraderBtn")) $("autoTraderBtn").onclick=()=>showPage("autoTrader");
 if($("smcHistoryBtn")) $("smcHistoryBtn").onclick=()=>showPage("smcHistory");
+if($("orderFlowBtn")) $("orderFlowBtn").onclick=()=>showPage("orderFlow");
 if($("dashboardLiveMarkets")) $("dashboardLiveMarkets").onclick=()=>showPage("live");
 if($("dashboardStopLoss")) $("dashboardStopLoss").onclick=()=>showPage("stop");
 if($("dashboardAccessPlans")) $("dashboardAccessPlans").onclick=()=>showPage("plans");
@@ -1450,9 +1471,10 @@ async function loadAll(){
      renderStatus(); renderSignals(); renderStopManagement();
    }).catch(()=>{});
 
-  Promise.all([api("/api/history",{timeoutMs:12000}),api("/api/smc-history",{timeoutMs:12000})]).then(([d,smc])=>{state.history=d.history||[];state.smcHistory=smc.history||[];renderHistory();renderSMCHistory();}).catch(()=>{
+  Promise.all([api("/api/history",{timeoutMs:12000}),api("/api/smc-history",{timeoutMs:12000}),api("/api/order-flow?limit=200",{timeoutMs:12000}).catch(()=>({history:state.orderFlowHistory}))]).then(([d,smc,flow])=>{state.history=d.history||[];state.smcHistory=smc.history||[];state.orderFlowHistory=flow.history||[];renderHistory();renderSMCHistory();renderOrderFlowHistory();}).catch(()=>{
    api("/api/history",{timeoutMs:12000}).then(d=>{state.history=d.history||[];renderHistory();}).catch(()=>{});
    api("/api/smc-history",{timeoutMs:12000}).then(d=>{state.smcHistory=d.history||[];renderSMCHistory();}).catch(()=>{});
+   api("/api/order-flow?limit=200",{timeoutMs:12000}).then(d=>{state.orderFlowHistory=d.history||[];renderOrderFlowHistory();}).catch(()=>{});
   });
   api("/api/plans",{timeoutMs:8000}).then(d=>{if(d?.plans){state.plans=d.plans;renderPlans();renderAuthPlans(d.plans);}}).catch(()=>{});
   api("/api/payments/history",{timeoutMs:12000}).then(d=>{state.payments=d.payments||[];renderPayments();}).catch(()=>{});
@@ -1477,10 +1499,11 @@ async function refreshDisplayedSignals(){
  try{
   // Signal display is refreshed independently so a payment/profile/API hiccup
   // cannot prevent a newly available signal from reaching the page.
-  const [signalFeed, historyFeed, smcHistoryFeed, statusFeed, accessFeed]=await Promise.all([
+  const [signalFeed, historyFeed, smcHistoryFeed, orderFlowFeed, statusFeed, accessFeed]=await Promise.all([
    api("/api/signals"),
    api("/api/history"),
    api("/api/smc-history"),
+   api("/api/order-flow?limit=200").catch(()=>({history:state.orderFlowHistory})),
    api("/api/status"),
    api("/api/access")
   ]);
@@ -1489,6 +1512,7 @@ async function refreshDisplayedSignals(){
   state.signalDelayMinutes=0;
   state.history=historyFeed.history||[];
   state.smcHistory=smcHistoryFeed.history||[];
+  state.orderFlowHistory=orderFlowFeed.history||[];
   state.status=statusFeed;
   state.access=accessFeed;
   setTimerDeadlines(statusFeed);
@@ -1499,6 +1523,7 @@ async function refreshDisplayedSignals(){
   renderStopManagement();
   renderHistory();
   renderSMCHistory();
+  renderOrderFlowHistory();
 
   const stamp=$("signalsLastUpdated");
   if(stamp){
