@@ -694,10 +694,36 @@ function renderSMCHistory(){
  if(updated) updated.textContent=`${state.smcHistory.length} SMC signal${state.smcHistory.length===1?"":"s"} · live feed`;
 }
 
+function renderOrderFlowTrendSummary(){
+ const el=$("orderFlowTrendSummary");
+ if(!el)return;
+ const all=(state.orderFlowHistory||[]).filter(x=>Number.isFinite(Number(x.bullish_pressure))&&Number.isFinite(Number(x.bearish_pressure)));
+ const groups={};
+ all.forEach(item=>{const asset=String(item.asset||item.symbol||"MARKET").toUpperCase();(groups[asset]||(groups[asset]=[])).push(item);});
+ const cards=Object.entries(groups).map(([asset,items])=>{
+  const samples=items.slice().sort((a,b)=>Date.parse(b.timestamp_utc||b.timestamp||0)-Date.parse(a.timestamp_utc||a.timestamp||0)).slice(0,20);
+  if(samples.length<3)return "";
+  const bullish=samples.reduce((s,x)=>s+Number(x.bullish_pressure),0)/samples.length;
+  const bearish=samples.reduce((s,x)=>s+Number(x.bearish_pressure),0)/samples.length;
+  const latest=samples[0],oldest=samples[samples.length-1];
+  const lp=Number(latest.market_price),op=Number(oldest.market_price);
+  const priceChange=Number.isFinite(lp)&&Number.isFinite(op)&&op!==0?((lp-op)/op)*100:null;
+  const pressureBias=bullish>=55?"BULLISH":bearish>=55?"BEARISH":"BALANCED";
+  const priceBias=priceChange===null||Math.abs(priceChange)<0.02?"FLAT":priceChange>0?"BULLISH":"BEARISH";
+  const aligned=pressureBias!=="BALANCED"&&pressureBias===priceBias;
+  const title=aligned?`${pressureBias} TREND BIAS`:pressureBias==="BALANCED"?"NO CLEAR PRESSURE EDGE":`${pressureBias} PRESSURE · PRICE NOT CONFIRMING`;
+  const cls=aligned?(pressureBias==="BULLISH"?"buy":"sell"):"wait";
+  const changeText=priceChange===null?"Price change unavailable":`Price change across sample ${priceChange>=0?"+":""}${priceChange.toFixed(3)}%`;
+  const bWidth=Math.max(0,Math.min(100,bullish));
+  return `<article class="order-flow-trend-card"><div class="order-flow-trend-top"><div><div class="history-market">${esc(asset)} · MAJOR-TREND CHECK</div><div class="history-meta">Rolling ${samples.length} recent proxy records</div></div><strong class="history-dir ${cls}">${esc(title)}</strong></div><div class="order-flow-pressure-labels"><span class="buy-text">Bullish ${bullish.toFixed(1)}%</span><span class="sell-text">Bearish ${bearish.toFixed(1)}%</span></div><div class="order-flow-pressure-bar"><span style="width:${bWidth}%"></span></div><div class="order-flow-trend-foot"><span>${esc(changeText)}</span><span>Price: ${esc(priceBias)}</span></div><p class="order-flow-trend-note">${aligned?"Pressure and price direction agree; this is a stronger directional bias, not a guaranteed trend.":pressureBias==="BALANCED"?"Pressure is mixed. Wait for clearer pressure and price direction.":"Pressure and price disagree or price is flat. Treat the direction as unconfirmed."}</p></article>`;
+ }).filter(Boolean).join("");
+ el.innerHTML=cards||`<div class="empty">Trend bias needs at least 3 proxy records with valid pressure percentages for the same market.</div>`;
+}
 function renderOrderFlowHistory(){
  const el=$("orderFlowHistoryList");
  if(!el)return;
  const updated=$("orderFlowLastUpdated");
+ renderOrderFlowTrendSummary();
  const rows=(state.orderFlowHistory||[]).slice(0,200).map(item=>{
   const dir=String(item.direction||"WAIT").toUpperCase();
   const cls=dir==="BUY"?"buy":dir==="SELL"?"sell":"wait";

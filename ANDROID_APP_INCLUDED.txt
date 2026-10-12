@@ -1,11 +1,5 @@
-KETS Android App Included
+KETS Android App Excluded From This Website ZIP
 
-The kets-android.apk file is included in this package.
-
-Install on Android:
-1. Extract the ZIP.
-2. Open kets-android.apk on an Android phone.
-3. Allow installation from this source if Android asks.
-4. Install and open KETS.
-
-The app is the Android client for the KETS website. The website/backend must still be deployed and configured for cTrader OAuth and autotrading.
+The large kets-android.apk is intentionally not included to keep this website/source package small.
+Use the Android app file you already have separately. All other files from the supplied ZIP are retained,
+except the APK binary itself.

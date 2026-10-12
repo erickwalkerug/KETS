@@ -443,3 +443,17 @@
 }
 
 .history-source-badge{display:inline-flex;align-items:center;margin-left:6px;padding:2px 7px;border:1px solid #6d4ee5;border-radius:999px;font-size:9px;font-weight:900;letter-spacing:.7px;color:#d9d0ff;vertical-align:middle}.history-source-badge.smc{background:#6d4ee51a}
+
+/* KETS Order Flow rolling trend summary */
+.order-flow-trend-summary{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(100%,280px),1fr));gap:12px;margin:0 0 14px}
+.order-flow-trend-card{min-width:0;padding:16px;border:1px solid var(--line);border-radius:16px;background:linear-gradient(145deg,#0d1828,#091321)}
+.order-flow-trend-top{display:flex;justify-content:space-between;align-items:flex-start;gap:12px}
+.order-flow-trend-top .history-dir{max-width:55%;text-align:right;line-height:1.4}
+.order-flow-pressure-labels,.order-flow-trend-foot{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-top:14px;font-size:11px}
+.order-flow-pressure-labels{font-weight:800}
+.order-flow-pressure-bar{height:9px;display:flex;overflow:hidden;border-radius:99px;background:#ef4444;margin-top:7px}
+.order-flow-pressure-bar span{display:block;height:100%;background:#22c55e}
+.buy-text{color:var(--good)}.sell-text{color:var(--bad)}
+.order-flow-trend-foot{color:var(--muted)}
+.order-flow-trend-note{font-size:11px;line-height:1.55;color:var(--muted);margin:12px 0 0}
+@media(max-width:520px){.order-flow-trend-top{flex-direction:column}.order-flow-trend-top .history-dir{max-width:100%;text-align:left}.order-flow-trend-card{padding:13px}}

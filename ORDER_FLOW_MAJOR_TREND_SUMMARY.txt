@@ -1,0 +1,8 @@
+ORDER FLOW MAJOR-TREND SUMMARY
+
+- Added a rolling summary to the existing Order Flow History page; the page remains separate.
+- For each asset, it averages the latest 20 valid bullish/bearish proxy records (minimum 3 to display).
+- Average bullish pressure >=55% indicates bullish pressure bias; average bearish pressure >=55% indicates bearish pressure bias; otherwise pressure is balanced.
+- It compares the latest recorded price with the oldest price in that sample. The directional bias is marked stronger only when pressure and price direction agree.
+- This is a candle-based estimate, not real bid/ask volume or a guaranteed major trend/trade signal.
+- No bot trading rules, asset schedule, paid-user permissions, SMC logic, cTrader execution safeguards, or backend logic were intentionally changed.
