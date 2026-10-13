@@ -457,3 +457,27 @@
 .order-flow-trend-foot{color:var(--muted)}
 .order-flow-trend-note{font-size:11px;line-height:1.55;color:var(--muted);margin:12px 0 0}
 @media(max-width:520px){.order-flow-trend-top{flex-direction:column}.order-flow-trend-top .history-dir{max-width:100%;text-align:left}.order-flow-trend-card{padding:13px}}
+
+/* KETS Order Flow: prominent pressure ratio and price-change readout */
+.order-flow-ratio-line{display:flex;flex-direction:column;gap:5px;margin-top:12px;padding:11px 12px;border:1px solid rgba(139,92,246,.38);border-radius:11px;background:rgba(109,78,229,.09)}
+.order-flow-ratio-line span{font-size:11px;color:var(--muted);font-weight:700;text-transform:uppercase;letter-spacing:.35px}
+.order-flow-ratio-line strong{font-size:15px;line-height:1.45;color:var(--text,#f8fafc);overflow-wrap:anywhere}
+.order-flow-price-change-panel{margin-top:10px;padding:14px 12px;border:1px solid var(--line);border-radius:12px;background:rgba(148,163,184,.06)}
+.order-flow-price-change-label{font-size:11px;font-weight:900;letter-spacing:.7px;color:var(--muted)}
+.order-flow-price-change-value{font-size:24px;font-weight:900;line-height:1.25;margin:7px 0;overflow-wrap:anywhere}
+.order-flow-price-change-meaning{font-size:13px;line-height:1.45;color:var(--text,#e5e7eb)}
+.order-flow-price-bias{font-size:13px;color:var(--muted);margin-top:8px}
+.order-flow-price-bias strong{color:var(--text,#f8fafc)}
+@media(max-width:520px){.order-flow-ratio-line strong{font-size:14px}.order-flow-price-change-value{font-size:22px}}
+
+/* KETS major-trend price-change guide: shown directly beneath each major-trend summary */
+.order-flow-price-guide{margin-top:14px;padding:14px 12px;border:1px solid var(--line);border-radius:12px;background:rgba(148,163,184,.045)}
+.order-flow-price-guide h3{font-size:16px;line-height:1.3;margin:0 0 6px;color:var(--text,#f8fafc)}
+.order-flow-price-guide-intro{font-size:12px;line-height:1.45;color:var(--muted);margin-bottom:10px}
+.order-flow-price-guide-grid{display:grid;grid-template-columns:1fr;gap:7px}
+.order-flow-guide-row{display:grid;grid-template-columns:minmax(0,1fr);gap:4px;padding:10px;border:1px solid var(--line);border-radius:9px;background:rgba(15,23,42,.34)}
+.order-flow-guide-row strong{font-size:14px;color:var(--text,#f8fafc)}
+.order-flow-guide-row span{font-size:12px;line-height:1.4;color:var(--muted)}
+.order-flow-guide-row b{font-size:12px;line-height:1.4;color:var(--text,#f8fafc)}
+.order-flow-guide-warning{font-size:11px;line-height:1.5;color:var(--muted);margin:10px 0 0}
+@media(min-width:680px){.order-flow-price-guide-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
