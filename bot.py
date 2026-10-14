@@ -505,6 +505,7 @@ def init_db():
                     ("auto_cycle_start_equity", "DOUBLE PRECISION DEFAULT 0"),
                     ("auto_profit_total", "DOUBLE PRECISION DEFAULT 0"),
                     ("auto_entry_signal_id", "TEXT"),
+                    ("auto_entry_pressure_ratio", "DOUBLE PRECISION DEFAULT 0"),
                     ("balance", "DOUBLE PRECISION DEFAULT 0"),
                     ("equity", "DOUBLE PRECISION DEFAULT 0"),
                     ("free_margin", "DOUBLE PRECISION DEFAULT 0"),
@@ -2263,7 +2264,7 @@ def _queue_and_execute_ctrader(row, sig, automatic=True):
         )
     with DB_LOCK:
         conn=db_conn()
-        db_execute(conn,"UPDATE ctrader_connections SET selected_account_id=?,last_signal_id=?,auto_entry_signal_id=?,auto_direction=?,last_error=NULL,status=?,updated_at=? WHERE id=?",(selected,sid,sid,direction,"CONNECTED",_now_iso(),row["id"]))
+        db_execute(conn,"UPDATE ctrader_connections SET selected_account_id=?,last_signal_id=?,auto_entry_signal_id=?,auto_entry_pressure_ratio=?,auto_direction=?,last_error=NULL,status=?,updated_at=? WHERE id=?",(selected,sid,sid,_num(sig.get("_order_flow_ratio", sig.get("_kets_pressure_ratio", 0))),direction,"CONNECTED",_now_iso(),row["id"]))
         conn.commit(); conn.close()
     _ctrader_invalidate_snapshot(row)
     return result
@@ -2510,13 +2511,14 @@ def _ctrader_autotrade_once():
             flow = _latest_order_flow_for_asset(auto_symbol)
             flow_direction, flow_ratio, flow_reason = _order_flow_execution_decision(flow)
             previous_direction=str(row.get("auto_direction") or "").upper()
-            # A pressure ratio below 2.0 is the Auto-Trader's required exit
-            # condition, even when there is no new BUY/SELL candidate. Automatic
-            # entries do not use stop-loss or take-profit orders.
-            if previous_direction and flow and flow_ratio < 2.0:
+            # Exit as soon as the live pressure ratio drops by 0.10 or more
+            # from the ratio recorded when this automatic trade was entered.
+            # This is the only automatic exit rule; automatic orders have no SL/TP.
+            entry_pressure_ratio = _num(row.get("auto_entry_pressure_ratio"))
+            if previous_direction and flow and entry_pressure_ratio > 0 and flow_ratio <= entry_pressure_ratio - 0.10:
                 _ctrader_close_positions(row, auto_only=True)
                 with DB_LOCK:
-                    conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET auto_direction=NULL,auto_entry_signal_id=NULL,pending_auto_direction=NULL,pending_auto_signal_id=NULL,last_signal_id=NULL,last_error=NULL,updated_at=? WHERE id=?",(_now_iso(),row["id"])); conn.commit(); conn.close()
+                    conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET auto_direction=NULL,auto_entry_signal_id=NULL,auto_entry_pressure_ratio=0,pending_auto_direction=NULL,pending_auto_signal_id=NULL,last_signal_id=NULL,last_error=NULL,updated_at=? WHERE id=?",(_now_iso(),row["id"])); conn.commit(); conn.close()
                 continue
             if not flow_direction:
                 continue
@@ -2525,6 +2527,7 @@ def _ctrader_autotrade_once():
             sig["signal"]=flow_direction
             sig["id"]=str(flow.get("id") or flow.get("signal_id") or flow.get("timestamp_utc") or flow.get("timestamp") or "")
             sig["_signal_source"]="ORDER_FLOW"
+            sig["_order_flow_ratio"] = flow_ratio
             sid=_signal_id(sig)
             direction=flow_direction
             if not sid:
