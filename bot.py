@@ -2239,44 +2239,28 @@ def _queue_and_execute_ctrader(row, sig, automatic=True):
     if not entry: raise RuntimeError("The current KETS signal has no entry price.")
     sid=_signal_id(sig)
     lot=max(.01,min(_num(row.get("lot_size")) or .01,_num(row.get("max_lot")) or 10))
-    # Automatic SMC entries keep the existing opposite-SMC exit logic, while
-    # the exact SL and TP supplied by the SMC signal are now both mandatory
-    # broker-side protections. They are sent directly in the cTrader market
-    # order so cTrader owns the actual stop-loss and take-profit. KETS does not
-    # simulate either level. Manual orders keep their existing SL/TP behaviour.
+    # Auto-Trader is Order-Flow-only. Automatic entries deliberately carry no
+    # stop-loss or take-profit; the required exit rule is a live Order Flow
+    # pressure ratio below 2.0. Manual orders retain their existing SL/TP rules.
     order={"symbol":str(row.get("auto_symbol") or sig.get("symbol") or ("XAUUSD" if str(sig.get("asset")).upper() in ("GOLD","XAUUSD") else "BTCUSD")),"direction":direction,"volume":lot,"entry":entry}
     tp=_num(sig.get("take_profit") or sig.get("tp") or sig.get("target"))
     sl=_num(sig.get("stop_loss") or sig.get("sl") or sig.get("stop"))
     if not automatic:
         if not tp or not sl: raise RuntimeError("The current signal has no complete entry, target and stop-loss plan.")
         order["take_profit"]=tp; order["stop_loss"]=sl
-    else:
-        # SMC automatic execution requires BOTH levels from the source signal.
-        # Never open an automatic trade with only one side of its protection.
-        if not sl: raise RuntimeError("SMC Auto-Trader requires the SMC signal Stop Loss.")
-        if not tp: raise RuntimeError("SMC Auto-Trader requires the SMC signal Take Profit.")
-        if direction == "BUY" and (sl >= entry or tp <= entry):
-            raise RuntimeError("SMC BUY has invalid broker-side SL/TP levels.")
-        if direction == "SELL" and (sl <= entry or tp >= entry):
-            raise RuntimeError("SMC SELL has invalid broker-side SL/TP levels.")
-        order["take_profit"]=tp; order["stop_loss"]=sl
     result,selected=_ctrader_execute_order(row,order,auto_label=automatic)
-    # _ctrader_execute_order normalizes source SL/TP to the broker symbol's
-    # allowed precision before the market order is sent. Use those exact
-    # broker-facing values for verification/amendment too. Passing the raw SMC
-    # decimals here can make cTrader reject the protection amendment AFTER the
-    # market order has already opened. The old retry path then treated that as
-    # a failed entry and retried the same signal every second, creating duplicate
-    # positions.
-    broker_sl = result.get("requested_stop_loss") if isinstance(result, dict) else None
-    broker_tp = result.get("requested_take_profit") if isinstance(result, dict) else None
-    if broker_sl is None:
-        broker_sl = sl
-    if broker_tp is None:
-        broker_tp = tp
-    result = _verify_and_enforce_broker_protection(
-        row, result, broker_sl, broker_tp, automatic=automatic
-    )
+    # No broker-side SL/TP amendment or verification for automatic trades.
+    # Manual orders keep the original broker-protection verification behaviour.
+    if not automatic:
+        broker_sl = result.get("requested_stop_loss") if isinstance(result, dict) else None
+        broker_tp = result.get("requested_take_profit") if isinstance(result, dict) else None
+        if broker_sl is None:
+            broker_sl = sl
+        if broker_tp is None:
+            broker_tp = tp
+        result = _verify_and_enforce_broker_protection(
+            row, result, broker_sl, broker_tp, automatic=False
+        )
     with DB_LOCK:
         conn=db_conn()
         db_execute(conn,"UPDATE ctrader_connections SET selected_account_id=?,last_signal_id=?,auto_entry_signal_id=?,auto_direction=?,last_error=NULL,status=?,updated_at=? WHERE id=?",(selected,sid,sid,direction,"CONNECTED",_now_iso(),row["id"]))
@@ -2435,21 +2419,67 @@ def _latest_smc_history_signal(requested_symbol=None):
             return valid
     return None
 
-def _latest_autotrader_signal(requested_symbol, kets_strategy_enabled=True, selected_strategies=None):
-    """Select the Auto-Trader entry source.
+def _order_flow_execution_decision(flow):
+    """Build the same rolling major-trend checks as the Order Flow page."""
+    if not isinstance(flow, dict):
+        return None, 0.0, "No fresh order-flow record."
+    asset = str(flow.get("asset") or flow.get("symbol") or "").upper()
+    samples = _order_flow_items(asset=asset, limit=20) if asset else []
+    samples = [x for x in samples if isinstance(x, dict)]
+    if len(samples) < 3:
+        return None, 0.0, "Need at least 3 recent order-flow records."
+    try:
+        bullish_values = [float(x.get("bullish_pressure")) for x in samples if x.get("bullish_pressure") is not None]
+        bearish_values = [float(x.get("bearish_pressure")) for x in samples if x.get("bearish_pressure") is not None]
+        if len(bullish_values) < 3 or len(bearish_values) < 3:
+            return None, 0.0, "Pressure percentages are missing."
+        bullish = sum(bullish_values) / len(bullish_values)
+        bearish = sum(bearish_values) / len(bearish_values)
+    except (TypeError, ValueError):
+        return None, 0.0, "Pressure percentages are invalid."
+    smaller, larger = min(bullish, bearish), max(bullish, bearish)
+    ratio = larger / smaller if smaller > 0 else 0.0
+    pressure_bias = "BULLISH" if bullish >= 55 else "BEARISH" if bearish >= 55 else "BALANCED"
+    # _order_flow_items returns newest first, matching the page's rolling sample.
+    try:
+        newest = next(float(x.get("market_price") or x.get("price") or x.get("close") or x.get("current_price")) for x in samples if float(x.get("market_price") or x.get("price") or x.get("close") or x.get("current_price") or 0) > 0)
+        oldest_item = next(x for x in reversed(samples) if float(x.get("market_price") or x.get("price") or x.get("close") or x.get("current_price") or 0) > 0)
+        oldest = float(oldest_item.get("market_price") or oldest_item.get("price") or oldest_item.get("close") or oldest_item.get("current_price"))
+        change = ((newest - oldest) / oldest) * 100 if oldest else 0
+    except (StopIteration, TypeError, ValueError, ZeroDivisionError):
+        return None, ratio, "Valid prices are missing."
+    price_bias = "FLAT" if abs(change) < 0.02 else "BULLISH" if change > 0 else "BEARISH"
+    aligned = pressure_bias in {"BULLISH", "BEARISH"} and pressure_bias == price_bias
+    direction = "BUY" if pressure_bias == "BULLISH" else "SELL" if pressure_bias == "BEARISH" else ""
+    regime = pressure_bias if aligned else "UNCONFIRMED"
+    classification = f"{pressure_bias} PRESSURE + PRICE ALIGNMENT" if aligned else "PRESSURE / PRICE CONFLICT"
+    confirming = aligned and ratio > 2.0 and price_bias == pressure_bias and pressure_bias in {"BULLISH", "BEARISH"}
+    # Attach the calculated rolling checks so execution uses the same facts as the page.
+    flow["_kets_pressure_ratio"] = ratio
+    flow["_kets_price_direction"] = price_bias
+    flow["_kets_market_regime"] = regime
+    flow["_kets_signal_classification"] = classification
+    flow["_kets_pressure_alignment"] = "AGREE" if aligned else "UNCONFIRMED"
+    if ratio < 2.0:
+        return None, ratio, "Pressure ratio is below 2.0."
+    if not confirming or not direction:
+        return None, ratio, "Market regime, classification, alignment, price direction and confirmation must all agree."
+    return direction, ratio, "Order-flow conditions confirmed."
 
-    SMC is an independent source. Auto-Trader reads ONLY the dedicated SMC
-    Signal History store. The live SMC slot is no longer an execution source;
-    it is only a low-latency mirror/debug aid. This gives one auditable source
-    of truth for every automatic SMC entry.
-    """
-    selected_set={str(x).strip().lower() for x in (selected_strategies or [])}
-    if "smc" not in selected_set:
+
+def _latest_autotrader_signal(requested_symbol, kets_strategy_enabled=True, selected_strategies=None):
+    """Auto-Trader uses only a fresh, unanimously confirmed order-flow record."""
+    flow = _latest_order_flow_for_asset(requested_symbol)
+    direction, ratio, reason = _order_flow_execution_decision(flow)
+    if not direction:
         return None
-    recovered = _latest_smc_history_signal(requested_symbol)
-    if recovered:
-        return recovered
-    return None
+    sig = dict(flow)
+    sig["direction"] = direction
+    sig["signal"] = direction
+    sig["id"] = str(flow.get("id") or flow.get("signal_id") or flow.get("timestamp_utc") or flow.get("timestamp") or "")
+    sig["_order_flow_ratio"] = ratio
+    sig["_signal_source"] = "ORDER_FLOW"
+    return sig
 
 
 def _ctrader_autotrade_once():
@@ -2471,39 +2501,35 @@ def _ctrader_autotrade_once():
             # preserved, but no new signal-driven automatic entry is processed.
             if not session["active"]:
                 continue
-            # Auto-Trade entry source is the dedicated SMC Signal History only.
-            # Normal KETS Signal History has ZERO authority to open an SMC trade. Repeated same-direction signals are ignored. If
-            # opposite-signal confirmation is ON, reversal still requires two
-            # distinct opposite SMC signals.
+            # Order Flow is the sole Auto-Trader entry authority. SMC history,
+            # regular KETS Signal History, and other strategy feeds are never read.
             try:
-                selected_strategies=json.loads(row.get("strategy_selection_json") or '["smc"]')
+                selected_strategies=json.loads(row.get("strategy_selection_json") or "[]")
             except Exception:
                 selected_strategies=[]
-            # The independent trading bot sends SMC BUY/SELL signals into the
-            # dedicated SMC Signal History store. "smc" in the Auto-Trader strategy
-            # selection therefore means that direct feed must be eligible even
-            # when a legacy connection row still has kets_strategy_enabled=0.
-            # This preserves the user's SMC source selection and prevents a
-            # valid bot signal from being silently ignored by Auto-Trade.
-            kets_strategy_enabled=bool(
-                row.get("kets_strategy_enabled")
-                if row.get("kets_strategy_enabled") is not None else 0
-            ) or ("smc" in {str(x).strip().lower() for x in (selected_strategies or [])})
-            sig=_latest_autotrader_signal(auto_symbol, kets_strategy_enabled, selected_strategies)
-            if not sig:
+            flow = _latest_order_flow_for_asset(auto_symbol)
+            flow_direction, flow_ratio, flow_reason = _order_flow_execution_decision(flow)
+            previous_direction=str(row.get("auto_direction") or "").upper()
+            # A pressure ratio below 2.0 is the Auto-Trader's required exit
+            # condition, even when there is no new BUY/SELL candidate. Automatic
+            # entries do not use stop-loss or take-profit orders.
+            if previous_direction and flow and flow_ratio < 2.0:
+                _ctrader_close_positions(row, auto_only=True)
+                with DB_LOCK:
+                    conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET auto_direction=NULL,auto_entry_signal_id=NULL,pending_auto_direction=NULL,pending_auto_signal_id=NULL,last_signal_id=NULL,last_error=NULL,updated_at=? WHERE id=?",(_now_iso(),row["id"])); conn.commit(); conn.close()
                 continue
-            # Unified SMC + candle-pressure proxy gate. This is an additional
-            # confirmation only for the explicitly selected SMC source; the
-            # original SMC signal, SL/TP, reversal confirmation and risk checks
-            # remain unchanged. Never call this true bid/ask order flow.
-            if "smc" in {str(x).strip().lower() for x in (selected_strategies or [])}:
-                flow = _latest_order_flow_for_asset(auto_symbol)
-                smc_direction = str(sig.get("direction") or sig.get("signal") or "").upper()
-                flow_direction = str((flow or {}).get("direction") or "").upper()
-                if not flow or flow_direction not in {"BUY", "SELL"} or flow_direction != smc_direction:
-                    continue
+            if not flow_direction:
+                continue
+            sig=dict(flow)
+            sig["direction"]=flow_direction
+            sig["signal"]=flow_direction
+            sig["id"]=str(flow.get("id") or flow.get("signal_id") or flow.get("timestamp_utc") or flow.get("timestamp") or "")
+            sig["_signal_source"]="ORDER_FLOW"
             sid=_signal_id(sig)
-            direction=str(sig.get("direction") or sig.get("signal") or "").upper()
+            direction=flow_direction
+            if not sid:
+                continue
+
 
             # Refresh account equity only when the cached row does not yet have
             # a baseline. The dashboard itself refreshes these fields every few
