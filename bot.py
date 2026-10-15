@@ -792,8 +792,22 @@ def _ctrader_snapshot_cached(row):
 
 def _ctrader_cache_snapshot(row, snapshot):
     key=(str(row.get("selected_account_id") or ""), str(row.get("user_id") or ""))
+    now=time.time()
     with CTRADER_SNAPSHOT_CACHE_LOCK:
-        CTRADER_SNAPSHOT_CACHE[key]={"cached_at":time.time(),"snapshot":dict(snapshot)}
+        # Drop expired entries on writes as well as reads, so snapshots for
+        # accounts that are no longer visited cannot accumulate indefinitely.
+        for stale_key, item in list(CTRADER_SNAPSHOT_CACHE.items()):
+            if now-float(item.get("cached_at", 0)) >= CTRADER_SNAPSHOT_CACHE_TTL:
+                CTRADER_SNAPSHOT_CACHE.pop(stale_key, None)
+        # Bound the cache on the free-tier instance. This is a cache-only
+        # safeguard; it does not change broker positions or trading decisions.
+        if key not in CTRADER_SNAPSHOT_CACHE and len(CTRADER_SNAPSHOT_CACHE) >= 64:
+            oldest_key=min(
+                CTRADER_SNAPSHOT_CACHE,
+                key=lambda k: float(CTRADER_SNAPSHOT_CACHE[k].get("cached_at", 0))
+            )
+            CTRADER_SNAPSHOT_CACHE.pop(oldest_key, None)
+        CTRADER_SNAPSHOT_CACHE[key]={"cached_at":now,"snapshot":dict(snapshot)}
 
 def _ctrader_invalidate_snapshot(row):
     key=(str(row.get("selected_account_id") or ""), str(row.get("user_id") or ""))
@@ -2511,11 +2525,17 @@ def _ctrader_autotrade_once():
             flow = _latest_order_flow_for_asset(auto_symbol)
             flow_direction, flow_ratio, flow_reason = _order_flow_execution_decision(flow)
             previous_direction=str(row.get("auto_direction") or "").upper()
+            # A ratio-drop exit is attempted only once per open-trade cycle.
+            # If cTrader does not confirm that first attempt, freeze this cycle:
+            # do not retry the close and do not allow a new automatic entry.
+            # The user must inspect/close any still-open position manually.
+            last_error_text=str(row.get("last_error") or "")
+            if previous_direction and last_error_text.startswith("ORDER_FLOW_EXIT_ATTEMPTED_ONCE:"):
+                continue
             # Track the peak Order Flow pressure ratio during this open trade.
             # Exit after a fall of 0.50 or more from that peak. Auto-Trader is
             # switched OFF only after cTrader confirms the automatic position
-            # is no longer open; on any close/verification error it stays ON
-            # and retains its tracking state for a later retry.
+            # is no longer open.
             peak_pressure_ratio = _num(row.get("auto_entry_pressure_ratio"))
             if previous_direction and flow and peak_pressure_ratio > 0:
                 if flow_ratio > peak_pressure_ratio:
@@ -2531,9 +2551,14 @@ def _ctrader_autotrade_once():
                         with DB_LOCK:
                             conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET auto_enabled=0,auto_direction=NULL,auto_entry_signal_id=NULL,auto_entry_pressure_ratio=0,pending_auto_direction=NULL,pending_auto_signal_id=NULL,last_signal_id=NULL,last_error=NULL,updated_at=? WHERE id=?",(_now_iso(),row["id"])); conn.commit(); conn.close()
                     except Exception as close_exc:
-                        app.logger.exception("Order Flow ratio-drop close was not confirmed; Auto-Trader remains ON")
+                        app.logger.exception("Order Flow ratio-drop close was not confirmed; one attempt only, no automatic retry")
+                        # Persist a latch so later worker cycles cannot send a
+                        # second close request or open another position for this
+                        # trade cycle. Auto-Trader is not marked OFF unless the
+                        # broker actually confirms closure, per the user's rule.
                         with DB_LOCK:
-                            conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET last_error=?,updated_at=? WHERE id=?",(f"Ratio-drop exit not confirmed by cTrader: {str(close_exc)[:400]}",_now_iso(),row["id"])); conn.commit(); conn.close()
+                            conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET last_error=?,updated_at=? WHERE id=?",(f"ORDER_FLOW_EXIT_ATTEMPTED_ONCE: cTrader did not confirm closure. No retry will be sent. Check/close the position manually. Details: {str(close_exc)[:300]}",_now_iso(),row["id"])); conn.commit(); conn.close()
+                        row["last_error"] = "ORDER_FLOW_EXIT_ATTEMPTED_ONCE: cTrader did not confirm closure. No retry will be sent."
                     continue
             if not flow_direction:
                 continue
@@ -3236,6 +3261,19 @@ def api_strategy_scans():
         return jsonify({"error":"Strategy scan must include asset and strategy_signals."}),400
     with STRATEGY_SCAN_LOCK:
         _clean_strategy_scan_feed_locked()
+        # Temporary scan snapshots expire after 10 minutes and are bounded
+        # to prevent unexpected asset keys from growing memory on Render Free.
+        # Normal KETS operation uses GOLD/XAUUSD and BTCUSD.
+        if asset not in STRATEGY_SCAN_FEED and len(STRATEGY_SCAN_FEED) >= 8:
+            oldest_asset = min(
+                STRATEGY_SCAN_FEED,
+                key=lambda key: str(
+                    STRATEGY_SCAN_FEED[key].get("timestamp_utc")
+                    or STRATEGY_SCAN_FEED[key].get("timestamp")
+                    or ""
+                )
+            )
+            STRATEGY_SCAN_FEED.pop(oldest_asset, None)
         STRATEGY_SCAN_FEED[asset]=dict(body)
     return jsonify({"ok":True,"accepted":True,"asset":asset}),200
 
