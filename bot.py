@@ -2511,15 +2511,30 @@ def _ctrader_autotrade_once():
             flow = _latest_order_flow_for_asset(auto_symbol)
             flow_direction, flow_ratio, flow_reason = _order_flow_execution_decision(flow)
             previous_direction=str(row.get("auto_direction") or "").upper()
-            # Exit as soon as the live pressure ratio drops by 0.10 or more
-            # from the ratio recorded when this automatic trade was entered.
-            # This is the only automatic exit rule; automatic orders have no SL/TP.
-            entry_pressure_ratio = _num(row.get("auto_entry_pressure_ratio"))
-            if previous_direction and flow and entry_pressure_ratio > 0 and flow_ratio <= entry_pressure_ratio - 0.10:
-                _ctrader_close_positions(row, auto_only=True)
-                with DB_LOCK:
-                    conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET auto_direction=NULL,auto_entry_signal_id=NULL,auto_entry_pressure_ratio=0,pending_auto_direction=NULL,pending_auto_signal_id=NULL,last_signal_id=NULL,last_error=NULL,updated_at=? WHERE id=?",(_now_iso(),row["id"])); conn.commit(); conn.close()
-                continue
+            # Track the peak Order Flow pressure ratio during this open trade.
+            # Exit after a fall of 0.50 or more from that peak. Auto-Trader is
+            # switched OFF only after cTrader confirms the automatic position
+            # is no longer open; on any close/verification error it stays ON
+            # and retains its tracking state for a later retry.
+            peak_pressure_ratio = _num(row.get("auto_entry_pressure_ratio"))
+            if previous_direction and flow and peak_pressure_ratio > 0:
+                if flow_ratio > peak_pressure_ratio:
+                    peak_pressure_ratio = flow_ratio
+                    with DB_LOCK:
+                        conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET auto_entry_pressure_ratio=?,updated_at=? WHERE id=?",(peak_pressure_ratio,_now_iso(),row["id"])); conn.commit(); conn.close()
+                    row["auto_entry_pressure_ratio"] = peak_pressure_ratio
+                if flow_ratio <= peak_pressure_ratio - 0.50:
+                    try:
+                        _ctrader_close_positions(row, auto_only=True)
+                        # Successful auto-only close returns only after a fresh
+                        # broker snapshot confirms all KETS_AUTO positions gone.
+                        with DB_LOCK:
+                            conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET auto_enabled=0,auto_direction=NULL,auto_entry_signal_id=NULL,auto_entry_pressure_ratio=0,pending_auto_direction=NULL,pending_auto_signal_id=NULL,last_signal_id=NULL,last_error=NULL,updated_at=? WHERE id=?",(_now_iso(),row["id"])); conn.commit(); conn.close()
+                    except Exception as close_exc:
+                        app.logger.exception("Order Flow ratio-drop close was not confirmed; Auto-Trader remains ON")
+                        with DB_LOCK:
+                            conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET last_error=?,updated_at=? WHERE id=?",(f"Ratio-drop exit not confirmed by cTrader: {str(close_exc)[:400]}",_now_iso(),row["id"])); conn.commit(); conn.close()
+                    continue
             if not flow_direction:
                 continue
             sig=dict(flow)
@@ -2705,7 +2720,30 @@ def _ctrader_close_positions(row, auto_only=False):
                 if volume<=0: volume=int(round(float(pos.get("volume",0))*100))
                 results.append(await send(2111,{"ctidTraderAccountId":int(selected),"positionId":int(pid),"volume":volume}))
             return results
-    return asyncio.run(run())
+    results = asyncio.run(run())
+    if auto_only:
+        # A close request/acknowledgement is not enough: verify against a fresh
+        # cTrader snapshot that each targeted automatic position has disappeared.
+        target_ids = {str(p.get("positionId") or p.get("id") or "") for p in positions}
+        target_ids.discard("")
+        if target_ids:
+            time.sleep(0.5)
+            fresh = _ctrader_account_snapshot(row)
+            remaining = [p for p in (fresh.get("positions") or [])
+                         if str(p.get("positionId") or p.get("id") or "") in target_ids]
+            if remaining:
+                ids = ", ".join(str(p.get("positionId") or p.get("id")) for p in remaining)
+                raise RuntimeError(f"cTrader has not confirmed closure of automatic position(s): {ids}")
+        else:
+            # No automatic positions were visible to close. Require a fresh
+            # snapshot to succeed before allowing Auto-Trader to turn OFF.
+            fresh = _ctrader_account_snapshot(row)
+            remaining_auto = [p for p in (fresh.get("positions") or [])
+                              if str(p.get("label") or "").upper() == "KETS_AUTO"
+                              or str(p.get("comment") or "").upper().startswith("KETS AUTOMATIC")]
+            if remaining_auto:
+                raise RuntimeError("cTrader still reports an automatic position open; exit is not confirmed.")
+    return results
 
 def _ctrader_close_all_positions(row):
     return _ctrader_close_positions(row, auto_only=False)
