@@ -3464,7 +3464,12 @@ def api_order_flow():
             conn.close()
     except Exception as exc:
         app.logger.warning("Order-flow daily stats read failed: %s", str(exc)[:250])
-    daily_by_asset = {}
+    # Daily ratio statistics must use the SAME calculation as Major-Trend Check:
+    # average bullish/bearish pressure over the latest rolling window of up to
+    # 20 records, then divide the larger average by the smaller average.
+    # Evaluate that rolling calculation once per new stored record; do not
+    # calculate ratios from individual raw records.
+    records_by_asset = {}
     for dbrow in daily_rows:
         try:
             raw = dbrow["payload"] if isinstance(dbrow, dict) or hasattr(dbrow, "keys") else dbrow[0]
@@ -3474,22 +3479,43 @@ def api_order_flow():
             name = str(record.get("asset") or record.get("symbol") or "MARKET").upper()
             bullish = float(record.get("bullish_pressure"))
             bearish = float(record.get("bearish_pressure"))
-            if not math.isfinite(bullish) or not math.isfinite(bearish) or min(bullish, bearish) < 0:
+            if (not math.isfinite(bullish) or not math.isfinite(bearish)
+                    or bullish < 0 or bearish < 0 or bullish + bearish <= 0):
                 continue
-            larger, smaller = max(bullish, bearish), min(bullish, bearish)
-            ratio = larger / smaller if smaller > 0 else (float("inf") if larger > 0 else 0.0)
-            stats = daily_by_asset.setdefault(name, {"asset": name, "max_pressure_ratio": 0.0, "times_above_2x": 0, "samples": 0, "date_eat": eat_midnight.date().isoformat()})
-            stats["samples"] += 1
-            if ratio > stats["max_pressure_ratio"]:
+            stamp = record.get("timestamp_utc") or record.get("timestamp") or record.get("created_at") or ""
+            records_by_asset.setdefault(name, []).append({"timestamp": str(stamp), "bullish": bullish, "bearish": bearish})
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+
+    daily_by_asset = {}
+    for name, records in records_by_asset.items():
+        # Chronological order is required so each window represents the state
+        # the Major-Trend Check would have seen as records arrived.
+        records.sort(key=lambda r: r["timestamp"])
+        stats = {"asset": name, "max_pressure_ratio": None, "times_above_2x": 0,
+                 "samples": len(records), "date_eat": eat_midnight.date().isoformat(),
+                 "ratio_method": "rolling_20_record_major_trend"}
+        for end in range(3, len(records) + 1):
+            window = records[max(0, end - 20):end]
+            bullish_avg = sum(r["bullish"] for r in window) / len(window)
+            bearish_avg = sum(r["bearish"] for r in window) / len(window)
+            larger, smaller = max(bullish_avg, bearish_avg), min(bullish_avg, bearish_avg)
+            if smaller <= 0:
+                # A zero weaker-side average is an infinite ratio only when
+                # the stronger side has evidence; keep it countable as >2x.
+                ratio = float("inf") if larger > 0 else None
+            else:
+                ratio = larger / smaller
+            if ratio is None:
+                continue
+            if stats["max_pressure_ratio"] is None or ratio > stats["max_pressure_ratio"]:
                 stats["max_pressure_ratio"] = ratio
             if ratio > 2.0:
                 stats["times_above_2x"] += 1
-        except (TypeError, ValueError, json.JSONDecodeError):
-            continue
-    daily_stats = sorted(daily_by_asset.values(), key=lambda x: x["asset"])
-    for stats in daily_stats:
-        if not math.isfinite(stats["max_pressure_ratio"]):
+        if stats["max_pressure_ratio"] is not None and not math.isfinite(stats["max_pressure_ratio"]):
             stats["max_pressure_ratio"] = None
+        daily_by_asset[name] = stats
+    daily_stats = sorted(daily_by_asset.values(), key=lambda x: x["asset"])
     return jsonify({"ok": True, "history": items, "count": len(items), "days": ORDER_FLOW_HISTORY_DAYS,
                     "daily_stats": daily_stats, "data_type": "CANDLE_BASED_PRESSURE_PROXY"})
 
