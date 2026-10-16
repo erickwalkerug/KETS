@@ -2439,7 +2439,7 @@ def _order_flow_execution_decision(flow):
     if not isinstance(flow, dict):
         return None, 0.0, "No fresh order-flow record."
     asset = str(flow.get("asset") or flow.get("symbol") or "").upper()
-    samples = _order_flow_items(asset=asset, limit=20) if asset else []
+    samples = _order_flow_items(asset=asset, limit=20) if asset else []  # Preserve the established 20-record Major-Trend rule.
     samples = [x for x in samples if isinstance(x, dict)]
     if len(samples) < 3:
         return None, 0.0, "Need at least 3 recent order-flow records."
@@ -2502,7 +2502,7 @@ def _ctrader_autotrade_once():
     # New signal-driven automatic entries are restricted to ACTIVE sessions.
     session = trading_session()
     with DB_LOCK:
-        conn=db_conn(); rows=db_execute(conn,"SELECT * FROM ctrader_connections WHERE auto_enabled=1 AND status IN ('AUTHORIZED','CONNECTED')").fetchall(); conn.close()
+        conn=db_conn(); rows=db_execute(conn,"SELECT * FROM ctrader_connections WHERE (auto_enabled=1 OR auto_direction IS NOT NULL OR auto_entry_signal_id IS NOT NULL) AND status IN ('AUTHORIZED','CONNECTED')").fetchall(); conn.close()
     if not rows: return
     for rr in rows:
         row=dict(rr)
@@ -2560,6 +2560,10 @@ def _ctrader_autotrade_once():
                             conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET last_error=?,updated_at=? WHERE id=?",(f"ORDER_FLOW_EXIT_ATTEMPTED_ONCE: cTrader did not confirm closure. No retry will be sent. Check/close the position manually. Details: {str(close_exc)[:300]}",_now_iso(),row["id"])); conn.commit(); conn.close()
                         row["last_error"] = "ORDER_FLOW_EXIT_ATTEMPTED_ONCE: cTrader did not confirm closure. No retry will be sent."
                     continue
+            # Auto-Trader OFF still permits management/exit of a recorded automatic trade,
+            # but it must never authorize a fresh entry while disabled.
+            if not bool(row.get("auto_enabled")):
+                continue
             if not flow_direction:
                 continue
             sig=dict(flow)
