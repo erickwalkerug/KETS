@@ -1,0 +1,21 @@
+ORDER FLOW DAILY PRESSURE COUNT — EXIT-GATED FIX
+Date: 2026-10-16
+
+Changed behavior:
+- Maximum pressure ratio continues to use the exact rolling 20-record major-trend calculation and is independent of Auto-Trader trade state.
+- “Times pressure ratio exceeded 2x today” no longer increments for every rolling window above 2x.
+- A confirmed automatic ENTRY disables counting while that automatic trade cycle is active.
+- A confirmed automatic EXIT enables counting again.
+- After an exit, one continuous above-2x ratio episode counts once. The count can re-arm after the ratio returns to 2x or below and later exceeds 2x again, as long as no new automatic entry has occurred.
+- Confirmed automatic entry/exit events are stored in order_flow_trade_events. Existing databases create this table on application startup.
+- Failed/unconfirmed close attempts do not record an EXIT and therefore do not re-enable counting.
+
+Files changed:
+- bot.py: stores automatic trade events and gates daily ratio counts using them.
+- app.js: clarifies the daily counter description.
+
+Validation:
+- Python syntax compilation passed for bot.py.
+- JavaScript syntax check passed for app.js.
+
+Note: historical counts are recalculated from stored Order Flow records and newly recorded trade events. Events that occurred before this fix was deployed are not backfilled, so the counter may remain zero until a new confirmed exit event is recorded.

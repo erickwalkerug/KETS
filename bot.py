@@ -449,6 +449,12 @@ def init_db():
     );
     CREATE INDEX IF NOT EXISTS idx_order_flow_history_asset_time
       ON order_flow_history(asset, timestamp);
+    CREATE TABLE IF NOT EXISTS order_flow_trade_events (
+        id TEXT PRIMARY KEY, asset TEXT NOT NULL, event_type TEXT NOT NULL,
+        timestamp TEXT NOT NULL, connector_id TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_order_flow_trade_events_asset_time
+      ON order_flow_trade_events(asset, timestamp);
     CREATE TABLE IF NOT EXISTS ctrader_connections (
         id TEXT PRIMARY KEY, user_id TEXT NOT NULL UNIQUE, broker TEXT,
         account_ids_json TEXT DEFAULT '[]', selected_account_id TEXT,
@@ -2247,6 +2253,26 @@ def _verify_and_enforce_broker_protection(row, result, requested_sl, requested_t
     result["protection_repaired"] = True
     return result
 
+def _record_order_flow_trade_event(asset, event_type, connector_id=None):
+    """Persist confirmed automatic entry/exit events for daily pressure stats."""
+    asset = str(asset or "XAUUSD").upper()
+    if asset in {"XAUUSD", "GOLD"}:
+        asset = "GOLD"
+    event_type = str(event_type or "").upper()
+    if event_type not in {"ENTRY", "EXIT"}:
+        return
+    stamp = datetime.datetime.now(datetime.timezone.utc).isoformat()
+    event_id = f"{connector_id or 'unknown'}:{asset}:{event_type}:{stamp}:{uuid.uuid4().hex[:8]}"
+    try:
+        with DB_LOCK:
+            conn = db_conn()
+            db_execute(conn, "INSERT INTO order_flow_trade_events(id,asset,event_type,timestamp,connector_id) VALUES(?,?,?,?,?)",
+                       (event_id, asset, event_type, stamp, str(connector_id or "")))
+            conn.commit(); conn.close()
+    except Exception:
+        app.logger.exception("Could not record Order Flow automatic-trade event")
+
+
 def _queue_and_execute_ctrader(row, sig, automatic=True):
     direction=str(sig.get("direction") or sig.get("signal") or "").upper()
     if direction not in {"BUY","SELL"}: raise RuntimeError("Signal is not a BUY/SELL entry.")
@@ -2280,6 +2306,8 @@ def _queue_and_execute_ctrader(row, sig, automatic=True):
         conn=db_conn()
         db_execute(conn,"UPDATE ctrader_connections SET selected_account_id=?,last_signal_id=?,auto_entry_signal_id=?,auto_entry_pressure_ratio=?,auto_direction=?,last_error=NULL,status=?,updated_at=? WHERE id=?",(selected,sid,sid,_num(sig.get("_order_flow_ratio", sig.get("_kets_pressure_ratio", 0))),direction,"CONNECTED",_now_iso(),row["id"]))
         conn.commit(); conn.close()
+    if automatic:
+        _record_order_flow_trade_event(row.get("auto_symbol") or sig.get("asset") or "XAUUSD", "ENTRY", row.get("id"))
     _ctrader_invalidate_snapshot(row)
     return result
 
@@ -2546,6 +2574,7 @@ def _ctrader_autotrade_once():
                 if flow_ratio <= peak_pressure_ratio - 0.50:
                     try:
                         _ctrader_close_positions(row, auto_only=True)
+                        _record_order_flow_trade_event(auto_symbol, "EXIT", row.get("id"))
                         # Successful auto-only close returns only after a fresh
                         # broker snapshot confirms all KETS_AUTO positions gone.
                         with DB_LOCK:
@@ -2625,6 +2654,7 @@ def _ctrader_autotrade_once():
                 if confirmation_on:
                     if pending_direction == direction and pending_sid and sid != pending_sid:
                         _ctrader_close_positions(row, auto_only=True)
+                        _record_order_flow_trade_event(auto_symbol, "EXIT", row.get("id"))
                         with DB_LOCK:
                             conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET auto_direction=NULL,auto_entry_signal_id=NULL,pending_auto_direction=NULL,pending_auto_signal_id=NULL,last_signal_id=NULL,last_error=NULL,updated_at=? WHERE id=?",(_now_iso(),row["id"])); conn.commit(); conn.close()
                         previous_direction=""
@@ -2640,6 +2670,7 @@ def _ctrader_autotrade_once():
                         continue
                 else:
                     _ctrader_close_positions(row, auto_only=True)
+                    _record_order_flow_trade_event(auto_symbol, "EXIT", row.get("id"))
                     with DB_LOCK:
                         conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET auto_direction=NULL,auto_entry_signal_id=NULL,pending_auto_direction=NULL,pending_auto_signal_id=NULL,last_signal_id=NULL,last_error=NULL,updated_at=? WHERE id=?",(_now_iso(),row["id"])); conn.commit(); conn.close()
                     previous_direction=""
@@ -3464,8 +3495,15 @@ def api_order_flow():
         with DB_LOCK:
             conn = db_conn()
             daily_rows = db_execute(conn, stats_sql, stats_params).fetchall()
+            event_sql = "SELECT asset,event_type,timestamp FROM order_flow_trade_events"
+            event_params = []
+            if asset:
+                event_sql += " AND UPPER(asset)=UPPER(?)"
+                event_params.append(str(asset))
+            trade_event_rows = db_execute(conn, event_sql, event_params).fetchall()
             conn.close()
     except Exception as exc:
+        trade_event_rows = []
         app.logger.warning("Order-flow daily stats read failed: %s", str(exc)[:250])
     # Daily ratio statistics must use the SAME calculation as Major-Trend Check:
     # average bullish/bearish pressure over the latest rolling window of exactly
@@ -3498,6 +3536,19 @@ def api_order_flow():
         except (TypeError, ValueError, json.JSONDecodeError):
             continue
 
+    events_by_asset = {}
+    for event_row in (trade_event_rows if "trade_event_rows" in locals() else []):
+        try:
+            event_asset = str(event_row["asset"] if hasattr(event_row, "keys") else event_row[0]).upper()
+            if event_asset == "XAUUSD": event_asset = "GOLD"
+            event_type = str(event_row["event_type"] if hasattr(event_row, "keys") else event_row[1]).upper()
+            event_stamp = str(event_row["timestamp"] if hasattr(event_row, "keys") else event_row[2])
+            events_by_asset.setdefault(event_asset, []).append((event_stamp, event_type))
+        except Exception:
+            continue
+    for event_list in events_by_asset.values():
+        event_list.sort(key=lambda item: item[0])
+
     daily_by_asset = {}
     for name, records in records_by_asset.items():
         # Chronological order is required so each window represents the state
@@ -3507,13 +3558,29 @@ def api_order_flow():
         stats = {"asset": name, "max_pressure_ratio": None, "times_above_2x": 0,
                  "samples": today_records, "date_eat": eat_midnight.date().isoformat(),
                  "ratio_method": "exact_20_record_major_trend"}
-        # Do not count partial windows. Every ratio and daily exceedance is
-        # calculated from exactly 20 valid records, using the same averages
-        # as the major-trend calculation. Count only windows ending today.
+        # Do not count partial windows. The counter is cycle-aware: only a
+        # ratio episode observed after a confirmed auto-trader EXIT can count;
+        # any subsequent ENTRY disables counting until the next confirmed EXIT.
+        # One continuous above-2x episode counts once, not once per rolling window.
+        trade_events = events_by_asset.get(name, [])
+        event_index = 0
+        exited_and_waiting = False
+        counted_this_episode = False
+        # Do not count partial windows; use exactly 20 valid records.
         for end in range(20, len(records) + 1):
             if not records[end - 1]["is_today"]:
                 continue
             window = records[end - 20:end]
+            window_stamp = records[end - 1]["timestamp"]
+            while event_index < len(trade_events) and trade_events[event_index][0] <= window_stamp:
+                _, event_type = trade_events[event_index]
+                if event_type == "EXIT":
+                    exited_and_waiting = True
+                    counted_this_episode = False
+                elif event_type == "ENTRY":
+                    exited_and_waiting = False
+                    counted_this_episode = False
+                event_index += 1
             bullish_avg = sum(r["bullish"] for r in window) / len(window)
             bearish_avg = sum(r["bearish"] for r in window) / len(window)
             larger, smaller = max(bullish_avg, bearish_avg), min(bullish_avg, bearish_avg)
@@ -3527,8 +3594,11 @@ def api_order_flow():
                 continue
             if stats["max_pressure_ratio"] is None or ratio > stats["max_pressure_ratio"]:
                 stats["max_pressure_ratio"] = ratio
-            if ratio > 2.0:
+            if ratio <= 2.0:
+                counted_this_episode = False
+            elif exited_and_waiting and not counted_this_episode:
                 stats["times_above_2x"] += 1
+                counted_this_episode = True
         if stats["max_pressure_ratio"] is not None and not math.isfinite(stats["max_pressure_ratio"]):
             stats["max_pressure_ratio"] = None
         daily_by_asset[name] = stats
