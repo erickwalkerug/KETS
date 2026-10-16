@@ -3451,8 +3451,11 @@ def api_order_flow():
     eat_now = get_eat_time()
     eat_midnight = eat_now.replace(hour=0, minute=0, second=0, microsecond=0)
     cutoff_utc = eat_midnight.astimezone(datetime.timezone.utc).isoformat()
-    stats_sql = "SELECT payload FROM order_flow_history WHERE timestamp >= ?"
-    stats_params = [cutoff_utc]
+    # Load preceding records too: the first major-trend calculation of today
+    # still needs the 19 records immediately before midnight. Only windows
+    # ending on a record received today contribute to today's statistics.
+    stats_sql = "SELECT payload, timestamp FROM order_flow_history WHERE timestamp >= ?"
+    stats_params = [(eat_midnight - datetime.timedelta(days=2)).astimezone(datetime.timezone.utc).isoformat()]
     if asset:
         stats_sql += " AND UPPER(asset)=UPPER(?)"
         stats_params.append(str(asset))
@@ -3465,7 +3468,7 @@ def api_order_flow():
     except Exception as exc:
         app.logger.warning("Order-flow daily stats read failed: %s", str(exc)[:250])
     # Daily ratio statistics must use the SAME calculation as Major-Trend Check:
-    # average bullish/bearish pressure over the latest rolling window of up to
+    # average bullish/bearish pressure over the latest rolling window of exactly
     # 20 records, then divide the larger average by the smaller average.
     # Evaluate that rolling calculation once per new stored record; do not
     # calculate ratios from individual raw records.
@@ -3473,6 +3476,7 @@ def api_order_flow():
     for dbrow in daily_rows:
         try:
             raw = dbrow["payload"] if isinstance(dbrow, dict) or hasattr(dbrow, "keys") else dbrow[0]
+            db_stamp = dbrow["timestamp"] if isinstance(dbrow, dict) or hasattr(dbrow, "keys") else dbrow[1]
             record = json.loads(raw)
             if not isinstance(record, dict):
                 continue
@@ -3482,8 +3486,15 @@ def api_order_flow():
             if (not math.isfinite(bullish) or not math.isfinite(bearish)
                     or bullish < 0 or bearish < 0 or bullish + bearish <= 0):
                 continue
-            stamp = record.get("timestamp_utc") or record.get("timestamp") or record.get("created_at") or ""
-            records_by_asset.setdefault(name, []).append({"timestamp": str(stamp), "bullish": bullish, "bearish": bearish})
+            stamp = str(db_stamp or record.get("timestamp_utc") or record.get("timestamp") or record.get("created_at") or "")
+            try:
+                parsed_stamp = datetime.datetime.fromisoformat(stamp.replace("Z", "+00:00"))
+                if parsed_stamp.tzinfo is None:
+                    parsed_stamp = parsed_stamp.replace(tzinfo=datetime.timezone.utc)
+                is_today = parsed_stamp.astimezone(EAT).date() == eat_midnight.date()
+            except (TypeError, ValueError):
+                is_today = False
+            records_by_asset.setdefault(name, []).append({"timestamp": stamp, "is_today": is_today, "bullish": bullish, "bearish": bearish})
         except (TypeError, ValueError, json.JSONDecodeError):
             continue
 
@@ -3492,11 +3503,17 @@ def api_order_flow():
         # Chronological order is required so each window represents the state
         # the Major-Trend Check would have seen as records arrived.
         records.sort(key=lambda r: r["timestamp"])
+        today_records = sum(1 for record in records if record["is_today"])
         stats = {"asset": name, "max_pressure_ratio": None, "times_above_2x": 0,
-                 "samples": len(records), "date_eat": eat_midnight.date().isoformat(),
-                 "ratio_method": "rolling_20_record_major_trend"}
-        for end in range(3, len(records) + 1):
-            window = records[max(0, end - 20):end]
+                 "samples": today_records, "date_eat": eat_midnight.date().isoformat(),
+                 "ratio_method": "exact_20_record_major_trend"}
+        # Do not count partial windows. Every ratio and daily exceedance is
+        # calculated from exactly 20 valid records, using the same averages
+        # as the major-trend calculation. Count only windows ending today.
+        for end in range(20, len(records) + 1):
+            if not records[end - 1]["is_today"]:
+                continue
+            window = records[end - 20:end]
             bullish_avg = sum(r["bullish"] for r in window) / len(window)
             bearish_avg = sum(r["bearish"] for r in window) / len(window)
             larger, smaller = max(bullish_avg, bearish_avg), min(bullish_avg, bearish_avg)
