@@ -3442,8 +3442,52 @@ def api_order_flow():
     asset = request.args.get("asset")
     limit = request.args.get("limit", default=200, type=int)
     items = _order_flow_items(asset=asset, limit=max(1, min(limit, 500)))
+    # Daily statistics use every stored record since midnight EAT, independently
+    # of the limited history list, and reset naturally at the next EAT calendar day.
+    eat_now = get_eat_time()
+    eat_midnight = eat_now.replace(hour=0, minute=0, second=0, microsecond=0)
+    cutoff_utc = eat_midnight.astimezone(datetime.timezone.utc).isoformat()
+    stats_sql = "SELECT payload FROM order_flow_history WHERE timestamp >= ?"
+    stats_params = [cutoff_utc]
+    if asset:
+        stats_sql += " AND UPPER(asset)=UPPER(?)"
+        stats_params.append(str(asset))
+    daily_rows = []
+    try:
+        with DB_LOCK:
+            conn = db_conn()
+            daily_rows = db_execute(conn, stats_sql, stats_params).fetchall()
+            conn.close()
+    except Exception as exc:
+        app.logger.warning("Order-flow daily stats read failed: %s", str(exc)[:250])
+    daily_by_asset = {}
+    for dbrow in daily_rows:
+        try:
+            raw = dbrow["payload"] if isinstance(dbrow, dict) or hasattr(dbrow, "keys") else dbrow[0]
+            record = json.loads(raw)
+            if not isinstance(record, dict):
+                continue
+            name = str(record.get("asset") or record.get("symbol") or "MARKET").upper()
+            bullish = float(record.get("bullish_pressure"))
+            bearish = float(record.get("bearish_pressure"))
+            if not math.isfinite(bullish) or not math.isfinite(bearish) or min(bullish, bearish) < 0:
+                continue
+            larger, smaller = max(bullish, bearish), min(bullish, bearish)
+            ratio = larger / smaller if smaller > 0 else (float("inf") if larger > 0 else 0.0)
+            stats = daily_by_asset.setdefault(name, {"asset": name, "max_pressure_ratio": 0.0, "times_above_2x": 0, "samples": 0, "date_eat": eat_midnight.date().isoformat()})
+            stats["samples"] += 1
+            if ratio > stats["max_pressure_ratio"]:
+                stats["max_pressure_ratio"] = ratio
+            if ratio > 2.0:
+                stats["times_above_2x"] += 1
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+    daily_stats = sorted(daily_by_asset.values(), key=lambda x: x["asset"])
+    for stats in daily_stats:
+        if not math.isfinite(stats["max_pressure_ratio"]):
+            stats["max_pressure_ratio"] = None
     return jsonify({"ok": True, "history": items, "count": len(items), "days": ORDER_FLOW_HISTORY_DAYS,
-                    "data_type": "CANDLE_BASED_PRESSURE_PROXY"})
+                    "daily_stats": daily_stats, "data_type": "CANDLE_BASED_PRESSURE_PROXY"})
 
 
 @app.route("/api/history", methods=["GET"])

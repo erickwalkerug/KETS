@@ -4,7 +4,7 @@ const hashToken=freshHash.get("login")||"";
 const storedToken=sessionStorage.getItem("kets_user_token")||"";
 const initialToken=hashToken||storedToken;
 if(hashToken)sessionStorage.setItem("kets_user_token",hashToken);
-const state={token:initialToken,user:null,access:null,signals:{},history:[],smcHistory:[],orderFlowHistory:[],payments:[],status:{},plans:{},clockOffsetMs:0,signalWindowDeadlineMs:0,nextBroadcastDeadlineMs:0,nextRefreshDeadlineMs:0,welcomeWindowDeadlineMs:0,welcomeClockOffsetMs:0,welcomeRefreshDeadlineMs:0,welcomeWindowMode:"OUTSIDE_HOURS",loading:false,refreshInProgress:false};
+const state={token:initialToken,user:null,access:null,signals:{},history:[],smcHistory:[],orderFlowHistory:[],orderFlowDailyStats:[],payments:[],status:{},plans:{},clockOffsetMs:0,signalWindowDeadlineMs:0,nextBroadcastDeadlineMs:0,nextRefreshDeadlineMs:0,welcomeWindowDeadlineMs:0,welcomeClockOffsetMs:0,welcomeRefreshDeadlineMs:0,welcomeWindowMode:"OUTSIDE_HOURS",loading:false,refreshInProgress:false};
 const $=id=>document.getElementById(id);
 function headers(extra={}){return {Accept:"application/json",...(state.token?{Authorization:`Bearer ${state.token}`}:{}) ,...extra};}
 async function api(path,opts={}){
@@ -700,6 +700,7 @@ function renderOrderFlowTrendSummary(){
  const all=(state.orderFlowHistory||[]).filter(x=>Number.isFinite(Number(x.bullish_pressure))&&Number.isFinite(Number(x.bearish_pressure)));
  const groups={};
  all.forEach(item=>{const asset=String(item.asset||item.symbol||"MARKET").toUpperCase();(groups[asset]||(groups[asset]=[])).push(item);});
+ const dailyCards=(state.orderFlowDailyStats||[]).map(d=>`<article class="order-flow-trend-card"><div class="order-flow-trend-top"><div><div class="history-market">${esc(d.asset)} · TODAY'S PRESSURE RECORD</div><div class="history-meta">EAT date ${esc(d.date_eat||"--")} · ${Number(d.samples||0)} records</div></div></div><div class="order-flow-dashboard-grid"><section class="order-flow-metric-panel"><h4>Maximum pressure ratio reached today</h4><strong class="order-flow-ratio-value">${d.max_pressure_ratio===null||d.max_pressure_ratio===undefined?"Unavailable":`${Number(d.max_pressure_ratio).toFixed(2)}×`}</strong></section><section class="order-flow-metric-panel"><h4>Times pressure ratio exceeded 2× today</h4><strong class="order-flow-ratio-value">${Number(d.times_above_2x||0)}</strong><small>Counts each stored pressure sample above 2.00× once.</small></section></div></article>`).join("");
  const cards=Object.entries(groups).map(([asset,items])=>{
   const samples=items.slice().sort((a,b)=>Date.parse(b.timestamp_utc||b.timestamp||0)-Date.parse(a.timestamp_utc||a.timestamp||0)).slice(0,20);
   if(samples.length<3)return "";
@@ -758,7 +759,7 @@ function renderOrderFlowHistory(){
  if(updated)updated.textContent=`${state.orderFlowHistory.length} proxy record${state.orderFlowHistory.length===1?"":"s"} · 2-day history`;
 }
 async function refreshOrderFlowHistory(){
- try{const d=await api("/api/order-flow?limit=200",{timeoutMs:10000});state.orderFlowHistory=d.history||[];renderOrderFlowHistory();}catch(e){const el=$("orderFlowHistoryList");if(el&&!state.orderFlowHistory.length)el.innerHTML=`<div class="empty">Order-flow history unavailable: ${esc(e.message)}</div>`;}
+ try{const d=await api("/api/order-flow?limit=200",{timeoutMs:10000});state.orderFlowHistory=d.history||[];state.orderFlowDailyStats=d.daily_stats||[];renderOrderFlowTrendSummary();renderOrderFlowHistory();}catch(e){const el=$("orderFlowHistoryList");if(el&&!state.orderFlowHistory.length)el.innerHTML=`<div class="empty">Order-flow history unavailable: ${esc(e.message)}</div>`;}
 }
 
 function renderPayments(){
@@ -1521,10 +1522,10 @@ async function loadAll(){
      renderStatus(); renderSignals(); renderStopManagement();
    }).catch(()=>{});
 
-  Promise.all([api("/api/history",{timeoutMs:12000}),api("/api/smc-history",{timeoutMs:12000}),api("/api/order-flow?limit=200",{timeoutMs:12000}).catch(()=>({history:state.orderFlowHistory}))]).then(([d,smc,flow])=>{state.history=d.history||[];state.smcHistory=smc.history||[];state.orderFlowHistory=flow.history||[];renderHistory();renderSMCHistory();renderOrderFlowHistory();}).catch(()=>{
+  Promise.all([api("/api/history",{timeoutMs:12000}),api("/api/smc-history",{timeoutMs:12000}),api("/api/order-flow?limit=200",{timeoutMs:12000}).catch(()=>({history:state.orderFlowHistory}))]).then(([d,smc,flow])=>{state.history=d.history||[];state.smcHistory=smc.history||[];state.orderFlowHistory=flow.history||[];state.orderFlowDailyStats=flow.daily_stats||[];renderHistory();renderSMCHistory();renderOrderFlowTrendSummary();renderOrderFlowHistory();}).catch(()=>{
    api("/api/history",{timeoutMs:12000}).then(d=>{state.history=d.history||[];renderHistory();}).catch(()=>{});
    api("/api/smc-history",{timeoutMs:12000}).then(d=>{state.smcHistory=d.history||[];renderSMCHistory();}).catch(()=>{});
-   api("/api/order-flow?limit=200",{timeoutMs:12000}).then(d=>{state.orderFlowHistory=d.history||[];renderOrderFlowHistory();}).catch(()=>{});
+   api("/api/order-flow?limit=200",{timeoutMs:12000}).then(d=>{state.orderFlowHistory=d.history||[];state.orderFlowDailyStats=d.daily_stats||[];renderOrderFlowTrendSummary();renderOrderFlowHistory();}).catch(()=>{});
   });
   api("/api/plans",{timeoutMs:8000}).then(d=>{if(d?.plans){state.plans=d.plans;renderPlans();renderAuthPlans(d.plans);}}).catch(()=>{});
   api("/api/payments/history",{timeoutMs:12000}).then(d=>{state.payments=d.payments||[];renderPayments();}).catch(()=>{});
@@ -1562,7 +1563,7 @@ async function refreshDisplayedSignals(){
   state.signalDelayMinutes=0;
   state.history=historyFeed.history||[];
   state.smcHistory=smcHistoryFeed.history||[];
-  state.orderFlowHistory=orderFlowFeed.history||[];
+  state.orderFlowHistory=orderFlowFeed.history||[];state.orderFlowDailyStats=orderFlowFeed.daily_stats||[];
   state.status=statusFeed;
   state.access=accessFeed;
   setTimerDeadlines(statusFeed);
