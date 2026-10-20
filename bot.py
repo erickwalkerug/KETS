@@ -3693,16 +3693,18 @@ def developer_data():
     return jsonify({"signals":signals,"markets":markets,"users":[dict(x) for x in users],"payments":[dict(x) for x in payments],"database_error":database_error,"community":None})
 
 
+# One subscription price for every customer. Payment amounts are selected
+# server-side from the saved account country, never from client-supplied values.
 PAYMENT_PLANS = {
-    "30_min": {"name": "30 Minutes", "ugx": 10000, "seconds": 30*60},
-    "1_hour": {"name": "1 Hour", "ugx": 30000, "usd": 10, "seconds": 60*60},
-    "1_day": {"name": "1 Day", "ugx": 50000, "usd": 50, "seconds": 24*60*60},
-    "1_week": {"name": "1 Week", "ugx": 400000, "usd": 200, "seconds": 7*24*60*60},
-    "1_month": {"name": "1 Month", "ugx": 2000000, "usd": 500, "seconds": 30*24*60*60},
+    "30_days": {"name": "30 Days", "ugx": 500000, "usd": 150, "seconds": 30*24*60*60},
 }
+# All paid access uses the single 30-day subscription duration. Older payment
+# records with retired plan IDs are also normalized to 30 days; shorter legacy
+# durations are no longer supported anywhere in subscription expiry logic.
 def _subscription_expiry(plan_id, start_iso):
     try:
-        return datetime.datetime.fromisoformat(start_iso) + datetime.timedelta(seconds=PAYMENT_PLANS[plan_id]["seconds"])
+        seconds = PAYMENT_PLANS.get(plan_id, {}).get("seconds", 30*24*60*60)
+        return datetime.datetime.fromisoformat(start_iso) + datetime.timedelta(seconds=seconds)
     except Exception:
         return datetime.datetime.min.replace(tzinfo=datetime.timezone.utc)
 

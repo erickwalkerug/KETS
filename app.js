@@ -120,11 +120,7 @@ function warmBackend(){
  fetch(API_BASE+"/api/health",{cache:"no-store"}).catch(()=>{});
 }
 const BUILTIN_PLANS={
- "30_min":{name:"30 Minutes",ugx:10000,seconds:1800},
- "1_hour":{name:"1 Hour",ugx:30000,usd:10,seconds:3600},
- "1_day":{name:"1 Day",ugx:50000,usd:50,seconds:86400},
- "1_week":{name:"1 Week",ugx:400000,usd:200,seconds:604800},
- "1_month":{name:"1 Month",ugx:2000000,usd:500,seconds:2592000}
+ "30_days":{name:"30 Days",ugx:500000,usd:150,seconds:2592000}
 };
 function renderAuthPlans(plans){
  const targets=["loginPlansGrid","registerPlansGrid"];
