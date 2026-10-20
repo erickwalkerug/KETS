@@ -2561,7 +2561,7 @@ def _ctrader_autotrade_once():
             if previous_direction and last_error_text.startswith("ORDER_FLOW_EXIT_ATTEMPTED_ONCE:"):
                 continue
             # Track the peak Order Flow pressure ratio during this open trade.
-            # Exit after a fall of 0.50 or more from that peak. Auto-Trader is
+            # Exit after a fall of 0.10 or more from that peak. Auto-Trader is
             # switched OFF only after cTrader confirms the automatic position
             # is no longer open.
             peak_pressure_ratio = _num(row.get("auto_entry_pressure_ratio"))
@@ -2571,7 +2571,7 @@ def _ctrader_autotrade_once():
                     with DB_LOCK:
                         conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET auto_entry_pressure_ratio=?,updated_at=? WHERE id=?",(peak_pressure_ratio,_now_iso(),row["id"])); conn.commit(); conn.close()
                     row["auto_entry_pressure_ratio"] = peak_pressure_ratio
-                if flow_ratio <= peak_pressure_ratio - 0.50:
+                if flow_ratio <= peak_pressure_ratio - 0.10:
                     try:
                         _ctrader_close_positions(row, auto_only=True)
                         _record_order_flow_trade_event(auto_symbol, "EXIT", row.get("id"))
