@@ -4058,7 +4058,16 @@ def api_payment_create():
         return jsonify({"error": f"Pesapal connection failed: {exc}"}), 502
 
     if r.status_code >= 400 or not data.get("redirect_url"):
-        return jsonify({"error": data.get("message", "Could not start Pesapal payment")}), 502
+        # Pesapal sometimes returns an error payload without a top-level
+        # `message`. Preserve its useful diagnostic instead of hiding it behind
+        # the generic "Could not start Pesapal payment" message.
+        detail = (data.get("message") or data.get("error_message") or
+                  data.get("error") or data.get("description"))
+        if isinstance(detail, dict):
+            detail = detail.get("message") or detail.get("description") or str(detail)
+        if not detail:
+            detail = json.dumps(data, ensure_ascii=False)[:600] if data else (r.text or "No response body")[:600]
+        return jsonify({"error": f"Pesapal rejected the payment request (HTTP {r.status_code}): {detail}"}), 502
 
     tracking_id = data.get("order_tracking_id")
     with DB_LOCK:
@@ -4163,7 +4172,16 @@ def api_payment_create_public():
         return jsonify({"error": f"Pesapal connection failed: {exc}"}), 502
 
     if r.status_code >= 400 or not data.get("redirect_url"):
-        return jsonify({"error": data.get("message", "Could not start Pesapal payment")}), 502
+        # Pesapal sometimes returns an error payload without a top-level
+        # `message`. Preserve its useful diagnostic instead of hiding it behind
+        # the generic "Could not start Pesapal payment" message.
+        detail = (data.get("message") or data.get("error_message") or
+                  data.get("error") or data.get("description"))
+        if isinstance(detail, dict):
+            detail = detail.get("message") or detail.get("description") or str(detail)
+        if not detail:
+            detail = json.dumps(data, ensure_ascii=False)[:600] if data else (r.text or "No response body")[:600]
+        return jsonify({"error": f"Pesapal rejected the payment request (HTTP {r.status_code}): {detail}"}), 502
 
     tracking_id = data.get("order_tracking_id")
     now = _now_iso()
