@@ -918,6 +918,7 @@ if($("dashboardLiveMarkets")) $("dashboardLiveMarkets").onclick=()=>showPage("li
 if($("dashboardStopLoss")) $("dashboardStopLoss").onclick=()=>showPage("stop");
 if($("dashboardAccessPlans")) $("dashboardAccessPlans").onclick=()=>showPage("plans");
 if($("dashboardPaymentHistory")) $("dashboardPaymentHistory").onclick=()=>showPage("payments");
+if($("dashboardAdminPayments")) $("dashboardAdminPayments").onclick=()=>{location.href="/admin/payments";};
 if($("dashboardManagedTrading")) $("dashboardManagedTrading").onclick=()=>showPage("managed");
 if($("dashboardSMCHistory")) $("dashboardSMCHistory").onclick=()=>showPage("smcHistory");
 async function refreshCTraderStatus(){
