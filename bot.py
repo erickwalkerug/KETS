@@ -151,6 +151,10 @@ def api_diagnostics():
 # Frontend routes. Render's web service must serve the KETS website itself.
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
+@app.route("/admin", methods=["GET"])
+def admin_page():
+    return send_from_directory(BASE_DIR, "admin.html")
+
 @app.route("/", methods=["GET"])
 def index_page():
     return send_from_directory(BASE_DIR, "index.html")
@@ -159,7 +163,7 @@ def index_page():
 def static_files(filename):
     # Only serve known frontend assets; never expose Python/source files.
     allowed = {
-        "styles.css", "app.js", "service-worker.js", "manifest.json",
+        "styles.css", "app.js", "admin.html", "service-worker.js", "manifest.json",
         "icon-192.png", "icon-512.png", "kets-android.apk"
     }
     if filename not in allowed:
@@ -3980,7 +3984,7 @@ def api_access():
 def api_plans():
     return jsonify({
         "plans": {k: {"name":v["name"],"ugx":v["ugx"],"usd":v.get("usd"),"seconds":v["seconds"]} for k,v in PAYMENT_PLANS.items()},
-        "payment_provider":"Pesapal","networks":["MTN","AIRTEL"],"currencies":["UGX","USD"]
+        "payment_provider":"Manual Mobile Money / Bank Transfer","networks":["MTN","AIRTEL","BANK_TRANSFER"],"currencies":["UGX","USD"]
     })
 
 
@@ -4205,6 +4209,84 @@ def api_payment_create_public():
         "redirect_url": data.get("redirect_url"),
         "message": "Payment request created. Continue on the Pesapal payment page.",
     })
+
+@app.route("/api/payments/manual-public", methods=["POST"])
+def api_payment_manual_public():
+    """Record a manual bank/mobile-money payment claim; never grants access itself."""
+    body = request.get_json(silent=True) or {}
+    email = str(body.get("email", "")).strip().lower()
+    plan_id = str(body.get("plan", "30_days")).lower()
+    method = str(body.get("method", "")).upper().strip()
+    reference = str(body.get("reference", "")).strip()
+    phone = str(body.get("phone", "")).strip()
+    if not _valid_email(email):
+        return jsonify({"error": "Enter the email used to create your KETS account."}), 400
+    if plan_id not in PAYMENT_PLANS:
+        return jsonify({"error": "Invalid subscription plan."}), 400
+    if method not in {"BANK_TRANSFER", "MTN", "AIRTEL"}:
+        return jsonify({"error": "Choose a supported manual payment method."}), 400
+    if len(reference) < 3 or len(reference) > 120:
+        return jsonify({"error": "Enter the bank or mobile-money transaction reference."}), 400
+    with DB_LOCK:
+        conn = db_conn()
+        user = db_execute(conn, "SELECT * FROM users WHERE email=? COLLATE NOCASE", (email,)).fetchone()
+        conn.close()
+    if not user:
+        return jsonify({"error": "Create your KETS account first, then submit payment."}), 404
+    is_uganda = str(user["country_code"] or "").upper() == "UG"
+    if is_uganda and method == "BANK_TRANSFER":
+        return jsonify({"error": "Bank transfer is available for international customers only."}), 400
+    if not is_uganda and method in {"MTN", "AIRTEL"}:
+        return jsonify({"error": "MTN/Airtel manual payments are available to Uganda accounts only."}), 400
+    plan = PAYMENT_PLANS[plan_id]
+    currency = "UGX" if is_uganda else "USD"
+    amount = float(plan["ugx"] if is_uganda else plan["usd"])
+    tx_ref = f"KETS-MANUAL-{secrets.token_hex(8)}"
+    now = _now_iso()
+    network = "BANK_TRANSFER" if method == "BANK_TRANSFER" else method
+    # Keep the customer's supplied transaction reference in phone field only as a
+    # fallback-compatible metadata field; tx_ref remains our unique payment ID.
+    with DB_LOCK:
+        conn = db_conn()
+        vals = (str(uuid.uuid4()), user["id"], tx_ref, reference, plan_id, amount,
+                currency, "PENDING_MANUAL", network, email,
+                f"ref:{reference};phone:{phone}", now, now)
+        if using_postgres():
+            db_execute(conn, """INSERT INTO payments(id,user_id,tx_ref,tracking_id,plan,amount,currency,status,network,email,phone,created_at,updated_at)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT (tx_ref) DO NOTHING""", vals)
+        else:
+            db_execute(conn, """INSERT INTO payments(id,user_id,tx_ref,tracking_id,plan,amount,currency,status,network,email,phone,created_at,updated_at)
+                VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""", vals)
+        conn.commit()
+        conn.close()
+    return jsonify({"ok": True, "tx_ref": tx_ref, "status": "PENDING_MANUAL",
+                    "message": "Payment submitted for admin review. Access starts only after approval."})
+
+@app.route("/api/admin/payments/<tx_ref>/decision", methods=["POST"])
+def api_admin_payment_decision(tx_ref):
+    if not _developer_ok():
+        return jsonify({"error": "Admin authentication required."}), 401
+    body = request.get_json(silent=True) or {}
+    decision = str(body.get("decision", "")).upper().strip()
+    if decision not in {"APPROVE", "REJECT"}:
+        return jsonify({"error": "Decision must be APPROVE or REJECT."}), 400
+    now = _now_iso()
+    with DB_LOCK:
+        conn = db_conn()
+        row = db_execute(conn, "SELECT * FROM payments WHERE tx_ref=?", (tx_ref,)).fetchone()
+        if not row:
+            conn.close()
+            return jsonify({"error": "Payment not found."}), 404
+        if row["status"] != "PENDING_MANUAL":
+            conn.close()
+            return jsonify({"error": "Only pending manual payments can be decided."}), 409
+        status = "COMPLETED" if decision == "APPROVE" else "REJECTED"
+        db_execute(conn, "UPDATE payments SET status=?, updated_at=? WHERE tx_ref=? AND status='PENDING_MANUAL'",
+                   (status, now, tx_ref))
+        conn.commit()
+        conn.close()
+    return jsonify({"ok": True, "tx_ref": tx_ref, "status": status,
+                    "message": "Access activated for 30 days." if status == "COMPLETED" else "Payment rejected."})
 
 @app.route("/api/payments/verify", methods=["POST"])
 def api_payment_verify():

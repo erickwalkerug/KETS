@@ -4,20 +4,17 @@ ONE SUBSCRIPTION — 30 DAYS
 Uganda: UGX 500,000
 International clients: USD $150
 
-Access expires 30 days after the payment is confirmed by Pesapal.
+Access expires 30 days after the administrator approves a verified manual payment.
 Country/currency is determined from the account's saved country:
 - Uganda (UG): UGX, with MTN or Airtel mobile money selection.
 - Other countries: USD, international payment through Pesapal.
 
-Pesapal integration:
-- Hosted checkout through Pesapal API 3.0.
+Manual payment workflow:
+- Users submit a bank/mobile-money transaction reference.
 - Server-side amount and currency selection.
 - Access is granted only after the server verifies the transaction status with Pesapal.
-- The callback and IPN endpoints are used to confirm payment; pending/failed payments do not activate access.
-- Render must have PESAPAL_CONSUMER_KEY, PESAPAL_CONSUMER_SECRET, PESAPAL_IPN_ID,
-  PESAPAL_ENVIRONMENT, and KETS_PUBLIC_URL configured correctly.
-- Register https://kets.onrender.com/api/payments/ipn with Pesapal and set the returned
-  IPN ID as PESAPAL_IPN_ID. Confirm the public URL matches the deployed service.
-- Test a Uganda UGX payment and an international USD payment in Pesapal before launch.
+- Pending manual payments do not activate access until admin approval.
+- Configure KETS_DEVELOPER_USERNAME and KETS_DEVELOPER_PASSWORD in Render for the admin approval dashboard.
+- Verify each bank/mobile-money payment manually before approving it.
 
 All paid subscriptions use the single 30-day duration. Retired plan IDs are not offered for new purchases; any existing completed payment record is evaluated using the 30-day duration.

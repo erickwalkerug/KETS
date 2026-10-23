@@ -129,7 +129,7 @@ function renderAuthPlans(plans){
    const entries=Object.entries(plans||{}).filter(([_,p])=>authIsUganda()||p.usd!=null);
    el.innerHTML=entries.length?entries.map(([key,p])=>{
      const cur=authIsUganda()?"UGX":"USD", amount=authIsUganda()?p.ugx:p.usd;
-     return `<div class="plan"><span class="plan-tag">${p.seconds<=3600?"SHORT ACCESS":"SUBSCRIPTION"}</span><h3>${esc(p.name)}</h3><strong>${money(amount,cur)}</strong><span class="payment-maintenance-note">Payments are required for service maintanace</span><span>${cur}</span><button class="primary-btn full" onclick="openAuthPayment('${esc(key)}')">Pay & activate</button></div>`;
+     return `<div class="plan"><span class="plan-tag">${p.seconds<=3600?"SHORT ACCESS":"SUBSCRIPTION"}</span><h3>${esc(p.name)}</h3><strong>${money(amount,cur)}</strong><span class="payment-maintenance-note">Payment required to activate 30-day access</span><span>${cur}</span><button class="primary-btn full" onclick="openAuthPayment('${esc(key)}')">Pay & activate</button></div>`;
    }).join(""):`<div class="empty">No payment plans are currently available.</div>`;
  });
 }
@@ -151,14 +151,18 @@ window.openAuthPayment=async plan=>{
  if(!planData){authMsg("Payment plan unavailable.");return;}
  const abroad=!authIsUganda(),cur=abroad?"USD":"UGX",amt=abroad?planData.usd:planData.ugx;
  const m=document.createElement("div");m.className="modal";
- m.innerHTML=`<div class="modal-box"><button class="close-btn" onclick="this.closest('.modal').remove()">×</button><span class="eyebrow">ACTIVATE SIGN-IN</span><h2>${esc(planData.name)} · ${money(amt,cur)}</h2><p class="muted">Create your account first. Payment is required before normal users can sign in.</p><label>Account email<input id="authPayEmail" type="email" value="${esc(email)}" placeholder="you@example.com"></label>${abroad?`<label>Phone (optional)<input id="authPayPhone" type="tel" placeholder="International phone number"></label><input id="authPayNetwork" type="hidden" value="INTERNATIONAL">`:`<label>Mobile-money phone<input id="authPayPhone" type="tel" placeholder="07XXXXXXXX"></label><label>Network<select id="authPayNetwork"><option value="MTN">MTN</option><option value="AIRTEL">Airtel</option></select></label>`}<button class="primary-btn full" onclick="startAuthPayment('${esc(plan)}')">Continue to Pesapal</button><div id="authPayResult" class="payment-result"></div></div>`;
+ m.innerHTML=`<div class="modal-box"><button class="close-btn" onclick="this.closest('.modal').remove()">×</button><span class="eyebrow">ACTIVATE KETS</span><h2>${esc(planData.name)} · ${money(amt,cur)}</h2><p class="muted">Pay by ${abroad?"international bank transfer":"MTN or Airtel Mobile Money"}. After paying, submit the transaction reference. Access starts only after admin verification and approval.</p><label>Account email<input id="authPayEmail" type="email" value="${esc(email)}" placeholder="you@example.com"></label>${abroad?`<div class="payment-instructions"><strong>Bank transfer account</strong><p>Account number: <strong>9030028492447</strong></p><p>Amount: <strong>${money(amt,cur)}</strong></p></div><input id="authPayMethod" type="hidden" value="BANK_TRANSFER">`:`<div class="payment-instructions"><strong>Mobile Money payment</strong><p>MTN: <strong>256791058183</strong></p><p>Airtel: <strong>256747427556</strong></p><p>Amount: <strong>${money(amt,cur)}</strong></p></div><label>Paid using<select id="authPayMethod"><option value="MTN">MTN Mobile Money</option><option value="AIRTEL">Airtel Money</option></select></label><label>Phone used to pay<input id="authPayPhone" type="tel" placeholder="07XXXXXXXX"></label>`}<label>Transaction reference<input id="authPayReference" placeholder="Enter bank/mobile-money transaction ID"></label><button class="primary-btn full" onclick="submitManualAuthPayment('${esc(plan)}')">Submit payment for approval</button><div id="authPayResult" class="payment-result"></div></div>`;
  document.body.appendChild(m);
 };
-window.startAuthPayment=async plan=>{
- const r=$("authPayResult");r.textContent="Creating secure Pesapal payment…";
+window.submitManualAuthPayment=async plan=>{
+ const r=$("authPayResult"); if(!r)return;
+ r.textContent="Submitting payment for admin review…";
  try{
-  const d=await api("/api/payments/create-public",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({plan,email:$("authPayEmail").value.trim(),phone:$("authPayPhone").value.trim(),network:$("authPayNetwork").value})});
-  location.href=d.redirect_url;
+  const d=await api("/api/payments/manual-public",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+   plan,email:$("authPayEmail").value.trim(),method:$("authPayMethod").value,
+   reference:$("authPayReference").value.trim(),phone:$("authPayPhone")?.value.trim()||""
+  })});
+  r.textContent=`Submitted: ${d.tx_ref}. Access activates after the admin verifies and approves your payment.`;
  }catch(e){r.textContent=e.message;}
 };
 
@@ -808,15 +812,18 @@ function renderStatus(){
 function renderPlans(){
  const abroad=!isUganda();
  const entries=Object.entries(state.plans).filter(([id,p])=>!abroad || p.usd!=null);if($("plansCurrencyLabel"))$("plansCurrencyLabel").textContent=planCurrency();
- $("plansGrid").innerHTML=entries.map(([id,p])=>{const cur=planCurrency(),amt=planAmount(p);return `<div class="plan"><span class="plan-tag">${p.seconds<=3600?"SHORT ACCESS":"SUBSCRIPTION"}</span><h3>${esc(p.name)}</h3><strong>${money(amt,cur)}</strong><span class="payment-maintenance-note">Payments are required for service maintanace</span><span>Pesapal · ${cur}${isUganda()?" · MTN/Airtel where available":" · International payment methods"}</span><button class="primary-btn" onclick="openPayment('${esc(id)}')">Choose plan</button></div>`}).join("");
+ $("plansGrid").innerHTML=entries.map(([id,p])=>{const cur=planCurrency(),amt=planAmount(p);return `<div class="plan"><span class="plan-tag">${p.seconds<=3600?"SHORT ACCESS":"SUBSCRIPTION"}</span><h3>${esc(p.name)}</h3><strong>${money(amt,cur)}</strong><span class="payment-maintenance-note">Payment required to activate 30-day access</span><span>${isUganda()?"MTN / Airtel Mobile Money":"International bank transfer"} · ${cur}</span><button class="primary-btn" onclick="openPayment('${esc(id)}')">Choose plan</button></div>`}).join("");
 }
 window.openPayment=plan=>{
- const p=state.plans[plan], abroad=!isUganda(), cur=planCurrency(), amt=planAmount(p),m=document.createElement("div");m.className="modal";m.innerHTML=`<div class="modal-box"><button class="close-btn" onclick="this.closest('.modal').remove()">×</button><span class="eyebrow">SECURE PAYMENT</span><h2>${esc(p.name)} · ${money(amt,cur)}</h2><p class="muted">Payment email is fixed to your signed-in account.</p><label>Email<input value="${esc(state.user.email)}" disabled></label>${abroad?`<label>Phone (optional)<input id="payPhone" type="tel" placeholder="International phone number"></label><input id="payNetwork" type="hidden" value="INTERNATIONAL">`:`<label>Mobile-money phone<input id="payPhone" type="tel" placeholder="07XXXXXXXX"></label><label>Network<select id="payNetwork"><option value="MTN">MTN</option><option value="AIRTEL">Airtel</option></select></label>`}<button class="primary-btn full" onclick="startPayment('${esc(plan)}')">Continue to Pesapal</button><div id="payResult" class="payment-result"></div></div>`;document.body.appendChild(m);
+ const p=state.plans[plan], abroad=!isUganda(), cur=planCurrency(), amt=planAmount(p),m=document.createElement("div");m.className="modal";
+ m.innerHTML=`<div class="modal-box"><button class="close-btn" onclick="this.closest('.modal').remove()">×</button><span class="eyebrow">KETS PAYMENT</span><h2>${esc(p.name)} · ${money(amt,cur)}</h2><p class="muted">Pay by ${abroad?"international bank transfer":"MTN or Airtel Mobile Money"}. Submit your transaction reference for admin verification.</p><label>Account email<input value="${esc(state.user.email)}" disabled></label>${abroad?`<div class="payment-instructions"><strong>Bank transfer account</strong><p>Account number: <strong>9030028492447</strong></p><p>Amount: <strong>${money(amt,cur)}</strong></p></div><input id="payMethod" type="hidden" value="BANK_TRANSFER">`:`<div class="payment-instructions"><strong>Mobile Money payment</strong><p>MTN: <strong>256791058183</strong></p><p>Airtel: <strong>256747427556</strong></p><p>Amount: <strong>${money(amt,cur)}</strong></p></div><label>Paid using<select id="payMethod"><option value="MTN">MTN Mobile Money</option><option value="AIRTEL">Airtel Money</option></select></label><label>Phone used to pay<input id="payPhone" type="tel" placeholder="07XXXXXXXX"></label>`}<label>Transaction reference<input id="payReference" placeholder="Enter bank/mobile-money transaction ID"></label><button class="primary-btn full" onclick="startPayment('${esc(plan)}')">Submit payment for approval</button><div id="payResult" class="payment-result"></div></div>`;
+ document.body.appendChild(m);
 };
 window.startPayment=async plan=>{
- const r=document.getElementById("payResult");r.textContent="Creating secure Pesapal payment…";
- try{const d=await api("/api/payments/create",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({plan,email:state.user.email,phone:document.getElementById("payPhone").value,network:document.getElementById("payNetwork").value})});r.innerHTML=`Payment created. Opening Pesapal… <small>${esc(d.tx_ref)}</small>`;location.href=d.redirect_url;}catch(e){r.textContent=e.message;}
+ const r=document.getElementById("payResult");r.textContent="Submitting payment for admin review…";
+ try{const d=await api("/api/payments/manual-public",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({plan,email:state.user.email,phone:document.getElementById("payPhone")?.value.trim()||"",method:document.getElementById("payMethod").value,reference:document.getElementById("payReference").value.trim()})});r.textContent=`Submitted: ${d.tx_ref}. Access activates after the admin verifies and approves your payment.`;}catch(e){r.textContent=e.message;}
 };
+
 function openProfile(){
  const u=state.user,m=$("profileModal");m.classList.remove("hidden");m.innerHTML=`<div class="modal-box"><button class="close-btn" onclick="this.classList.add('x');document.getElementById('profileModal').classList.add('hidden')">×</button><span class="eyebrow">ACCOUNT</span><h2>Your profile</h2><label>Full name<input id="editName" value="${esc(u.name||"")}"></label><div id="profileMsg" class="form-message"></div><button class="primary-btn full" id="saveProfile">Save profile</button><button class="danger-btn full" id="logoutBtn">Sign out</button></div>`;
  
