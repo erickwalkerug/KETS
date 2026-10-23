@@ -152,6 +152,7 @@ def api_diagnostics():
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 @app.route("/admin", methods=["GET"])
+@app.route("/admin/payments", methods=["GET"])
 def admin_page():
     return send_from_directory(BASE_DIR, "admin.html")
 

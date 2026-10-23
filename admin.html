@@ -9,13 +9,33 @@ button{padding:11px 14px;border:0;border-radius:8px;cursor:pointer;background:#3
 </style></head><body><main>
 <div class="card"><h1>KETS Admin — Payment Approvals</h1><p>Admin-only controls. Sign in with the deployment admin credentials configured on Render.</p>
 <div id="login"><div class="row"><label>Admin username<input id="username" autocomplete="username"></label><label>Admin password<input id="password" type="password" autocomplete="current-password"></label></div><button onclick="login()">Sign in as admin</button></div>
-<div id="app" class="hidden"><div class="row"><div><h2>Pending manual payments</h2><p class="muted">Verify the transaction in your bank/mobile-money account before approving.</p></div><div style="text-align:right"><button class="secondary" onclick="load()">Refresh payments</button><button class="secondary" onclick="logout()">Sign out</button></div></div><div id="message"></div><div id="payments">Loading…</div></div></div>
+<div id="app" class="hidden"><div class="row"><div><h2>Pending manual payments</h2><p class="muted">Verify the transaction in your bank/mobile-money account before approving. This page refreshes automatically every 8 seconds.</p></div><div style="text-align:right"><button class="secondary" onclick="load()">Refresh payments</button><button class="secondary" onclick="logout()">Sign out</button></div></div><div id="message"></div><div id="dbstatus" class="small"></div><div id="payments">Loading…</div><h2>Recent manual payment requests</h2><div id="recent">Loading…</div></div></div>
 </main><script>
 let token="";
 async function req(url,opts={}){const r=await fetch(url,{...opts,headers:{"Content-Type":"application/json","Authorization":"Bearer "+token,...(opts.headers||{})}});const d=await r.json().catch(()=>({}));if(!r.ok)throw Error(d.error||"Request failed");return d}
-async function login(){const msg=document.getElementById("message");try{const r=await fetch("/api/developer/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({username:document.getElementById("username").value,password:document.getElementById("password").value})});const d=await r.json();if(!r.ok)throw Error(d.error||"Sign in failed");token=d.token;document.getElementById("login").classList.add("hidden");document.getElementById("app").classList.remove("hidden");await load()}catch(e){alert(e.message)}}
-async function load(){const el=document.getElementById("payments");el.textContent="Loading…";try{const d=await req("/api/developer/data");const pending=(d.payments||[]).filter(p=>p.status==="PENDING_MANUAL");if(!pending.length){el.innerHTML="<p>No pending manual payments.</p>";return}el.innerHTML=pending.map(p=>`<div class="payment"><div class="row"><div><strong>${esc(p.email||"Unknown user")}</strong><p>${esc(p.network||"Manual")} · ${esc(p.currency||"")} ${Number(p.amount||0).toLocaleString()}</p><p>Reference: <strong>${esc(p.tracking_id||"")}</strong></p><p class="small">KETS payment ID: ${esc(p.tx_ref||"")} · Submitted ${esc(p.created_at||"")}</p></div><div><span class="status pending">PENDING REVIEW</span><p>Plan: ${esc(p.plan||"30_days")}</p><button onclick="decide('${esc(p.tx_ref)}','APPROVE')">Approve & activate 30 days</button><button class="reject" onclick="decide('${esc(p.tx_ref)}','REJECT')">Reject</button></div></div></div>`).join("")}catch(e){el.textContent=e.message}}
+async function login(){const msg=document.getElementById("message");try{const r=await fetch("/api/developer/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({username:document.getElementById("username").value,password:document.getElementById("password").value})});const d=await r.json();if(!r.ok)throw Error(d.error||"Sign in failed");token=d.token;document.getElementById("login").classList.add("hidden");document.getElementById("app").classList.remove("hidden");await load();if(window.paymentRefreshTimer)clearInterval(window.paymentRefreshTimer);window.paymentRefreshTimer=setInterval(()=>{if(token)load()},8000)}catch(e){alert(e.message)}}
+async function load(){
+ const el=document.getElementById("payments"), recent=document.getElementById("recent"), dbstatus=document.getElementById("dbstatus");
+ el.textContent="Loading pending payments…"; recent.textContent="Loading recent requests…";
+ try{
+  const d=await req("/api/developer/data");
+  if(d.database_error){dbstatus.textContent="Database warning: "+d.database_error;dbstatus.className="bad";}else{dbstatus.textContent="Payment database connected · last refreshed "+new Date().toLocaleTimeString();dbstatus.className="small good";}
+  const all=(d.payments||[]).filter(p=>String(p.network||"").toUpperCase()==="MTN"||String(p.network||"").toUpperCase()==="AIRTEL"||String(p.network||"").toUpperCase()==="BANK_TRANSFER");
+  const pending=all.filter(p=>p.status==="PENDING_MANUAL");
+  if(!pending.length) el.innerHTML="<p>No pending manual payments found in the database.</p>";
+  else el.innerHTML=pending.map(p=>paymentCard(p,true)).join("");
+  if(!all.length) recent.innerHTML="<p>No manual payment requests have been recorded in this database.</p>";
+  else recent.innerHTML=all.slice(0,100).map(p=>paymentCard(p,false)).join("");
+ }catch(e){el.textContent="Could not load payment requests: "+e.message;recent.textContent="Could not load recent requests.";dbstatus.textContent="Check admin credentials, deployment and database connection.";dbstatus.className="bad";}
+}
+function paymentCard(p,actions){
+ const raw=String(p.phone||"");
+ const phone=(raw.match(/(?:^|;)phone:([^;]*)/)||[])[1]||raw;
+ const ref=String(p.tracking_id||"").replace(/^ref:/,"");
+ const statusClass=p.status==="COMPLETED"?"good":p.status==="REJECTED"?"bad":"pending";
+ return `<div class="payment"><div class="row"><div><strong>${esc(p.email||"Unknown user")}</strong><p>${esc(p.network||"Manual")} · ${esc(p.currency||"")} ${Number(p.amount||0).toLocaleString()}</p><p>Transaction reference: <strong>${esc(ref||"Not recorded")}</strong></p><p>Phone used to pay: <strong>${esc(phone||"Not provided")}</strong></p><p class="small">KETS request ID: ${esc(p.tx_ref||"")} · Submitted ${esc(p.created_at||"")}</p></div><div><span class="status ${statusClass}">${esc(p.status||"UNKNOWN")}</span><p>Plan: ${esc(p.plan||"30_days")}</p>${actions?`<button onclick="decide('${esc(p.tx_ref)}','APPROVE')">Approve & activate 30 days</button><button class="reject" onclick="decide('${esc(p.tx_ref)}','REJECT')">Reject</button>`:""}</div></div></div>`;
+}
 async function decide(ref,decision){if(!confirm(decision==="APPROVE"?"Confirm you have verified this payment and activate access for 30 days?":"Reject this payment?"))return;try{const d=await req("/api/admin/payments/"+encodeURIComponent(ref)+"/decision",{method:"POST",body:JSON.stringify({decision})});document.getElementById("message").innerHTML='<p class="good">'+esc(d.message)+'</p>';await load()}catch(e){alert(e.message)}}
-function logout(){token="";document.getElementById("app").classList.add("hidden");document.getElementById("login").classList.remove("hidden")}
+function logout(){token="";if(window.paymentRefreshTimer)clearInterval(window.paymentRefreshTimer);document.getElementById("app").classList.add("hidden");document.getElementById("login").classList.remove("hidden")}
 function esc(v){return String(v??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]))}
 </script></body></html>
