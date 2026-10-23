@@ -577,3 +577,8 @@ button:focus-visible,a:focus-visible{outline:2px solid #9c8aff;outline-offset:3p
 \n/* Keep manual order controls unavailable; automatic trading controls remain intact. */\n.manual-trade-controls{display:none!important}\n.signin-support{margin-top:10px;text-align:center}.signin-support a{color:inherit;text-decoration:underline}\n
 /* User-requested compact Auto Trader view: hide settings from Current KETS Rules through Opposite Signal Confirmation while retaining the underlying controls and trading logic. */
 .hidden-advanced-setting { display: none !important; }
+
+/* Prominent paid-email device-limit message and support contact on sign-in. */
+.paid-email-banner{margin:0 0 20px;padding:16px 14px;border:1px solid #8067ef88;border-radius:15px;background:linear-gradient(135deg,#8b6cff2b,#5e8cff1c);color:#f5f1ff;text-align:center;font-size:clamp(18px,4.5vw,24px);font-weight:950;line-height:1.25;letter-spacing:.5px;box-shadow:0 8px 24px #6d4ee51a}
+.signin-support{display:flex;flex-direction:column;align-items:center;gap:6px;margin:15px 0 18px;text-align:center;color:#a8b5ca;font-size:13px;line-height:1.45}
+.signin-support a{color:#c5b8ff;font-size:clamp(18px,4.5vw,22px);font-weight:900;overflow-wrap:anywhere;text-decoration:underline}
