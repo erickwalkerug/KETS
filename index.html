@@ -14,9 +14,6 @@
 <body>
 <div id="authScreen" class="auth-screen">
   <div class="auth-card">
-<div class="prop-firm-banner auth-prop-firm-banner" role="banner">
-  <span>DESIGNED FOR PROP FIRM TRADERS</span>
-</div>
     <div class="gb-tracking-title">G&amp;B TRACKING SYSTEM</div>
     <div class="logo-lockup"><div><b>KETS</b><span>Market Signal Intelligence</span></div></div>
     <div id="authForms">
@@ -53,7 +50,7 @@
         <label>Country<select id="regCountry"><option value="UG">Uganda</option><option value="OTHER">Other</option></select></label>
         <div class="currency-note" id="currencyNote">Currency: <strong>UGX</strong> · Uganda plans</div>
         <div id="registerMsg" class="form-message" aria-live="polite"></div>
-        <button class="primary-btn full" id="registerBtn">Create account</button>
+        <p class="tiny device-limit-note">Paid accounts can connect up to 10 devices per email address.</p>\n         <button class="primary-btn full" id="registerBtn">Create account</button>
         <div class="auth-plan-box"><div class="auth-plan-title">Payment plans</div><p class="tiny">Creating an account is free. After registration, choose a plan below to activate sign-in access.</p><div class="plans-grid auth-plans-grid" id="registerPlansGrid"><div class="empty">Loading plans...</div></div></div>
       </div>
       <p class="tiny">By continuing, you agree to use KETS responsibly. KETS signals are informational and are not guaranteed win probabilities.</p>
@@ -70,9 +67,6 @@
 <main>
 <div id="dashboardHome">
 <section class="hero-card">
-  <div class="prop-firm-banner dashboard-prop-firm-banner" role="banner">
-    <span>DESIGNED FOR PROP FIRM TRADERS</span>
-  </div>
   <div><div class="gb-tracking-title gb-tracking-title-inside">G&amp;B TRACKING SYSTEM</div><span class="eyebrow">PRIVATE SIGNAL DASHBOARD</span><h1>Early market signals.<br><em>Simple. Fast. Focused.</em></h1>
   <p>Real-time KETS intelligence with live signal updates for every signed-in account.</p>
   <div class="welcome-tech">WELCOME TO THE WORLD OF TECHNOLOGY</div><p class="kets-tagline dashboard-tagline">Stop chasing Bitcoin and Gold with KETS. KETS helps you reduce trading losses and trade with confidence. KETS enables you see the future.</p>
@@ -167,6 +161,7 @@
   <section class="managed-grid">
     <article class="panel managed-balance-card">
       <div class="panel-title"><h3>Trading account</h3><span class="status-pill" id="managedConnectionStatus">NOT CONNECTED</span></div>
+      <div class="managed-currency-row"><label for="managedCurrencySelect">Display currency</label><select id="managedCurrencySelect"><option value="UGX" selected>UGX · Ugandan shillings</option><option value="USD">USD · US dollars</option></select><span id="managedExchangeRateNote" class="tiny">Loading current USD/UGX rate…</span></div>
       <div class="managed-balance"><span>Current cTrader balance</span><strong id="managedBalance">--</strong></div>
       <div class="managed-mini-grid">
         <div><span>Equity</span><b id="managedEquity">--</b></div>

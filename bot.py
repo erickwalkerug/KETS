@@ -1410,6 +1410,37 @@ def api_login():
             "payment_required": True,
             "plans_url": "/api/plans",
         }), 402
+
+    # Enforce a maximum of ten distinct browser/device IDs for each paid email.
+    # The device ID is generated client-side and stored locally; it is not a
+    # hardware fingerprint. Reusing the same browser storage counts as one device.
+    device_id = str(body.get("device_id") or "").strip()[:160]
+    if not device_id:
+        return jsonify({"error":"Could not identify this device. Refresh the page and try again."}), 400
+    try:
+        with DB_LOCK:
+            conn = db_conn()
+            db_execute(conn, """CREATE TABLE IF NOT EXISTS user_devices (
+                user_id TEXT NOT NULL, device_id TEXT NOT NULL, first_seen TEXT NOT NULL,
+                last_seen TEXT NOT NULL, PRIMARY KEY(user_id, device_id)
+            )""")
+            existing = db_execute(conn, "SELECT 1 FROM user_devices WHERE user_id=? AND device_id=?", (row["id"],device_id)).fetchone()
+            if not existing:
+                count_row = db_execute(conn, "SELECT COUNT(*) AS n FROM user_devices WHERE user_id=?", (row["id"],)).fetchone()
+                device_count = int(count_row["n"] if count_row else 0)
+                if device_count >= 10:
+                    conn.close()
+                    return jsonify({"error":"This paid email has reached its 10-device limit. Sign in using one of your already connected devices, or contact KETS support to reset a device."}), 403
+                now_device = _now_iso()
+                db_execute(conn, "INSERT INTO user_devices(user_id,device_id,first_seen,last_seen) VALUES(?,?,?,?)", (row["id"],device_id,now_device,now_device))
+            else:
+                db_execute(conn, "UPDATE user_devices SET last_seen=? WHERE user_id=? AND device_id=?", (_now_iso(),row["id"],device_id))
+            conn.commit()
+            conn.close()
+    except Exception:
+        app.logger.exception("KETS device-limit check failed")
+        return jsonify({"error":"Device limit could not be verified. Please try again shortly."}), 503
+
     return _auth_json({"ok": True, "token": _user_token(row["id"]), "user": _safe_user(row), "access": access})
 
 @app.route("/api/auth/me")
@@ -1526,6 +1557,42 @@ def managed_toggle():
     if enabled:
         Thread(target=_ctrader_autotrade_once, daemon=True, name="kets-ctrader-immediate-check").start()
     return jsonify({"ok":True,"auto_enabled":enabled})
+
+# Live USD/UGX exchange-rate endpoint. The rate is cached for one hour to
+# avoid unnecessary external requests and reduce free-tier resource usage.
+_USD_UGX_RATE_CACHE = {"rate": None, "updated_at": 0, "source": ""}
+_USD_UGX_RATE_LOCK = Lock()
+
+@app.route("/api/exchange-rate/usd-ugx")
+def exchange_rate_usd_ugx():
+    now = time.time()
+    with _USD_UGX_RATE_LOCK:
+        if _USD_UGX_RATE_CACHE["rate"] and now - _USD_UGX_RATE_CACHE["updated_at"] < 3600:
+            return jsonify({"base":"USD","target":"UGX","rate":_USD_UGX_RATE_CACHE["rate"],
+                            "updated_at":datetime.datetime.fromtimestamp(_USD_UGX_RATE_CACHE["updated_at"], datetime.timezone.utc).isoformat(),
+                            "source":_USD_UGX_RATE_CACHE["source"],"cached":True})
+    try:
+        response = requests.get("https://open.er-api.com/v6/latest/USD", timeout=5)
+        response.raise_for_status()
+        payload = response.json()
+        rate = float((payload.get("rates") or {}).get("UGX") or 0)
+        if payload.get("result") != "success" or not math.isfinite(rate) or rate <= 0:
+            raise ValueError("Exchange-rate provider returned no valid USD/UGX rate.")
+        updated = time.time()
+        with _USD_UGX_RATE_LOCK:
+            _USD_UGX_RATE_CACHE.update({"rate":rate,"updated_at":updated,"source":"open.er-api.com"})
+        return jsonify({"base":"USD","target":"UGX","rate":rate,
+                        "updated_at":datetime.datetime.fromtimestamp(updated, datetime.timezone.utc).isoformat(),
+                        "source":"open.er-api.com","cached":False})
+    except Exception as exc:
+        with _USD_UGX_RATE_LOCK:
+            cached_rate = _USD_UGX_RATE_CACHE.get("rate")
+            cached_time = _USD_UGX_RATE_CACHE.get("updated_at") or 0
+        if cached_rate:
+            return jsonify({"base":"USD","target":"UGX","rate":cached_rate,
+                            "updated_at":datetime.datetime.fromtimestamp(cached_time, datetime.timezone.utc).isoformat(),
+                            "source":_USD_UGX_RATE_CACHE["source"],"cached":True,"stale":True})
+        return jsonify({"error":"Live exchange rate is temporarily unavailable.","detail":str(exc)[:160]}), 503
 
 @app.route("/api/managed/status")
 def managed_status():

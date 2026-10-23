@@ -567,3 +567,10 @@ button:focus-visible,a:focus-visible{outline:2px solid #9c8aff;outline-offset:3p
 
 /* User-requested UI removals: preserve existing trading logic and element IDs. */
 #autoTraderBtn, #autoTraderPage, .manual-trade-controls, label:has(#managedProfitTarget) { display: none !important; }
+
+/* Currency display selector and device-limit notice */
+.managed-currency-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:10px 0 16px;padding:10px 12px;border:1px solid var(--line,#243449);border-radius:12px}
+.managed-currency-row label{font-size:.85rem;font-weight:700}
+.managed-currency-row select{max-width:100%;padding:8px 10px;border-radius:8px;background:var(--panel,#0d1a2b);color:inherit;border:1px solid var(--line,#243449)}
+.managed-currency-row #managedExchangeRateNote{flex-basis:100%}
+.device-limit-note{margin:10px 0;padding:9px 11px;border-radius:9px;background:rgba(80,150,220,.09);border:1px solid rgba(80,150,220,.25)}

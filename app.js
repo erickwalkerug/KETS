@@ -4,7 +4,7 @@ const hashToken=freshHash.get("login")||"";
 const storedToken=sessionStorage.getItem("kets_user_token")||"";
 const initialToken=hashToken||storedToken;
 if(hashToken)sessionStorage.setItem("kets_user_token",hashToken);
-const state={token:initialToken,user:null,access:null,signals:{},history:[],smcHistory:[],orderFlowHistory:[],orderFlowDailyStats:[],payments:[],status:{},plans:{},clockOffsetMs:0,signalWindowDeadlineMs:0,nextBroadcastDeadlineMs:0,nextRefreshDeadlineMs:0,welcomeWindowDeadlineMs:0,welcomeClockOffsetMs:0,welcomeRefreshDeadlineMs:0,welcomeWindowMode:"OUTSIDE_HOURS",loading:false,refreshInProgress:false};
+const state={token:initialToken,user:null,access:null,signals:{},history:[],smcHistory:[],orderFlowHistory:[],orderFlowDailyStats:[],payments:[],status:{},plans:{},clockOffsetMs:0,signalWindowDeadlineMs:0,nextBroadcastDeadlineMs:0,nextRefreshDeadlineMs:0,welcomeWindowDeadlineMs:0,welcomeClockOffsetMs:0,welcomeRefreshDeadlineMs:0,welcomeWindowMode:"OUTSIDE_HOURS",loading:false,refreshInProgress:false,usdUgxRate:null,usdUgxUpdatedAt:null};
 const $=id=>document.getElementById(id);
 function headers(extra={}){return {Accept:"application/json",...(state.token?{Authorization:`Bearer ${state.token}`}:{}) ,...extra};}
 async function api(path,opts={}){
@@ -282,6 +282,11 @@ function authMsg(t,bad=true, target="loginMsg"){
 }
 async function finishLogin(d){state.token=d.token;sessionStorage.setItem("kets_user_token",d.token);state.user=d.user;if(d.user?.admin||d.user?.role==="admin"){location.href="/admin/payments";return;}showApp();await loadAll();}
 let loginInProgress=false;
+function getKetsDeviceId(){
+ let id=localStorage.getItem("kets_device_id");
+ if(!id){id=(crypto?.randomUUID?crypto.randomUUID():("kets-"+Date.now().toString(36)+"-"+Math.random().toString(36).slice(2)+Math.random().toString(36).slice(2)));localStorage.setItem("kets_device_id",id);}
+ return id;
+}
 async function login(){
  if(loginInProgress)return;
  const btn=$("loginBtn");
@@ -292,7 +297,7 @@ async function login(){
  if(btn){btn.disabled=true;btn.dataset.originalText=btn.textContent;btn.textContent="Signing in…";}
  authMsg("Connecting securely to KETS…",false,"loginMsg");
  try{
-  const d=await api("/api/auth/login",{method:"POST",timeoutMs:60000,headers:{"Content-Type":"application/json"},body:JSON.stringify({email,password})});
+  const d=await api("/api/auth/login",{method:"POST",timeoutMs:60000,headers:{"Content-Type":"application/json"},body:JSON.stringify({email,password,device_id:getKetsDeviceId()})});
   await finishLogin(d);
  }catch(e){
   const msg=String(e.message||"Sign-in failed.");
@@ -976,6 +981,36 @@ function setManagedActionMessage(text,type=""){
  const el=$("managedActionMessage"); if(!el)return;
  el.textContent=text||""; el.className="managed-action-message"+(type?` ${type}`:"");
 }
+function selectedManagedCurrency(){
+ const el=$("managedCurrencySelect");
+ const saved=localStorage.getItem("kets_managed_currency");
+ const value=(el?.value||saved||"UGX").toUpperCase();
+ return value==="USD"?"USD":"UGX";
+}
+function convertManagedValue(value,sourceCurrency,targetCurrency){
+ const n=Number(value); if(!Number.isFinite(n)) return null;
+ const src=String(sourceCurrency||"USD").toUpperCase(), dst=String(targetCurrency||"UGX").toUpperCase();
+ if(src===dst) return n;
+ const rate=Number(state.usdUgxRate);
+ if(!Number.isFinite(rate)||rate<=0) return null;
+ if(src==="USD"&&dst==="UGX") return n*rate;
+ if(src==="UGX"&&dst==="USD") return n/rate;
+ return null;
+}
+async function refreshManagedExchangeRate(){
+ const note=$("managedExchangeRateNote");
+ try{
+  const d=await api("/api/exchange-rate/usd-ugx",{timeoutMs:7000});
+  if(Number(d.rate)>0){state.usdUgxRate=Number(d.rate);state.usdUgxUpdatedAt=d.updated_at||null;}
+  if(note&&state.usdUgxRate) {
+   const updated=state.usdUgxUpdatedAt?new Date(state.usdUgxUpdatedAt).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"}):"";
+   note.textContent=`Live USD/UGX: 1 USD = UGX ${Number(state.usdUgxRate).toLocaleString(undefined,{maximumFractionDigits:2})}${updated?" · checked "+updated:""}${d.stale?" · using last saved rate":""}`;
+  }
+  if(typeof refreshManagedStatus==="function") refreshManagedStatus();
+ }catch(e){
+  if(note)note.textContent="Live exchange rate unavailable. Values will remain in the account currency until the rate loads.";
+ }
+}
 function renderManagedMoney(id,value,currency="USD"){
  const el=$(id); if(!el)return;
  const n=Number(value); el.textContent=Number.isFinite(n)?money(n,currency):"--";
@@ -1008,7 +1043,7 @@ if($("disconnectCTraderBtn")) $("disconnectCTraderBtn").onclick=async()=>{
 async function refreshManagedStatus(){
  try{
   const d=await api("/api/managed/status",{timeoutMs:8000});
-  const connected=!!d.connected, enabled=!!d.auto_enabled, currency=String(d.currency||"USD").toUpperCase();
+  const connected=!!d.connected, enabled=!!d.auto_enabled, sourceCurrency=String(d.currency||"USD").toUpperCase(), currency=state.usdUgxRate?selectedManagedCurrency():sourceCurrency;
   if($("managedConnectionStatus"))$("managedConnectionStatus").textContent=d.status||"NOT CONNECTED";
   if($("managedAutoTrade")){ $("managedAutoTrade").disabled=!connected; $("managedAutoTrade").checked=enabled; }
   if($("autoTradeSymbol")){ $("autoTradeSymbol").disabled=!connected; if(document.activeElement!==$("autoTradeSymbol")) $("autoTradeSymbol").value=String(d.auto_symbol||"XAUUSD").toUpperCase(); }
@@ -1026,12 +1061,12 @@ async function refreshManagedStatus(){
   if($("manualBuyBtn"))$("manualBuyBtn").disabled=!connected;
   if($("manualSellBtn"))$("manualSellBtn").disabled=!connected;
   if($("manualCloseAllBtn"))$("manualCloseAllBtn").disabled=!connected;
-  renderManagedMoney("managedBalance",d.balance,currency);
-  renderManagedMoney("managedEquity",d.equity,currency);
-  renderManagedMoney("managedTodayPnl",d.today_pnl,currency);
-  renderManagedMoney("managedUnrealizedPnl",d.unrealized_pnl,currency);
-  renderManagedMoney("managedRealizedPnl",d.realized_pnl,currency);
-  renderManagedMoney("managedFreeMargin",d.free_margin,currency);
+  renderManagedMoney("managedBalance",convertManagedValue(d.balance,sourceCurrency,currency),currency);
+  renderManagedMoney("managedEquity",convertManagedValue(d.equity,sourceCurrency,currency),currency);
+  renderManagedMoney("managedTodayPnl",convertManagedValue(d.today_pnl,sourceCurrency,currency),currency);
+  renderManagedMoney("managedUnrealizedPnl",convertManagedValue(d.unrealized_pnl,sourceCurrency,currency),currency);
+  renderManagedMoney("managedRealizedPnl",convertManagedValue(d.realized_pnl,sourceCurrency,currency),currency);
+  renderManagedMoney("managedFreeMargin",convertManagedValue(d.free_margin,sourceCurrency,currency),currency);
   if($("managedOpenTrades"))$("managedOpenTrades").textContent=String((d.positions||[]).length);
   if($("managedConnectionNote")){
     $("managedConnectionNote").textContent=d.last_error
@@ -1598,6 +1633,19 @@ async function refreshDisplayedSignals(){
 // even when an API request takes longer than 10 seconds.
 setInterval(tickTimers,TIMER_MS);
 setInterval(tickWelcomePreview,TIMER_MS);
+
+// Currency is presentation-only: cTrader order/account values are never modified.
+const managedCurrencySelect=$("managedCurrencySelect");
+if(managedCurrencySelect){
+ const savedCurrency=localStorage.getItem("kets_managed_currency");
+ managedCurrencySelect.value=savedCurrency==="USD"?"USD":"UGX";
+ managedCurrencySelect.addEventListener("change",()=>{
+  localStorage.setItem("kets_managed_currency",managedCurrencySelect.value);
+  refreshManagedStatus();
+ });
+}
+refreshManagedExchangeRate();
+setInterval(refreshManagedExchangeRate,60*60*1000);
 
 if("serviceWorker" in navigator){navigator.serviceWorker.register("/service-worker.js").catch(()=>{});}
 
