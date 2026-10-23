@@ -24,6 +24,7 @@
         <label>Password<input id="loginPassword" type="password" autocomplete="current-password" placeholder="At least 8 characters"></label>
         <div id="loginMsg" class="form-message" aria-live="polite"></div>
         <button class="primary-btn full" id="loginBtn">Sign in</button>
+        <p class="tiny signin-support">Need help? Contact KETS support: <a href="mailto:kets2026ug@gmail.com">kets2026ug@gmail.com</a></p>
         <p class="kets-tagline">Stop chasing Bitcoin and Gold with KETS. KETS helps you reduce trading losses and trade with confidence. KETS enables you see the future.</p>        <section class="welcome-signal-preview" aria-label="KETS public signal preview">
           <div class="welcome-preview-head">
             <div><span class="eyebrow">LIVE SIGNAL WINDOW</span><h2>Signal window</h2></div>
@@ -50,7 +51,8 @@
         <label>Country<select id="regCountry"><option value="UG">Uganda</option><option value="OTHER">Other</option></select></label>
         <div class="currency-note" id="currencyNote">Currency: <strong>UGX</strong> · Uganda plans</div>
         <div id="registerMsg" class="form-message" aria-live="polite"></div>
-        <p class="tiny device-limit-note">Paid accounts can connect up to 10 devices per email address.</p>\n         <button class="primary-btn full" id="registerBtn">Create account</button>
+        <p class="tiny device-limit-note">A paid email can connect up to 10 devices. The 10-device limit applies per paid email address.</p>
+        <button class="primary-btn full" id="registerBtn">Create account</button>
         <div class="auth-plan-box"><div class="auth-plan-title">Payment plans</div><p class="tiny">Creating an account is free. After registration, choose a plan below to activate sign-in access.</p><div class="plans-grid auth-plans-grid" id="registerPlansGrid"><div class="empty">Loading plans...</div></div></div>
       </div>
       <p class="tiny">By continuing, you agree to use KETS responsibly. KETS signals are informational and are not guaranteed win probabilities.</p>
@@ -180,7 +182,7 @@
       <label>Selected lot size <input id="managedLotSize" type="number" min="0.01" max="10" step="0.01" value="0.01" inputmode="decimal"></label>
       <label>Maximum open trades <select id="managedMaxTrades" disabled title="Not used by Current KETS auto-trade rules"><option>1</option><option>2</option><option>3</option></select></label>
       <label>Minimum entry quality <select id="managedMinQuality" disabled title="Not used by Current KETS auto-trade rules"><option value="40" selected>40 / 100 — Low-risk eligible</option><option value="50">50 / 100</option><option value="60">60 / 100</option><option value="70">70 / 100</option><option value="85">85 / 100</option></select></label>
-      <label>Target profit total <input id="managedProfitTarget" type="number" min="0" step="1" value="25" inputmode="decimal"></label>
+      <input id="managedProfitTarget" type="hidden" value="25">
       <div class="managed-toggle-row"><div><strong>Automatic entries &amp; exits</strong><small>Choose the market below, then tap the switch to turn automatic trading ON or OFF.</small></div><label class="switch" title="Turn automatic trading on or off"><input id="managedAutoTrade" type="checkbox" disabled><span></span></label></div>
       <label class="auto-trade-symbol-label">Auto-trade symbol<select id="autoTradeSymbol" disabled><option value="XAUUSD">XAU/USD</option><option value="BTCUSD">BTC/USD</option></select></label>
       <div class="auto-trade-controls">
@@ -207,12 +209,12 @@
         </div>
         <p class="tiny">Manual orders use the lot size entered here. Automatic entries use the separate Selected lot size above. Optional SL/TP can be entered before placing the order.</p>
       </div>
-      <div class="managed-toggle-row"><div><strong>Current KETS rules</strong><small>Auto-trade uses Signal History BUY/SELL directions, exits on the opposite signal unless Opposite Signal Confirmation is ON, ignores repeated same-direction signals, and follows Target profit total. Quality/strong-reversal filters do not control auto-trade.</small></div><label class="switch"><input id="managedStrongOnly" type="checkbox" disabled><span></span></label></div>
-      <div class="managed-toggle-row stability-requirement-row"><div><strong>Low Stability Entry</strong><small>When ON, Auto-Trade may enter when the current KETS stability state is LOW STABILITY.</small></div><label class="switch"><input id="managedLowStability" type="checkbox"><span></span></label></div>
-      <div class="managed-toggle-row stability-requirement-row"><div><strong>High Stability Entry</strong><small>When ON, Auto-Trade may enter when the current KETS stability state is HIGH STABILITY.</small></div><label class="switch"><input id="managedHighStability" type="checkbox"><span></span></label></div>
-      <p class="tiny stability-requirement-note">Stability is an optional Auto-Trade entry requirement. If both are OFF, stability does not restrict entries. If both are ON, either stability state is allowed.</p>
-      <div class="managed-toggle-row stability-requirement-row opposite-confirmation-row"><div><strong>Opposite Signal Confirmation</strong><small>When ON, KETS will not reverse immediately. The first opposite BUY/SELL signal is held as a pending confirmation; a second distinct opposite signal closes the current automatic trade and enters the new direction.</small></div><label class="switch"><input id="managedOppositeConfirmation" type="checkbox"><span></span></label></div>
-      <p class="tiny stability-requirement-note">Example: SELL → first BUY = HOLD SELL → second BUY = CLOSE SELL + ENTER BUY. The same rule applies in reverse.</p>
+      <div class="managed-toggle-row hidden-advanced-setting"><div><strong>Current KETS rules</strong><small>Auto-trade uses Signal History BUY/SELL directions, exits on the opposite signal unless Opposite Signal Confirmation is ON, ignores repeated same-direction signals, and follows Target profit total. Quality/strong-reversal filters do not control auto-trade.</small></div><label class="switch"><input id="managedStrongOnly" type="checkbox" disabled><span></span></label></div>
+      <div class="managed-toggle-row stability-requirement-row hidden-advanced-setting"><div><strong>Low Stability Entry</strong><small>When ON, Auto-Trade may enter when the current KETS stability state is LOW STABILITY.</small></div><label class="switch"><input id="managedLowStability" type="checkbox"><span></span></label></div>
+      <div class="managed-toggle-row stability-requirement-row hidden-advanced-setting"><div><strong>High Stability Entry</strong><small>When ON, Auto-Trade may enter when the current KETS stability state is HIGH STABILITY.</small></div><label class="switch"><input id="managedHighStability" type="checkbox"><span></span></label></div>
+      <p class="tiny stability-requirement-note hidden-advanced-setting">Stability is an optional Auto-Trade entry requirement. If both are OFF, stability does not restrict entries. If both are ON, either stability state is allowed.</p>
+      <div class="managed-toggle-row stability-requirement-row opposite-confirmation-row hidden-advanced-setting"><div><strong>Opposite Signal Confirmation</strong><small>When ON, KETS will not reverse immediately. The first opposite BUY/SELL signal is held as a pending confirmation; a second distinct opposite signal closes the current automatic trade and enters the new direction.</small></div><label class="switch"><input id="managedOppositeConfirmation" type="checkbox"><span></span></label></div>
+      <p class="tiny stability-requirement-note hidden-advanced-setting">Example: SELL → first BUY = HOLD SELL → second BUY = CLOSE SELL + ENTER BUY. The same rule applies in reverse.</p>
       <button class="primary-btn full" id="saveManagedSettings">Save trading settings</button>
       <p class="tiny">Target profit total stops new automatic entries when the current Auto-Trade run reaches the amount. It is not a profit guarantee; actual P/L depends on market conditions, lot size, spread, slippage and broker execution.</p>
       <div class="managed-action-row"><button class="ghost-btn" id="managedDepositBtn">View deposit instructions</button><button class="ghost-btn" id="managedWithdrawBtn">Withdraw profits</button></div>

@@ -574,3 +574,6 @@ button:focus-visible,a:focus-visible{outline:2px solid #9c8aff;outline-offset:3p
 .managed-currency-row select{max-width:100%;padding:8px 10px;border-radius:8px;background:var(--panel,#0d1a2b);color:inherit;border:1px solid var(--line,#243449)}
 .managed-currency-row #managedExchangeRateNote{flex-basis:100%}
 .device-limit-note{margin:10px 0;padding:9px 11px;border-radius:9px;background:rgba(80,150,220,.09);border:1px solid rgba(80,150,220,.25)}
+\n/* Keep manual order controls unavailable; automatic trading controls remain intact. */\n.manual-trade-controls{display:none!important}\n.signin-support{margin-top:10px;text-align:center}.signin-support a{color:inherit;text-decoration:underline}\n
+/* User-requested compact Auto Trader view: hide settings from Current KETS Rules through Opposite Signal Confirmation while retaining the underlying controls and trading logic. */
+.hidden-advanced-setting { display: none !important; }
