@@ -13,7 +13,30 @@ button{padding:11px 14px;border:0;border-radius:8px;cursor:pointer;background:#3
 </main><script>
 let token=sessionStorage.getItem("kets_user_token")||"";
 async function req(url,opts={}){const r=await fetch(url,{...opts,headers:{"Content-Type":"application/json","Authorization":"Bearer "+token,...(opts.headers||{})}});const d=await r.json().catch(()=>({}));if(!r.ok)throw Error(d.error||"Request failed");return d}
-async function login(){const msg=document.getElementById("message");try{const r=await fetch("/api/developer/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({username:document.getElementById("username").value,password:document.getElementById("password").value})});const d=await r.json();if(!r.ok)throw Error(d.error||"Sign in failed");token=d.token;document.getElementById("login").classList.add("hidden");document.getElementById("app").classList.remove("hidden");await load();if(window.paymentRefreshTimer)clearInterval(window.paymentRefreshTimer);window.paymentRefreshTimer=setInterval(()=>{if(token)load()},8000)}catch(e){alert(e.message)}}
+async function login(){
+ const username=document.getElementById("username").value.trim();
+ const password=document.getElementById("password").value;
+ try{
+  // First authenticate the named admin through the same account login used by the main KETS page.
+  let r=await fetch("/api/auth/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({email:username,password})});
+  let d=await r.json().catch(()=>({}));
+  if(r.ok && (d.user?.admin===true || d.user?.role==="admin")){
+   token=d.token;
+  }else{
+   // Keep compatibility with deployments that use separate developer credentials.
+   r=await fetch("/api/developer/login",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({username,password})});
+   d=await r.json().catch(()=>({}));
+   if(!r.ok)throw Error(d.error||"Sign in failed. Use the authorized admin account email and its account password.");
+   token=d.token;
+  }
+  sessionStorage.setItem("kets_user_token",token);
+  document.getElementById("login").classList.add("hidden");
+  document.getElementById("app").classList.remove("hidden");
+  await load();
+  if(window.paymentRefreshTimer)clearInterval(window.paymentRefreshTimer);
+  window.paymentRefreshTimer=setInterval(()=>{if(token)load()},8000);
+ }catch(e){alert(e.message)}
+}
 async function load(){
  const el=document.getElementById("payments"), recent=document.getElementById("recent"), dbstatus=document.getElementById("dbstatus");
  el.textContent="Loading pending payments…"; recent.textContent="Loading recent requests…";
