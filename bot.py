@@ -1392,6 +1392,17 @@ def api_login():
     if not row["password_hash"] or not _check_password(password, row["password_hash"]):
         return jsonify({"error": "Email or password is incorrect."}), 401
 
+    # The named admin signs in through the same KETS login form. The role is
+    # granted server-side only after checking the stored account password; the
+    # email alone never grants access. Admin access does not require a paid plan.
+    admin_email = os.environ.get("KETS_ADMIN_EMAIL", "erickwalkerug@gmail.com").strip().lower()
+    if email == admin_email:
+        token = _auth_serializer().dumps({"developer": True, "admin": True, "nonce": secrets.token_urlsafe(12)})
+        admin_user = _safe_user(row)
+        admin_user.update({"role": "admin", "admin": True})
+        return _auth_json({"ok": True, "token": token, "user": admin_user,
+                           "access": {"plan": "admin", "expires": None, "admin": True}})
+
     access = _user_access(row["id"])
     if not access:
         return jsonify({

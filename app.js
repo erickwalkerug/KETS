@@ -280,7 +280,7 @@ function authMsg(t,bad=true, target="loginMsg"){
  el.textContent=t;
  el.className="form-message "+(bad?"error":"ok");
 }
-async function finishLogin(d){state.token=d.token;sessionStorage.setItem("kets_user_token",d.token);state.user=d.user;showApp();await loadAll();}
+async function finishLogin(d){state.token=d.token;sessionStorage.setItem("kets_user_token",d.token);state.user=d.user;if(d.user?.admin||d.user?.role==="admin"){location.href="/admin/payments";return;}showApp();await loadAll();}
 let loginInProgress=false;
 async function login(){
  if(loginInProgress)return;
