@@ -280,7 +280,16 @@ function authMsg(t,bad=true, target="loginMsg"){
  el.textContent=t;
  el.className="form-message "+(bad?"error":"ok");
 }
-async function finishLogin(d){state.token=d.token;sessionStorage.setItem("kets_user_token",d.token);state.user=d.user;if(d.user?.admin||d.user?.role==="admin"){location.href="/admin/payments";return;}showApp();await loadAll();}
+async function finishLogin(d){
+ // Keep the authenticated session and open the private dashboard after successful sign-in.
+ const token=d?.token||d?.access_token||d?.accessToken||d?.session_token||"";
+ if(!token) throw Error("Sign-in succeeded but the server did not return a session token. Please try again or contact KETS support.");
+ state.token=token;
+ sessionStorage.setItem("kets_user_token",token);
+ state.user=d.user||null;
+ authMsg("Sign-in successful. Opening your KETS dashboard…",false,"loginMsg");
+ await loadAll();
+}
 let loginInProgress=false;
 function getKetsDeviceId(){
  let id=localStorage.getItem("kets_device_id");
@@ -1589,7 +1598,7 @@ if($("registerBtn")) $("registerBtn").onclick=register;
 
 const q=new URLSearchParams(location.search);if(q.get("payment")==="success")history.replaceState({},document.title,location.pathname+location.search);
 state.nextRefreshDeadlineMs=serverNowMs()+REFRESH_MS;
-if(state.token)loadAll();else showAuth("login");
+if(state.token){loadAll();}else showAuth("login");
 handleHistoryRoute();
 async function refreshDisplayedSignals(){
  if(!state.token||$("app")?.classList.contains("hidden")||state.loading||state.refreshInProgress)return;
