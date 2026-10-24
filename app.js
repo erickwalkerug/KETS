@@ -268,6 +268,7 @@ async function loadWelcomePreview(){
 }
 function showAuth(tab="login"){
  $("authScreen").classList.remove("hidden");$("app").classList.add("hidden");
+ try { window.scrollTo({top:0,left:0,behavior:"auto"}); } catch (_) { window.scrollTo(0,0); }
  document.querySelectorAll(".tab").forEach(b=>b.classList.toggle("active",b.dataset.tab===tab));
  $("loginForm").classList.toggle("hidden",tab!=="login");$("registerForm").classList.toggle("hidden",tab!=="register"); loadAuthPlans();
  state.welcomeRefreshDeadlineMs=0;
