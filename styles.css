@@ -648,295 +648,110 @@ body::before{display:none!important}
 }
 
 
-/* KETS CLEAR-GLASS FINAL OVERRIDES — zero-fill surfaces; the photo remains visible. */
+/* KETS glass-background redesign: mobile-first, photo visible, translucent controls. */
 :root{
-  --clear-border:rgba(245,249,255,.78);
-  --clear-border-soft:rgba(225,239,255,.52);
-  --clear-text-shadow:0 2px 7px rgba(0,0,0,.82),0 1px 18px rgba(0,0,0,.45);
+  --glass-line:rgba(174,211,255,.52);
+  --glass-fill:rgba(10,25,47,.34);
+  --glass-fill-strong:rgba(7,17,34,.54);
+  --glass-blur:16px;
 }
-html{min-height:100%;background:#07111f!important}
+html,body{min-height:100%;background-color:#07111f!important}
 body{
-  position:relative!important;
-  isolation:isolate!important;
-  min-height:100vh!important;
-  color:#fff!important;
-  background:transparent!important;
-  background-image:none!important;
-}
-body::before{
-  content:"";
-  position:fixed;
-  inset:0;
-  z-index:-1;
-  pointer-events:none;
-  background-image:url('/eric-investments-background.png?v=20261024clearfinal')!important;
-  background-position:center 24%!important;
+  background-image:
+    linear-gradient(120deg,rgba(3,10,25,.22),rgba(3,10,25,.12) 48%,rgba(3,10,25,.28)),
+    url('/eric-investments-background.png?v=20261024glass')!important;
+  background-position:center 28%!important;
   background-size:cover!important;
   background-repeat:no-repeat!important;
-}
-body::after{content:none!important;display:none!important}
-
-/* Every main page surface is genuinely transparent: no tinted fill and no blur veil. */
-#authScreen,.auth-screen,#app,main,.hero-card,.hero-badge,.count-card,
-.signal-card,.panel,.support-card,.access-card,.profile-row,.history-card,
-.plans-card,.plan,.locked-card,.modal,.modal-box,.install-prompt,
-.auth-plan-box,.paid-email-banner,.kets-tagline,.welcome-signal-preview,
-.dashboard-grid,.stats-grid,.signal-grid,.plans-grid,.section-card,
-.tool-card,.metric-card,.managed-trade-card,.dashboard-page-links,
-.auth-card,.auth-tabs,.form-panel,.history-row,.metrics,.metric,.bar,
-.order-flow-reading-guide,.stop-management-page,.auto-trader-controls-page{
-  background:transparent!important;
-  background-color:transparent!important;
-  background-image:none!important;
-  box-shadow:none!important;
-  -webkit-backdrop-filter:none!important;
-  backdrop-filter:none!important;
+  background-attachment:fixed!important;
 }
 .auth-screen{
   min-height:100svh!important;
-  display:flex!important;
-  align-items:center!important;
-  justify-content:center!important;
+  display:grid!important;
+  place-items:center!important;
   padding:clamp(12px,3vw,28px)!important;
+  background:transparent!important;
+  backdrop-filter:none!important;
 }
 .auth-card{
-  width:min(500px,100%)!important;
-  margin:0 auto!important;
-  padding:clamp(16px,4vw,30px)!important;
-  border:1px solid var(--clear-border)!important;
-  border-radius:26px!important;
+  width:min(480px,100%)!important;
+  padding:clamp(18px,5vw,34px)!important;
+  border:1px solid rgba(173,207,255,.42)!important;
+  border-radius:28px!important;
+  background:linear-gradient(145deg,rgba(10,24,46,.56),rgba(6,15,31,.48))!important;
+  box-shadow:0 18px 55px rgba(0,0,0,.24),inset 0 1px 0 rgba(255,255,255,.13)!important;
+  -webkit-backdrop-filter:blur(var(--glass-blur)) saturate(135%)!important;
+  backdrop-filter:blur(var(--glass-blur)) saturate(135%)!important;
 }
-.auth-tabs{
-  display:grid!important;
-  grid-template-columns:1fr 1fr!important;
-  gap:8px!important;
-  padding:5px!important;
-  border:1px solid var(--clear-border-soft)!important;
+.auth-tabs,.auth-plan-box,.paid-email-banner,.kets-tagline,.welcome-signal-preview,
+.history-card,.form-panel input,.modal-box input{
+  background:rgba(5,15,30,.40)!important;
+  border-color:rgba(166,204,255,.30)!important;
+  -webkit-backdrop-filter:blur(12px)!important;
+  backdrop-filter:blur(12px)!important;
+}
+.primary-btn,.ghost-btn,.danger-btn,.tab,.app-download-btn{
+  border:1px solid rgba(213,231,255,.44)!important;
   border-radius:999px!important;
+  -webkit-backdrop-filter:blur(14px) saturate(145%)!important;
+  backdrop-filter:blur(14px) saturate(145%)!important;
+  box-shadow:0 8px 28px rgba(10,18,48,.24),inset 0 1px 0 rgba(255,255,255,.20)!important;
+  transition:transform .18s ease,filter .18s ease,background .18s ease!important;
 }
-.logo-lockup{margin-bottom:22px!important}
-.logo-lockup b,.brand strong,.form-panel h1,.form-panel h2,.section-head h2,
-.panel-title h3,.plans-card h2,.plans-card h3,.plan h3,.plan strong,
-.hero-card h1,.hero-card h2,.hero-badge span,.count-card strong,
-.market,.price,.history-market,.history-price,.form-panel label,
-.auth-plan-title,.paid-email-banner,.kets-tagline,footer,
-.auth-card p,.auth-card span,.auth-card a,.auth-card strong{
+.primary-btn,.app-download-btn{
+  background:linear-gradient(110deg,rgba(130,85,255,.78),rgba(55,171,239,.76))!important;
   color:#fff!important;
-  text-shadow:var(--clear-text-shadow)!important;
 }
-.eyebrow,.plan-tag,.live-dot{ text-shadow:0 1px 6px rgba(0,0,0,.85)!important }
-.muted,.tiny,.hero-card p,.count-card span,.count-card small,
-.hero-badge small,.entry-line,.strength,.metric span,.history-meta,
-.plan span,.plans-card p,.support-card p,.access-card span,footer{
-  color:#f0f5ff!important;
-  text-shadow:0 1px 6px rgba(0,0,0,.92)!important;
-}
-.primary-btn,.ghost-btn,.danger-btn,.tab,.app-download-btn,
-button,a.primary-btn,a.ghost-btn{
-  background:transparent!important;
-  background-color:transparent!important;
-  background-image:none!important;
-  border:1.5px solid var(--clear-border)!important;
-  border-radius:999px!important;
-  color:#fff!important;
-  box-shadow:none!important;
-  -webkit-backdrop-filter:none!important;
-  backdrop-filter:none!important;
-  text-shadow:0 1px 6px rgba(0,0,0,.9)!important;
+.ghost-btn,.tab:not(.active){
+  background:rgba(13,35,48,.42)!important;
+  color:#f3f8ff!important;
 }
 .tab.active{
-  background:transparent!important;
-  border:2px solid #fff!important;
+  background:linear-gradient(110deg,rgba(130,85,255,.78),rgba(55,171,239,.70))!important;
   color:#fff!important;
-  box-shadow:inset 0 0 0 1px rgba(255,255,255,.22)!important;
 }
-.primary-btn:hover,.ghost-btn:hover,.app-download-btn:hover,.tab:hover{
-  background:rgba(255,255,255,.04)!important;
-  filter:none!important;
-  transform:translateY(-1px);
-}
-.form-panel input,.modal-box input,select,textarea{
-  background:transparent!important;
-  background-color:transparent!important;
+.primary-btn:hover,.ghost-btn:hover,.app-download-btn:hover{transform:translateY(-1px);filter:brightness(1.1)}
+.form-panel input,.modal-box input{
   color:#fff!important;
-  border:1.5px solid var(--clear-border-soft)!important;
-  box-shadow:none!important;
-  text-shadow:0 1px 5px rgba(0,0,0,.85)!important;
+  border-radius:16px!important;
 }
-.form-panel input::placeholder,.modal-box input::placeholder,
-textarea::placeholder{color:#fff!important;opacity:.92!important;text-shadow:0 1px 5px #000!important}
+.form-panel input::placeholder,.modal-box input::placeholder{color:rgba(232,240,255,.62)!important}
+.logo-lockup b,.brand strong,.form-panel h1,.form-panel label{ text-shadow:0 2px 14px rgba(0,0,0,.38)}
 .topbar{
-  background:transparent!important;
-  background-color:transparent!important;
-  border-bottom:1px solid var(--clear-border-soft)!important;
-  box-shadow:none!important;
-  -webkit-backdrop-filter:none!important;
-  backdrop-filter:none!important;
+  background:rgba(4,13,28,.48)!important;
+  border-color:rgba(174,211,255,.20)!important;
+  -webkit-backdrop-filter:blur(18px)!important;
+  backdrop-filter:blur(18px)!important;
 }
-.profile-mini,.close-btn,.install-close,.direction,.lock-icon{
-  background:transparent!important;
-  background-color:transparent!important;
-  color:#fff!important;
-  border:1px solid var(--clear-border-soft)!important;
-  box-shadow:none!important;
+.panel,.card,.metric-card,.signal-card,.tool-card,.modal-box,.section-card{
+  background:linear-gradient(145deg,rgba(10,25,47,.50),rgba(6,15,31,.42))!important;
+  border-color:rgba(174,211,255,.28)!important;
+  -webkit-backdrop-filter:blur(15px) saturate(130%)!important;
+  backdrop-filter:blur(15px) saturate(130%)!important;
 }
-.bar{border:1px solid var(--clear-border-soft)!important}
-.bar i{filter:drop-shadow(0 1px 4px rgba(0,0,0,.8))}
-.history-row{border-bottom:1px solid var(--clear-border-soft)!important}
-.modal{background:transparent!important}
-.auth-card,.hero-card,.panel,.plans-card,.support-card,.signal-card,.count-card{
-  border-color:var(--clear-border-soft)!important;
-}
-main{width:min(1180px,calc(100% - 28px))!important;margin:20px auto 48px!important}
-.hero-card{gap:24px!important;padding:clamp(20px,4vw,38px)!important}
-.section-head{margin:24px 2px 12px!important}
-.stats-grid,.signal-grid,.dashboard-grid,.plans-grid{gap:14px!important}
-.panel,.support-card,.plans-card,.signal-card,.count-card,.plan{padding:clamp(14px,2.5vw,22px)!important}
-.plan{border-radius:18px!important}
-.auth-plan-box{margin-top:22px!important;padding:14px!important;border:1px solid var(--clear-border-soft)!important;border-radius:18px!important}
-.auth-plans-grid{grid-template-columns:repeat(2,minmax(0,1fr))!important}
-.auth-plans-grid .plan{min-width:0!important}
 @media(max-width:700px){
-  body::before{
+  body{
     background-position:center 18%!important;
     background-size:auto 100svh!important;
-    background-repeat:no-repeat!important;
+    background-attachment:scroll!important;
   }
-  .auth-screen{display:block!important;min-height:100svh!important;padding:10px!important}
-  .auth-card{width:100%!important;max-width:500px!important;margin:10px auto!important;padding:17px 14px!important;border-radius:22px!important}
-  .logo-lockup{margin-bottom:17px!important}
-  .logo-lockup b,.brand strong{font-size:clamp(19px,5.8vw,25px)!important;letter-spacing:1px!important}
-  .form-panel{padding-top:17px!important}
-  .form-panel h1{font-size:clamp(24px,7vw,30px)!important;line-height:1.15!important}
-  .form-panel label{margin:12px 0!important}
-  .form-panel input,.modal-box input{min-height:50px!important;padding:12px!important;border-radius:13px!important}
-  .primary-btn,.ghost-btn,.app-download-btn,.tab{min-height:48px!important;padding:12px 14px!important}
-  .auth-plans-grid{grid-template-columns:1fr!important}
-  main{width:calc(100% - 20px)!important;margin:12px auto 32px!important}
-  .hero-card{padding:18px!important;border-radius:20px!important}
-  .hero-card h1{font-size:clamp(32px,9vw,46px)!important;line-height:1.03!important}
-  .hero-badge{margin-top:16px!important;min-width:0!important;padding:14px!important}
-  .stats-grid,.dashboard-grid,.signal-grid{grid-template-columns:1fr!important}
-  .plans-grid{grid-template-columns:1fr!important}
-  .section-head{align-items:center!important;margin:22px 2px 10px!important}
-  .panel,.support-card,.plans-card,.signal-card,.count-card,.plan{padding:15px!important}
-  .history-row{gap:8px!important;padding:12px!important}
-  .support-card{display:block!important}
-  .support-card .primary-btn{margin-top:10px!important}
-  .install-prompt{background:transparent!important;border:1px solid var(--clear-border)!important}
+  .auth-screen{align-items:start!important;padding:12px!important}
+  .auth-card{
+    width:100%!important;
+    padding:18px 16px!important;
+    border-radius:23px!important;
+    background:linear-gradient(145deg,rgba(7,20,39,.50),rgba(5,13,28,.42))!important;
+    -webkit-backdrop-filter:blur(11px) saturate(130%)!important;
+    backdrop-filter:blur(11px) saturate(130%)!important;
+  }
+  .logo-lockup{margin-bottom:20px!important}
+  .logo-lockup b,.brand strong{font-size:clamp(20px,6vw,25px)!important;letter-spacing:1px!important}
+  .form-panel h1{font-size:clamp(25px,7vw,30px)!important}
+  .form-panel input{min-height:52px!important}
+  .primary-btn,.ghost-btn,.app-download-btn{min-height:52px!important;padding:13px 16px!important}
+  .auth-tabs{position:relative;gap:4px}
+  .tab{padding:12px 7px!important}
 }
-@media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;transition:none!important}}
-
-
-/* KETS UNIVERSAL TRANSPARENT GLASS THEME — retain existing page structure and behavior. */
-:root{--glass-fill:rgba(255,255,255,.035);--glass-fill-hover:rgba(255,255,255,.105);--glass-stroke:rgba(235,245,255,.58);--glass-blur:12px}
-body::before{background-image:linear-gradient(135deg,rgba(3,8,18,.16),rgba(3,8,18,.28)),url('/eric-investments-background.png?v=20261024glass')!important;background-position:center center!important;background-size:cover!important;background-repeat:no-repeat!important}
-.auth-card,.hero-card,.hero-badge,.count-card,.panel,.history-card,.support-card,.plans-card,.plan,.signal-card,.welcome-signal-preview,.welcome-history-preview,.auth-plan-box,.dashboard-page-card,.history-row,.stop-page-note,.entry-quality-panel,.entry-quality-figures,.strong-reversal-summary,.strong-reversal-details,.strong-reversal-details-grid>div,.managed-mini-grid>div,.managed-toggle-row,.auto-trade-controls,.manual-trade-controls,.managed-level-grid>div,.ctrader-account-picker,.modal-box,.install-prompt,.live-page-status,.stop-summary-grid>div,.stop-lot-grid>div,.reversal-history-summary>div,.bull-bear-table-head,.eq-check,.entry-quality-gate,.strong-reversal-reason-list span,.strong-reversal-reasons span,.bar,.payment-instructions{
- background:rgba(255,255,255,.035)!important;background-color:rgba(255,255,255,.035)!important;border-color:var(--glass-stroke)!important;backdrop-filter:blur(var(--glass-blur)) saturate(135%)!important;-webkit-backdrop-filter:blur(var(--glass-blur)) saturate(135%)!important;box-shadow:0 8px 32px rgba(0,0,0,.12)!important
-}
-.topbar,.auth-tabs,.form-panel input,.modal-box input,.profile-mini,.ghost-btn,.primary-btn,.danger-btn,.tab,.page-nav-btn,.buy-btn,.sell-btn,.dashboard-page-card,.close-btn,.install-close,.direction,.gold-potential{
- background:rgba(255,255,255,.045)!important;background-color:rgba(255,255,255,.045)!important;border:1px solid var(--glass-stroke)!important;backdrop-filter:blur(14px) saturate(140%)!important;-webkit-backdrop-filter:blur(14px) saturate(140%)!important;box-shadow:none!important;color:#fff!important
-}
-.primary-btn:hover,.ghost-btn:hover,.tab:hover,.page-nav-btn:hover,.dashboard-page-card:hover,.profile-mini:hover{background:var(--glass-fill-hover)!important;filter:none!important}
-.tab.active{background:rgba(255,255,255,.16)!important;border-color:rgba(255,255,255,.82)!important}
-.form-panel input,.modal-box input,select,textarea{background:rgba(255,255,255,.06)!important;color:#fff!important}
-.form-panel input::placeholder,.modal-box input::placeholder{color:rgba(255,255,255,.66)!important}
-button,a,.primary-btn,.ghost-btn,.tab,.page-nav-btn{ text-shadow:0 1px 5px rgba(0,0,0,.8)!important}
-.panel,.support-card,.plans-card,.signal-card,.count-card,.plan,.auth-card,.hero-card,.welcome-signal-preview{border-radius:22px!important}
-/* Authentication deliberately stays on the sign-in screen after a valid login. */
-
-
-/* KETS TRUE TRANSPARENT MODE — user requested NO colored panel/button fills */
-html, body { background-color: transparent !important; }
-body {
-  background-image: url('/eric-investments-background.png') !important;
-  background-position: center center !important;
-  background-size: cover !important;
-  background-attachment: fixed !important;
-  background-repeat: no-repeat !important;
-}
-/* Remove all solid and gradient fills from page surfaces, cards, navigation and controls. */
-*:not(.bar i):not(.of-meter > span):not(.switch span):not(.switch span:after) {
-  background-color: transparent !important;
-}
-/* Remove gradient/photo overlays from components; the body image is the only page background. */
-.auth-card, .auth-tabs, .tab.active, .form-panel input, .modal-box input,
-.primary-btn, .ghost-btn, .danger-btn, .topbar, .profile-mini,
-.hero-card, .hero-card:after, .hero-badge, .count-card, .signal-card,
-.direction, .metric, .locked-card, .lock-icon, .panel, .support-card,
-.access-card, .history-card, .history-row, .plans-card, .plan,
-.modal, .modal-box, .close-btn, .dashboard-page-card, .live-page-status,
-.stop-summary-grid > div, .stop-page-note, .stop-lot-grid > div,
-.welcome-signal-preview, .managed-warning, .managed-mini-grid > div,
-.managed-toggle-row, .managed-level-grid > div, .managed-execution-note,
-.auto-trade-controls, .manual-trade-controls, .ctrader-account-picker,
-.order-flow-trend-card, .order-flow-trend-top, .order-flow-metric-panel,
-.order-flow-context-panel, .order-flow-ratio-line, .order-flow-price-change-panel,
-.order-flow-price-guide, .order-flow-guide-row, .order-flow-reading-guide,
-.strong-reversal-details, .strong-reversal-details-grid > div,
-.strong-reversal-reason-list span, .reversal-history-summary,
-.reversal-history-summary > div, .history-stability-note,
-.bull-bear-table-head, .form-message, .skeleton {
-  background: transparent !important;
-  background-color: transparent !important;
-  background-image: none !important;
-  box-shadow: none !important;
-  backdrop-filter: none !important;
-  -webkit-backdrop-filter: none !important;
-}
-/* Keep outlines for separation while allowing the image to show through. */
-button, input, select, textarea, .auth-card, .auth-tabs, .hero-card,
-.hero-badge, .count-card, .signal-card, .panel, .support-card, .plans-card,
-.plan, .history-card, .history-row, .dashboard-page-card, .modal-box,
-.order-flow-trend-card, .order-flow-metric-panel, .order-flow-context-panel {
-  border-color: rgba(255,255,255,.38) !important;
-}
-/* Inputs remain transparent too; text stays high-contrast over the image. */
-input, select, textarea { color: #ffffff !important; background: transparent !important; }
-::placeholder { color: rgba(255,255,255,.72) !important; opacity: 1; }
-/* Ensure no inherited section background obscures the wallpaper. */
-section, article, nav, header, footer, main, aside, form, fieldset,
-[class*="card"], [class*="panel"], [class*="section"], [class*="modal"],
-[class*="button"], [class*="btn"], [class*="nav"], [class*="tab"] {
-  background-color: transparent !important;
-  background-image: none !important;
-}
-
-
-/* Modal behavior: hide the previous page completely while a front dialog is open.
-   Keep the shared background and transparent glass dialog; restore the page on close. */
-body:has(> .modal:not(.hidden)) > :not(.modal) {
-  display: none !important;
-}
-body .modal {
-  position: fixed !important;
-  inset: 0 !important;
-  z-index: 99999 !important;
-  display: grid !important;
-  place-items: center !important;
-  padding: 16px !important;
-  background: transparent !important;
-  background-color: transparent !important;
-  background-image: none !important;
-  backdrop-filter: none !important;
-  -webkit-backdrop-filter: none !important;
-}
-body .modal .modal-box {
-  position: relative !important;
-  z-index: 100000 !important;
-  width: min(480px, 100%) !important;
-  max-height: 88vh !important;
-  overflow-y: auto !important;
-  background: rgba(255,255,255,.045) !important;
-  background-color: rgba(255,255,255,.045) !important;
-  background-image: none !important;
-  backdrop-filter: blur(2px) !important;
-  -webkit-backdrop-filter: blur(2px) !important;
-  box-shadow: none !important;
-}
-body .modal .modal-box input,
-body .modal .modal-box select {
-  background: rgba(255,255,255,.06) !important;
-  background-color: rgba(255,255,255,.06) !important;
-  color: #fff !important;
+@media(prefers-reduced-motion:reduce){
+  .primary-btn,.ghost-btn,.app-download-btn{transition:none!important}
 }
