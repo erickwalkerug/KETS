@@ -280,7 +280,12 @@ function authMsg(t,bad=true, target="loginMsg"){
  el.textContent=t;
  el.className="form-message "+(bad?"error":"ok");
 }
-async function finishLogin(d){state.token=d.token;sessionStorage.setItem("kets_user_token",d.token);state.user=d.user;if(d.user?.admin||d.user?.role==="admin"){location.href="/admin/payments";return;}showApp();await loadAll();}
+async function finishLogin(d){
+ // Requested behavior: authenticate without navigating into the private app.
+ // Do not retain a session token that would auto-open the dashboard on reload.
+ state.token="";state.user=d.user||null;sessionStorage.removeItem("kets_user_token");
+ authMsg("Sign-in successful. You will remain on this page; the inside dashboard will not open.",false,"loginMsg");
+}
 let loginInProgress=false;
 function getKetsDeviceId(){
  let id=localStorage.getItem("kets_device_id");
@@ -1589,7 +1594,7 @@ if($("registerBtn")) $("registerBtn").onclick=register;
 
 const q=new URLSearchParams(location.search);if(q.get("payment")==="success")history.replaceState({},document.title,location.pathname+location.search);
 state.nextRefreshDeadlineMs=serverNowMs()+REFRESH_MS;
-if(state.token)loadAll();else showAuth("login");
+if(state.token){state.token="";sessionStorage.removeItem("kets_user_token");showAuth("login");}else showAuth("login");
 handleHistoryRoute();
 async function refreshDisplayedSignals(){
  if(!state.token||$("app")?.classList.contains("hidden")||state.loading||state.refreshInProgress)return;
