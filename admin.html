@@ -1,13 +1,14 @@
 <!doctype html>
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>KETS Admin · Payment Approvals</title>
+<title>ERIC INVESTMENTS · Admin</title>
 <style>
 :root{color-scheme:dark}*{box-sizing:border-box}body{margin:0;background:#08111f;color:#eaf1ff;font:15px system-ui,Arial,sans-serif}
 main{max-width:1050px;margin:0 auto;padding:24px}.card{background:#101d30;border:1px solid #243650;border-radius:14px;padding:18px;margin:14px 0}
-h1{font-size:25px;margin:0 0 8px}h2{font-size:18px}p,.muted{color:#aab9cf}label{display:block;margin:12px 0}input{width:100%;padding:12px;border-radius:8px;border:1px solid #38506f;background:#07101c;color:white}
+h1{font-size:25px;margin:0 0 8px}.investment-brand{text-align:center;padding:6px 0 18px}.investment-brand strong{display:block;font-size:clamp(30px,6vw,46px);line-height:1.05;letter-spacing:1.4px;font-weight:1000;overflow-wrap:anywhere}.investment-brand span{display:block;font-size:13px;letter-spacing:2px;font-weight:850;color:#b9adff;margin-top:5px}h2{font-size:18px}p,.muted{color:#aab9cf}label{display:block;margin:12px 0}input{width:100%;padding:12px;border-radius:8px;border:1px solid #38506f;background:#07101c;color:white}
 button{padding:11px 14px;border:0;border-radius:8px;cursor:pointer;background:#3c82f6;color:white;font-weight:700;margin:4px}button.reject{background:#9d3547}button.secondary{background:#34465f}.row{display:flex;gap:10px;flex-wrap:wrap}.row>*{flex:1;min-width:220px}.status{font-weight:700}.pending{color:#ffc66d}.good{color:#70e0a1}.bad{color:#ff8a9a}.hidden{display:none}.payment{border-top:1px solid #263950;padding:14px 0}.small{font-size:12px;color:#aab9cf}
 </style></head><body><main>
-<div class="card"><h1>KETS Admin — Payment Approvals</h1><p>Admin-only controls. Sign in through the normal KETS login using the authorized admin email and its account password. If needed, the deployment admin credentials remain available below.</p>
+<div class="investment-brand"><strong>ERIC INVESTMENTS</strong><span>INSTANT INVESTING</span><span>INSTANT WITHDRAWS</span></div>
+<div class="card"><h1>Admin — Payment Approvals</h1><p>Admin-only controls. Sign in through the normal KETS login using the authorized admin email and its account password. If needed, the deployment admin credentials remain available below.</p>
 <div id="login"><div class="row"><label>Admin username<input id="username" autocomplete="username"></label><label>Admin password<input id="password" type="password" autocomplete="current-password"></label></div><button onclick="login()">Sign in as admin</button></div>
 <div id="app" class="hidden"><div class="row"><div><h2>Pending manual payments</h2><p class="muted">Verify the transaction in your bank/mobile-money account before approving. This page refreshes automatically every 8 seconds.</p></div><div style="text-align:right"><button class="secondary" onclick="load()">Refresh payments</button><button class="secondary" onclick="logout()">Sign out</button></div></div><div id="message"></div><div id="dbstatus" class="small"></div><div id="payments">Loading…</div><h2>Recent manual payment requests</h2><div id="recent">Loading…</div></div></div>
 </main><script>

@@ -1,0 +1,7 @@
+KETS cTrader account ownership note
+
+The cTrader OAuth callback saves the authorization token against the KETS user ID embedded in the signed OAuth state, and account connections are retrieved by that KETS user ID. The accounts displayed on cTrader's own authorization screen are determined by the cTrader ID currently signed in to the browser. KETS cannot change the identity of the cTrader user who is authorizing access.
+
+This build adds a pre-authorization warning to the Connect cTrader button. If a user sees accounts belonging to someone else, they must cancel on cTrader, sign out of that cTrader ID, sign in with their own cTrader ID, then reconnect. Do not approve access to another person's accounts.
+
+This UI warning does not change cTrader's login session or prove account ownership. Test with a separate KETS account and a separate cTrader ID before deploying to production.

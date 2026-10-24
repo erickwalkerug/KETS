@@ -582,3 +582,14 @@ button:focus-visible,a:focus-visible{outline:2px solid #9c8aff;outline-offset:3p
 .paid-email-banner{margin:0 0 20px;padding:16px 14px;border:1px solid #8067ef88;border-radius:15px;background:linear-gradient(135deg,#8b6cff2b,#5e8cff1c);color:#f5f1ff;text-align:center;font-size:clamp(18px,4.5vw,24px);font-weight:950;line-height:1.25;letter-spacing:.5px;box-shadow:0 8px 24px #6d4ee51a}
 .signin-support{display:flex;flex-direction:column;align-items:center;gap:6px;margin:15px 0 18px;text-align:center;color:#a8b5ca;font-size:13px;line-height:1.45}
 .signin-support a{color:#c5b8ff;font-size:clamp(18px,4.5vw,22px);font-weight:900;overflow-wrap:anywhere;text-decoration:underline}
+
+
+/* ERIC INVESTMENTS brand requested across sign-in and every in-app page. */
+.logo-lockup{align-items:flex-start;justify-content:center;text-align:center;margin:0 0 24px}
+.logo-lockup .investment-brand{width:100%}
+.investment-brand b,.investment-brand strong{display:block;font-size:clamp(30px,6vw,46px)!important;line-height:1.05;letter-spacing:1.4px!important;font-weight:1000;color:#f4f7fb;text-transform:uppercase;overflow-wrap:anywhere}
+.investment-brand span{display:block!important;font-size:clamp(11px,2.4vw,14px)!important;line-height:1.5;letter-spacing:2px!important;font-weight:850;color:#b9adff!important;margin-top:5px!important}
+.topbar .brand{flex:0 1 auto;min-width:0}
+.topbar .investment-brand strong{font-size:clamp(20px,3vw,30px)!important;letter-spacing:1px!important}
+.topbar .investment-brand span{font-size:10px!important;letter-spacing:1.4px!important;margin-top:2px!important}
+@media(max-width:700px){.topbar .investment-brand strong{font-size:clamp(16px,4.3vw,23px)!important}.topbar .investment-brand span{font-size:8px!important;letter-spacing:1px!important}.topbar{align-items:flex-start}.header-actions{min-width:0}}

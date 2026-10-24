@@ -1018,6 +1018,13 @@ function renderManagedMoney(id,value,currency="USD"){
 }
 if($("connectCTraderBtn")) $("connectCTraderBtn").onclick=async()=>{
  const btn=$("connectCTraderBtn");
+ const ownAccountConfirm = confirm(
+  "CONNECT YOUR OWN cTRADER ACCOUNTS ONLY\n\n"+
+  "The accounts shown on the next cTrader page belong to whichever cTrader ID is signed in in this browser. KETS cannot choose a different cTrader identity for you.\n\n"+
+  "If you see another person's accounts, tap No, thanks, sign out of that cTrader ID, sign in to your own cTrader ID, then start Connect cTrader again.\n\n"+
+  "Continue to cTrader authorization?"
+ );
+ if(!ownAccountConfirm) return;
  try{
   btn.disabled=true;btn.dataset.oldText=btn.textContent;btn.textContent="Opening cTrader…";
   setManagedActionMessage("Opening the official cTrader authorization page…","busy");
