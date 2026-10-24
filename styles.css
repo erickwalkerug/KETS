@@ -601,3 +601,31 @@ button:focus-visible,a:focus-visible{outline:2px solid #9c8aff;outline-offset:3p
 #app{position:relative;isolation:isolate;min-height:100vh;background:linear-gradient(180deg,rgba(3,8,18,.22),rgba(3,8,18,.38))}
 .topbar{background:rgba(5,9,20,.82)}
 @media(max-width:700px){body{background-attachment:scroll;background-position:center top;background-size:auto 100vh}}
+
+
+/* Background visibility fix: keep the supplied portrait behind every page and bust old CSS/image caches. */
+html{background:#050914!important}
+body{
+  position:relative!important;
+  isolation:isolate!important;
+  background:transparent!important;
+}
+body::before{
+  content:"";
+  position:fixed;
+  inset:0;
+  z-index:-1;
+  pointer-events:none;
+  background:
+    linear-gradient(135deg,rgba(3,8,18,.36),rgba(3,8,18,.52)),
+    url("/eric-investments-background.png?v=20261024") center center/cover no-repeat;
+}
+.auth-screen{
+  background:linear-gradient(135deg,rgba(3,8,18,.10),rgba(3,8,18,.22))!important;
+}
+#app{
+  background:linear-gradient(180deg,rgba(3,8,18,.08),rgba(3,8,18,.18))!important;
+}
+@media(max-width:700px){
+  body::before{background-position:center center;background-size:cover}
+}
