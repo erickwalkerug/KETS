@@ -826,3 +826,117 @@ main{width:min(1180px,calc(100% - 28px))!important;margin:20px auto 48px!importa
   .install-prompt{background:transparent!important;border:1px solid var(--clear-border)!important}
 }
 @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;transition:none!important}}
+
+
+/* KETS UNIVERSAL TRANSPARENT GLASS THEME — retain existing page structure and behavior. */
+:root{--glass-fill:rgba(255,255,255,.035);--glass-fill-hover:rgba(255,255,255,.105);--glass-stroke:rgba(235,245,255,.58);--glass-blur:12px}
+body::before{background-image:linear-gradient(135deg,rgba(3,8,18,.16),rgba(3,8,18,.28)),url('/eric-investments-background.png?v=20261024glass')!important;background-position:center center!important;background-size:cover!important;background-repeat:no-repeat!important}
+.auth-card,.hero-card,.hero-badge,.count-card,.panel,.history-card,.support-card,.plans-card,.plan,.signal-card,.welcome-signal-preview,.welcome-history-preview,.auth-plan-box,.dashboard-page-card,.history-row,.stop-page-note,.entry-quality-panel,.entry-quality-figures,.strong-reversal-summary,.strong-reversal-details,.strong-reversal-details-grid>div,.managed-mini-grid>div,.managed-toggle-row,.auto-trade-controls,.manual-trade-controls,.managed-level-grid>div,.ctrader-account-picker,.modal-box,.install-prompt,.live-page-status,.stop-summary-grid>div,.stop-lot-grid>div,.reversal-history-summary>div,.bull-bear-table-head,.eq-check,.entry-quality-gate,.strong-reversal-reason-list span,.strong-reversal-reasons span,.bar,.payment-instructions{
+ background:rgba(255,255,255,.035)!important;background-color:rgba(255,255,255,.035)!important;border-color:var(--glass-stroke)!important;backdrop-filter:blur(var(--glass-blur)) saturate(135%)!important;-webkit-backdrop-filter:blur(var(--glass-blur)) saturate(135%)!important;box-shadow:0 8px 32px rgba(0,0,0,.12)!important
+}
+.topbar,.auth-tabs,.form-panel input,.modal-box input,.profile-mini,.ghost-btn,.primary-btn,.danger-btn,.tab,.page-nav-btn,.buy-btn,.sell-btn,.dashboard-page-card,.close-btn,.install-close,.direction,.gold-potential{
+ background:rgba(255,255,255,.045)!important;background-color:rgba(255,255,255,.045)!important;border:1px solid var(--glass-stroke)!important;backdrop-filter:blur(14px) saturate(140%)!important;-webkit-backdrop-filter:blur(14px) saturate(140%)!important;box-shadow:none!important;color:#fff!important
+}
+.primary-btn:hover,.ghost-btn:hover,.tab:hover,.page-nav-btn:hover,.dashboard-page-card:hover,.profile-mini:hover{background:var(--glass-fill-hover)!important;filter:none!important}
+.tab.active{background:rgba(255,255,255,.16)!important;border-color:rgba(255,255,255,.82)!important}
+.form-panel input,.modal-box input,select,textarea{background:rgba(255,255,255,.06)!important;color:#fff!important}
+.form-panel input::placeholder,.modal-box input::placeholder{color:rgba(255,255,255,.66)!important}
+button,a,.primary-btn,.ghost-btn,.tab,.page-nav-btn{ text-shadow:0 1px 5px rgba(0,0,0,.8)!important}
+.panel,.support-card,.plans-card,.signal-card,.count-card,.plan,.auth-card,.hero-card,.welcome-signal-preview{border-radius:22px!important}
+/* Authentication deliberately stays on the sign-in screen after a valid login. */
+
+
+/* KETS TRUE TRANSPARENT MODE — user requested NO colored panel/button fills */
+html, body { background-color: transparent !important; }
+body {
+  background-image: url('/eric-investments-background.png') !important;
+  background-position: center center !important;
+  background-size: cover !important;
+  background-attachment: fixed !important;
+  background-repeat: no-repeat !important;
+}
+/* Remove all solid and gradient fills from page surfaces, cards, navigation and controls. */
+*:not(.bar i):not(.of-meter > span):not(.switch span):not(.switch span:after) {
+  background-color: transparent !important;
+}
+/* Remove gradient/photo overlays from components; the body image is the only page background. */
+.auth-card, .auth-tabs, .tab.active, .form-panel input, .modal-box input,
+.primary-btn, .ghost-btn, .danger-btn, .topbar, .profile-mini,
+.hero-card, .hero-card:after, .hero-badge, .count-card, .signal-card,
+.direction, .metric, .locked-card, .lock-icon, .panel, .support-card,
+.access-card, .history-card, .history-row, .plans-card, .plan,
+.modal, .modal-box, .close-btn, .dashboard-page-card, .live-page-status,
+.stop-summary-grid > div, .stop-page-note, .stop-lot-grid > div,
+.welcome-signal-preview, .managed-warning, .managed-mini-grid > div,
+.managed-toggle-row, .managed-level-grid > div, .managed-execution-note,
+.auto-trade-controls, .manual-trade-controls, .ctrader-account-picker,
+.order-flow-trend-card, .order-flow-trend-top, .order-flow-metric-panel,
+.order-flow-context-panel, .order-flow-ratio-line, .order-flow-price-change-panel,
+.order-flow-price-guide, .order-flow-guide-row, .order-flow-reading-guide,
+.strong-reversal-details, .strong-reversal-details-grid > div,
+.strong-reversal-reason-list span, .reversal-history-summary,
+.reversal-history-summary > div, .history-stability-note,
+.bull-bear-table-head, .form-message, .skeleton {
+  background: transparent !important;
+  background-color: transparent !important;
+  background-image: none !important;
+  box-shadow: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+/* Keep outlines for separation while allowing the image to show through. */
+button, input, select, textarea, .auth-card, .auth-tabs, .hero-card,
+.hero-badge, .count-card, .signal-card, .panel, .support-card, .plans-card,
+.plan, .history-card, .history-row, .dashboard-page-card, .modal-box,
+.order-flow-trend-card, .order-flow-metric-panel, .order-flow-context-panel {
+  border-color: rgba(255,255,255,.38) !important;
+}
+/* Inputs remain transparent too; text stays high-contrast over the image. */
+input, select, textarea { color: #ffffff !important; background: transparent !important; }
+::placeholder { color: rgba(255,255,255,.72) !important; opacity: 1; }
+/* Ensure no inherited section background obscures the wallpaper. */
+section, article, nav, header, footer, main, aside, form, fieldset,
+[class*="card"], [class*="panel"], [class*="section"], [class*="modal"],
+[class*="button"], [class*="btn"], [class*="nav"], [class*="tab"] {
+  background-color: transparent !important;
+  background-image: none !important;
+}
+
+
+/* Modal behavior: hide the previous page completely while a front dialog is open.
+   Keep the shared background and transparent glass dialog; restore the page on close. */
+body:has(> .modal:not(.hidden)) > :not(.modal) {
+  display: none !important;
+}
+body .modal {
+  position: fixed !important;
+  inset: 0 !important;
+  z-index: 99999 !important;
+  display: grid !important;
+  place-items: center !important;
+  padding: 16px !important;
+  background: transparent !important;
+  background-color: transparent !important;
+  background-image: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+body .modal .modal-box {
+  position: relative !important;
+  z-index: 100000 !important;
+  width: min(480px, 100%) !important;
+  max-height: 88vh !important;
+  overflow-y: auto !important;
+  background: rgba(255,255,255,.045) !important;
+  background-color: rgba(255,255,255,.045) !important;
+  background-image: none !important;
+  backdrop-filter: blur(2px) !important;
+  -webkit-backdrop-filter: blur(2px) !important;
+  box-shadow: none !important;
+}
+body .modal .modal-box input,
+body .modal .modal-box select {
+  background: rgba(255,255,255,.06) !important;
+  background-color: rgba(255,255,255,.06) !important;
+  color: #fff !important;
+}
