@@ -1,5 +1,5 @@
-const CACHE="kets-display-v7-eric-investments";
-const APP_SHELL=["/","/index.html","/styles.css","/app.js","/manifest.json","/static/icon-192.png","/static/icon-512.png"];
+const CACHE="kets-display-v10-watch-background";
+const APP_SHELL=["/","/index.html","/styles.css","/app.js","/manifest.json","/eric-investments-background.png","/static/icon-192.png","/static/icon-512.png"];
 self.addEventListener("install",event=>{
   event.waitUntil(caches.open(CACHE).then(cache=>cache.addAll(APP_SHELL)).then(()=>self.skipWaiting()));
 });
