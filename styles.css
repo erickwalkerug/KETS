@@ -940,3 +940,15 @@ body .modal .modal-box select {
   background-color: rgba(255,255,255,.06) !important;
   color: #fff !important;
 }
+
+
+/* FINAL INTERACTION + NO-WHITE-FLASH FIX (2026-10-24) */
+html,body{min-height:100%;background-color:#07111f!important}
+body{background-image:none!important}
+body::before{content:""!important;display:block!important;position:fixed!important;inset:0!important;z-index:-1!important;pointer-events:none!important;background:url('/eric-investments-background.png?v=20261024buttonsfix') center center/cover no-repeat!important}
+button,a,input,select,textarea,[role="button"]{pointer-events:auto!important;touch-action:manipulation}
+button:disabled{cursor:not-allowed!important;opacity:.65}
+.modal:not(.hidden){pointer-events:auto!important}
+.modal:not(.hidden) .modal-box{pointer-events:auto!important}
+/* Avoid a blank white viewport while the browser is loading the background asset. */
+html{background-color:#07111f!important}
