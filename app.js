@@ -6,6 +6,26 @@ const initialToken=hashToken||storedToken;
 if(hashToken)sessionStorage.setItem("kets_user_token",hashToken);
 const state={token:initialToken,user:null,access:null,signals:{},history:[],smcHistory:[],orderFlowHistory:[],orderFlowDailyStats:[],payments:[],status:{},plans:{},clockOffsetMs:0,signalWindowDeadlineMs:0,nextBroadcastDeadlineMs:0,nextRefreshDeadlineMs:0,welcomeWindowDeadlineMs:0,welcomeClockOffsetMs:0,welcomeRefreshDeadlineMs:0,welcomeWindowMode:"OUTSIDE_HOURS",loading:false,refreshInProgress:false,usdUgxRate:null,usdUgxUpdatedAt:null};
 const $=id=>document.getElementById(id);
+// Stable browser/app identifier for the paid-email device limit.
+// Generate once and reuse it; never depend on hardware fingerprinting.
+function getKetsDeviceId(){
+ const key="kets_device_id_v1";
+ try{
+  let id=localStorage.getItem(key);
+  if(!id){
+   id=(globalThis.crypto&&typeof crypto.randomUUID==="function")?crypto.randomUUID():("kets-"+Date.now().toString(36)+"-"+Math.random().toString(36).slice(2)+"-"+Math.random().toString(36).slice(2));
+   localStorage.setItem(key,id);
+  }
+  if(id&&String(id).trim())return String(id).trim().slice(0,160);
+ }catch(_){/* Private browsing/storage restrictions: use a session-stable fallback. */}
+ try{
+  let id=sessionStorage.getItem(key);
+  if(!id){id=(globalThis.crypto&&typeof crypto.randomUUID==="function")?crypto.randomUUID():("kets-"+Date.now().toString(36)+"-"+Math.random().toString(36).slice(2));sessionStorage.setItem(key,id);}
+  if(id&&String(id).trim())return String(id).trim().slice(0,160);
+ }catch(_){}
+ // Last resort still supplies a non-empty ID for this page session.
+ return "kets-session-"+Date.now().toString(36)+"-"+Math.random().toString(36).slice(2);
+}
 function headers(extra={}){return {Accept:"application/json",...(state.token?{Authorization:`Bearer ${state.token}`}:{}) ,...extra};}
 async function api(path,opts={}){
  const controller=new AbortController();
@@ -305,7 +325,7 @@ async function login(){
  if(btn){btn.disabled=true;btn.dataset.originalText=btn.textContent;btn.textContent="Signing in…";}
  authMsg("Connecting securely to KETS…",false,"loginMsg");
  try{
-  const d=await api("/api/auth/login",{method:"POST",timeoutMs:60000,headers:{"Content-Type":"application/json"},body:JSON.stringify({email,password})});
+  const d=await api("/api/auth/login",{method:"POST",timeoutMs:60000,headers:{"Content-Type":"application/json"},body:JSON.stringify({email,password,device_id:getKetsDeviceId()})});
   await finishLogin(d);
  }catch(e){
   const msg=String(e.message||"Sign-in failed.");
