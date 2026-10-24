@@ -268,7 +268,6 @@ async function loadWelcomePreview(){
 }
 function showAuth(tab="login"){
  $("authScreen").classList.remove("hidden");$("app").classList.add("hidden");
- try { window.scrollTo({top:0,left:0,behavior:"auto"}); } catch (_) { window.scrollTo(0,0); }
  document.querySelectorAll(".tab").forEach(b=>b.classList.toggle("active",b.dataset.tab===tab));
  $("loginForm").classList.toggle("hidden",tab!=="login");$("registerForm").classList.toggle("hidden",tab!=="register"); loadAuthPlans();
  state.welcomeRefreshDeadlineMs=0;
@@ -282,14 +281,10 @@ function authMsg(t,bad=true, target="loginMsg"){
  el.className="form-message "+(bad?"error":"ok");
 }
 async function finishLogin(d){
- // Keep the authenticated session and open the private dashboard after successful sign-in.
- const token=d?.token||d?.access_token||d?.accessToken||d?.session_token||"";
- if(!token) throw Error("Sign-in succeeded but the server did not return a session token. Please try again or contact KETS support.");
- state.token=token;
- sessionStorage.setItem("kets_user_token",token);
- state.user=d.user||null;
- authMsg("Sign-in successful. Opening your KETS dashboard…",false,"loginMsg");
- await loadAll();
+ // Requested behavior: authenticate without navigating into the private app.
+ // Do not retain a session token that would auto-open the dashboard on reload.
+ state.token="";state.user=d.user||null;sessionStorage.removeItem("kets_user_token");
+ authMsg("Sign-in successful. You will remain on this page; the inside dashboard will not open.",false,"loginMsg");
 }
 let loginInProgress=false;
 function getKetsDeviceId(){
@@ -1599,7 +1594,7 @@ if($("registerBtn")) $("registerBtn").onclick=register;
 
 const q=new URLSearchParams(location.search);if(q.get("payment")==="success")history.replaceState({},document.title,location.pathname+location.search);
 state.nextRefreshDeadlineMs=serverNowMs()+REFRESH_MS;
-if(state.token){loadAll();}else showAuth("login");
+if(state.token){state.token="";sessionStorage.removeItem("kets_user_token");showAuth("login");}else showAuth("login");
 handleHistoryRoute();
 async function refreshDisplayedSignals(){
  if(!state.token||$("app")?.classList.contains("hidden")||state.loading||state.refreshInProgress)return;
