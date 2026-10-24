@@ -281,21 +281,20 @@ function authMsg(t,bad=true, target="loginMsg"){
  el.className="form-message "+(bad?"error":"ok");
 }
 async function finishLogin(d){
- // Keep the authenticated session and open the private dashboard after successful sign-in.
+ // Match the lightweight sign-in flow: reveal the dashboard immediately after authentication,
+ // then load dashboard data without leaving the sign-in screen frozen behind a slow request.
  const token=d?.token||d?.access_token||d?.accessToken||d?.session_token||"";
  if(!token) throw Error("Sign-in succeeded but the server did not return a session token. Please try again or contact KETS support.");
  state.token=token;
  sessionStorage.setItem("kets_user_token",token);
  state.user=d.user||null;
- authMsg("Sign-in successful. Opening your KETS dashboard…",false,"loginMsg");
- await loadAll();
+ if(state.user?.admin||state.user?.role==="admin"){location.href="/admin/payments";return;}
+ showApp();
+ authMsg("Sign-in successful. Loading your KETS dashboard…",false,"loginMsg");
+ try{await loadAll();}
+ catch(e){console.error("KETS dashboard data load failed after sign-in:",e);}
 }
 let loginInProgress=false;
-function getKetsDeviceId(){
- let id=localStorage.getItem("kets_device_id");
- if(!id){id=(crypto?.randomUUID?crypto.randomUUID():("kets-"+Date.now().toString(36)+"-"+Math.random().toString(36).slice(2)+Math.random().toString(36).slice(2)));localStorage.setItem("kets_device_id",id);}
- return id;
-}
 async function login(){
  if(loginInProgress)return;
  const btn=$("loginBtn");
@@ -306,7 +305,7 @@ async function login(){
  if(btn){btn.disabled=true;btn.dataset.originalText=btn.textContent;btn.textContent="Signing in…";}
  authMsg("Connecting securely to KETS…",false,"loginMsg");
  try{
-  const d=await api("/api/auth/login",{method:"POST",timeoutMs:60000,headers:{"Content-Type":"application/json"},body:JSON.stringify({email,password,device_id:getKetsDeviceId()})});
+  const d=await api("/api/auth/login",{method:"POST",timeoutMs:60000,headers:{"Content-Type":"application/json"},body:JSON.stringify({email,password})});
   await finishLogin(d);
  }catch(e){
   const msg=String(e.message||"Sign-in failed.");

@@ -952,3 +952,38 @@ button:disabled{cursor:not-allowed!important;opacity:.65}
 .modal:not(.hidden) .modal-box{pointer-events:auto!important}
 /* Avoid a blank white viewport while the browser is loading the background asset. */
 html{background-color:#07111f!important}
+
+
+/* KETS 54 TRANSPARENT PAGE ISOLATION + TOUCH FIX (2026-10-24)
+   Preserve the transparent visual design. A hidden page must not show through or intercept taps.
+   Closing a front modal restores the same page underneath. */
+#authScreen.hidden, #app.hidden, .history-page.hidden, #dashboardHome.hidden,
+.modal.hidden, .hidden { display:none !important; }
+#app main > #dashboardHome:not(.hidden),
+#app main > .history-page:not(.hidden) { display:block; position:relative; z-index:1; }
+#app main > #dashboardHome.hidden,
+#app main > .history-page.hidden { display:none !important; visibility:hidden !important; pointer-events:none !important; }
+.modal:not(.hidden) {
+  position:fixed !important; inset:0 !important; z-index:10000 !important;
+  display:grid !important; place-items:center !important;
+  padding:max(16px, env(safe-area-inset-top)) 16px max(16px, env(safe-area-inset-bottom)) !important;
+  overflow-y:auto !important; overscroll-behavior:contain !important;
+  background:transparent !important; background-color:transparent !important;
+  background-image:none !important; backdrop-filter:none !important;
+  -webkit-backdrop-filter:none !important; isolation:isolate !important;
+  pointer-events:auto !important;
+}
+.modal:not(.hidden) .modal-box {
+  position:relative !important; z-index:1 !important; width:min(480px,100%) !important;
+  max-height:calc(100dvh - 32px) !important; overflow-y:auto !important;
+  background:transparent !important; background-color:transparent !important;
+  background-image:none !important; box-shadow:none !important;
+  -webkit-backdrop-filter:none !important; backdrop-filter:none !important;
+  pointer-events:auto !important;
+}
+.modal:not(.hidden) input, .modal:not(.hidden) select, .modal:not(.hidden) textarea {
+  background:transparent !important; background-color:transparent !important; color:#fff !important;
+  pointer-events:auto !important; touch-action:manipulation !important;
+}
+html { scroll-behavior:auto !important; }
+button, a, input, select, textarea { touch-action:manipulation; }
