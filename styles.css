@@ -629,3 +629,20 @@ body::before{
 @media(max-width:700px){
   body::before{background-position:center center;background-size:cover}
 }
+
+
+/* V2 FIX: Flask must allow the portrait asset; use the body background directly. */
+html,body{min-height:100%;background-color:#050914!important}
+body{
+  background-image:
+    linear-gradient(135deg,rgba(3,8,18,.30),rgba(3,8,18,.46)),
+    url("/eric-investments-background.png?v=20261024fix2")!important;
+  background-position:center center!important;
+  background-repeat:no-repeat!important;
+  background-size:cover!important;
+  background-attachment:fixed!important;
+}
+body::before{display:none!important}
+@media(max-width:700px){
+  body{background-position:center top!important;background-attachment:scroll!important;background-size:cover!important}
+}
