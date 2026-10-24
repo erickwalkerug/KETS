@@ -646,3 +646,112 @@ body::before{display:none!important}
 @media(max-width:700px){
   body{background-position:center top!important;background-attachment:scroll!important;background-size:cover!important}
 }
+
+
+/* KETS glass-background redesign: mobile-first, photo visible, translucent controls. */
+:root{
+  --glass-line:rgba(174,211,255,.52);
+  --glass-fill:rgba(10,25,47,.34);
+  --glass-fill-strong:rgba(7,17,34,.54);
+  --glass-blur:16px;
+}
+html,body{min-height:100%;background-color:#07111f!important}
+body{
+  background-image:
+    linear-gradient(120deg,rgba(3,10,25,.22),rgba(3,10,25,.12) 48%,rgba(3,10,25,.28)),
+    url('/eric-investments-background.png?v=20261024glass')!important;
+  background-position:center 28%!important;
+  background-size:cover!important;
+  background-repeat:no-repeat!important;
+  background-attachment:fixed!important;
+}
+.auth-screen{
+  min-height:100svh!important;
+  display:grid!important;
+  place-items:center!important;
+  padding:clamp(12px,3vw,28px)!important;
+  background:transparent!important;
+  backdrop-filter:none!important;
+}
+.auth-card{
+  width:min(480px,100%)!important;
+  padding:clamp(18px,5vw,34px)!important;
+  border:1px solid rgba(173,207,255,.42)!important;
+  border-radius:28px!important;
+  background:linear-gradient(145deg,rgba(10,24,46,.56),rgba(6,15,31,.48))!important;
+  box-shadow:0 18px 55px rgba(0,0,0,.24),inset 0 1px 0 rgba(255,255,255,.13)!important;
+  -webkit-backdrop-filter:blur(var(--glass-blur)) saturate(135%)!important;
+  backdrop-filter:blur(var(--glass-blur)) saturate(135%)!important;
+}
+.auth-tabs,.auth-plan-box,.paid-email-banner,.kets-tagline,.welcome-signal-preview,
+.history-card,.form-panel input,.modal-box input{
+  background:rgba(5,15,30,.40)!important;
+  border-color:rgba(166,204,255,.30)!important;
+  -webkit-backdrop-filter:blur(12px)!important;
+  backdrop-filter:blur(12px)!important;
+}
+.primary-btn,.ghost-btn,.danger-btn,.tab,.app-download-btn{
+  border:1px solid rgba(213,231,255,.44)!important;
+  border-radius:999px!important;
+  -webkit-backdrop-filter:blur(14px) saturate(145%)!important;
+  backdrop-filter:blur(14px) saturate(145%)!important;
+  box-shadow:0 8px 28px rgba(10,18,48,.24),inset 0 1px 0 rgba(255,255,255,.20)!important;
+  transition:transform .18s ease,filter .18s ease,background .18s ease!important;
+}
+.primary-btn,.app-download-btn{
+  background:linear-gradient(110deg,rgba(130,85,255,.78),rgba(55,171,239,.76))!important;
+  color:#fff!important;
+}
+.ghost-btn,.tab:not(.active){
+  background:rgba(13,35,48,.42)!important;
+  color:#f3f8ff!important;
+}
+.tab.active{
+  background:linear-gradient(110deg,rgba(130,85,255,.78),rgba(55,171,239,.70))!important;
+  color:#fff!important;
+}
+.primary-btn:hover,.ghost-btn:hover,.app-download-btn:hover{transform:translateY(-1px);filter:brightness(1.1)}
+.form-panel input,.modal-box input{
+  color:#fff!important;
+  border-radius:16px!important;
+}
+.form-panel input::placeholder,.modal-box input::placeholder{color:rgba(232,240,255,.62)!important}
+.logo-lockup b,.brand strong,.form-panel h1,.form-panel label{ text-shadow:0 2px 14px rgba(0,0,0,.38)}
+.topbar{
+  background:rgba(4,13,28,.48)!important;
+  border-color:rgba(174,211,255,.20)!important;
+  -webkit-backdrop-filter:blur(18px)!important;
+  backdrop-filter:blur(18px)!important;
+}
+.panel,.card,.metric-card,.signal-card,.tool-card,.modal-box,.section-card{
+  background:linear-gradient(145deg,rgba(10,25,47,.50),rgba(6,15,31,.42))!important;
+  border-color:rgba(174,211,255,.28)!important;
+  -webkit-backdrop-filter:blur(15px) saturate(130%)!important;
+  backdrop-filter:blur(15px) saturate(130%)!important;
+}
+@media(max-width:700px){
+  body{
+    background-position:center 18%!important;
+    background-size:auto 100svh!important;
+    background-attachment:scroll!important;
+  }
+  .auth-screen{align-items:start!important;padding:12px!important}
+  .auth-card{
+    width:100%!important;
+    padding:18px 16px!important;
+    border-radius:23px!important;
+    background:linear-gradient(145deg,rgba(7,20,39,.50),rgba(5,13,28,.42))!important;
+    -webkit-backdrop-filter:blur(11px) saturate(130%)!important;
+    backdrop-filter:blur(11px) saturate(130%)!important;
+  }
+  .logo-lockup{margin-bottom:20px!important}
+  .logo-lockup b,.brand strong{font-size:clamp(20px,6vw,25px)!important;letter-spacing:1px!important}
+  .form-panel h1{font-size:clamp(25px,7vw,30px)!important}
+  .form-panel input{min-height:52px!important}
+  .primary-btn,.ghost-btn,.app-download-btn{min-height:52px!important;padding:13px 16px!important}
+  .auth-tabs{position:relative;gap:4px}
+  .tab{padding:12px 7px!important}
+}
+@media(prefers-reduced-motion:reduce){
+  .primary-btn,.ghost-btn,.app-download-btn{transition:none!important}
+}
