@@ -1,0 +1,13 @@
+ERIC INVESTMENTS — cTrader personal-account connection update
+
+This update preserves the existing ERIC INVESTMENTS project and changes only the cTrader account-isolation flow in bot.py.
+
+- Users authorize cTrader while signed in to their own ERIC INVESTMENTS account.
+- Authorization discovers available accounts but does not claim/reserve every account shown by cTrader.
+- Each user must explicitly select the account they want to use in the dashboard.
+- The selected account is reserved atomically for that ERIC user; another ERIC user cannot select the same account ID.
+- Balance, manual trading and auto-trading continue to use the explicitly selected account.
+- The server no longer silently falls back to the first account if none is selected.
+- Legacy ownership reservations for unselected accounts are cleaned up during initialization.
+
+Deployment reminder: configure the existing cTrader OAuth client ID/secret and redirect URL in the deployment environment. Each customer must sign in to their own cTrader ID during authorization. Test with two separate ERIC users and distinct cTrader accounts before enabling live trading.

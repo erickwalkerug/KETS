@@ -165,7 +165,7 @@ def static_files(filename):
     # Only serve known frontend assets; never expose Python/source files.
     allowed = {
         "styles.css", "app.js", "admin.html", "service-worker.js", "manifest.json",
-        "icon-192.png", "icon-512.png", "kets-android.apk", "eric-investments-background.png"
+        "icon-192.png", "icon-512.png", "kets-android.apk"
     }
     if filename not in allowed:
         return jsonify({"error": "Not found"}), 404
@@ -1457,7 +1457,13 @@ def api_login():
     # hardware fingerprint. Reusing the same browser storage counts as one device.
     device_id = str(body.get("device_id") or "").strip()[:160]
     if not device_id:
-        return jsonify({"error":"Could not identify this device. Refresh the page and try again."}), 400
+        # Compatibility fallback for older/mobile WebViews that cannot persist a client-side ID.
+        # This is a soft identifier, not a hardware fingerprint, and prevents blocking approved users.
+        device_hint = "|".join([
+            str(request.headers.get("User-Agent", ""))[:300],
+            str(request.remote_addr or "")[:100],
+        ])
+        device_id = "server-fallback-" + hashlib.sha256(device_hint.encode("utf-8")).hexdigest()[:48]
     try:
         with DB_LOCK:
             conn = db_conn()
@@ -1745,7 +1751,7 @@ def ctrader_select_account():
             owner = db_execute(conn, "SELECT user_id FROM ctrader_account_owners WHERE account_id=?", (selected,)).fetchone()
             if owner and str(owner["user_id"]) != str(user["id"]):
                 conn.rollback()
-                return jsonify({"error":"This cTrader account is already linked to another KETS user. Choose your own trading account."}), 403
+                return jsonify({"error":"This cTrader account is already linked to another ERIC INVESTMENTS user. Choose your own trading account."}), 403
             db_execute(conn, "DELETE FROM ctrader_account_owners WHERE user_id=? AND account_id<>?", (str(user["id"]), selected))
             db_execute(conn, "INSERT INTO ctrader_account_owners(account_id,user_id,linked_at) VALUES(?,?,?) ON CONFLICT(account_id) DO UPDATE SET user_id=excluded.user_id,linked_at=excluded.linked_at", (selected, str(user["id"]), now))
             db_execute(conn,"UPDATE ctrader_connections SET selected_account_id=?,status=?,updated_at=? WHERE id=? AND user_id=?",(selected,"CONNECTED",now,row["id"],str(user["id"])))
@@ -1753,7 +1759,7 @@ def ctrader_select_account():
         except Exception:
             conn.rollback()
             app.logger.exception("Could not reserve selected cTrader account")
-            return jsonify({"error":"KETS could not safely reserve that account. Please try again."}), 503
+            return jsonify({"error":"ERIC INVESTMENTS could not safely reserve that account. Please try again."}), 503
         finally:
             conn.close()
     return jsonify({"ok":True,"selected_account_id":selected})

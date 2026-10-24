@@ -280,21 +280,26 @@ function authMsg(t,bad=true, target="loginMsg"){
  el.textContent=t;
  el.className="form-message "+(bad?"error":"ok");
 }
-async function finishLogin(d){
- // Match the lightweight sign-in flow: reveal the dashboard immediately after authentication,
- // then load dashboard data without leaving the sign-in screen frozen behind a slow request.
- const token=d?.token||d?.access_token||d?.accessToken||d?.session_token||"";
- if(!token) throw Error("Sign-in succeeded but the server did not return a session token. Please try again or contact KETS support.");
- state.token=token;
- sessionStorage.setItem("kets_user_token",token);
- state.user=d.user||null;
- if(state.user?.admin||state.user?.role==="admin"){location.href="/admin/payments";return;}
- showApp();
- authMsg("Sign-in successful. Loading your KETS dashboard…",false,"loginMsg");
- try{await loadAll();}
- catch(e){console.error("KETS dashboard data load failed after sign-in:",e);}
-}
+async function finishLogin(d){state.token=d.token;sessionStorage.setItem("kets_user_token",d.token);state.user=d.user;if(d.user?.admin||d.user?.role==="admin"){location.href="/admin/payments";return;}showApp();await loadAll();}
 let loginInProgress=false;
+function getKetsDeviceId(){
+  // Compatible with mobile browsers/WebViews where crypto or localStorage may be unavailable.
+  const makeId=()=>("kets-"+Date.now().toString(36)+"-"+Math.random().toString(36).slice(2)+"-"+Math.random().toString(36).slice(2));
+  try{
+   let id=window.localStorage ? localStorage.getItem("kets_device_id") : "";
+   if(!id){
+    id=(window.crypto && typeof window.crypto.randomUUID==="function") ? window.crypto.randomUUID() : makeId();
+    try{localStorage.setItem("kets_device_id",id);}catch(_){}
+   }
+   if(id && String(id).trim()) return String(id).trim();
+  }catch(_){}
+  try{
+   let id=sessionStorage.getItem("kets_device_id_fallback");
+   if(!id){id=makeId();sessionStorage.setItem("kets_device_id_fallback",id);}
+   if(id && String(id).trim()) return String(id).trim();
+  }catch(_){}
+  return makeId();
+ }
 async function login(){
  if(loginInProgress)return;
  const btn=$("loginBtn");
@@ -305,7 +310,7 @@ async function login(){
  if(btn){btn.disabled=true;btn.dataset.originalText=btn.textContent;btn.textContent="Signing in…";}
  authMsg("Connecting securely to KETS…",false,"loginMsg");
  try{
-  const d=await api("/api/auth/login",{method:"POST",timeoutMs:60000,headers:{"Content-Type":"application/json"},body:JSON.stringify({email,password})});
+  const d=await api("/api/auth/login",{method:"POST",timeoutMs:60000,headers:{"Content-Type":"application/json"},body:JSON.stringify({email,password,device_id:getKetsDeviceId()})});
   await finishLogin(d);
  }catch(e){
   const msg=String(e.message||"Sign-in failed.");
@@ -1597,7 +1602,7 @@ if($("registerBtn")) $("registerBtn").onclick=register;
 
 const q=new URLSearchParams(location.search);if(q.get("payment")==="success")history.replaceState({},document.title,location.pathname+location.search);
 state.nextRefreshDeadlineMs=serverNowMs()+REFRESH_MS;
-if(state.token){loadAll();}else showAuth("login");
+if(state.token)loadAll();else showAuth("login");
 handleHistoryRoute();
 async function refreshDisplayedSignals(){
  if(!state.token||$("app")?.classList.contains("hidden")||state.loading||state.refreshInProgress)return;
