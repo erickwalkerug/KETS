@@ -1,0 +1,5 @@
+KETS MOBILE SIGN-IN TOUCH FIX V2
+
+This update hardens the sign-in screen for touch input on mobile browsers: the auth card and its controls are placed in a reliable stacking context, inputs/selects/buttons explicitly accept pointer and touch interaction, input sizing avoids Android focus/zoom issues, and the service-worker cache is versioned to force clients to refresh the changed CSS.
+
+Deploy the contents of the kets_lightweight folder to the same location as the existing website files. After deployment, open the site in a browser refresh; if installed as a PWA, close and reopen it after the service worker updates.

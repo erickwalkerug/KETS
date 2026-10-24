@@ -1009,3 +1009,22 @@ body::before, body::after,
   .auth-screen { display: block !important; padding: 12px !important; }
   .auth-card { margin: 0 auto 18px; padding: 20px !important; }
 }
+
+/* KETS mobile sign-in hardening: restore reliable touch/focus on mobile */
+html,body{min-height:100%;-webkit-text-size-adjust:100%;overscroll-behavior-y:auto}
+body{touch-action:pan-y}
+#authScreen.auth-screen{position:relative;z-index:2147483000;isolation:isolate;pointer-events:auto;min-height:100svh;align-items:start;overflow:visible;padding:clamp(12px,3.5vw,24px);box-sizing:border-box}
+#authScreen .auth-card{position:relative;z-index:2147483001;pointer-events:auto;touch-action:pan-y;width:min(480px,100%);max-height:none;overflow:visible;box-sizing:border-box}
+#authScreen #authForms,#authScreen .form-panel,#authScreen .auth-tabs,#authScreen label{position:relative;z-index:1;pointer-events:auto}
+#authScreen input,#authScreen select,#authScreen button,#authScreen a{position:relative;pointer-events:auto!important;touch-action:manipulation; -webkit-tap-highlight-color:rgba(128,103,239,.22)}
+#authScreen input,#authScreen select{display:block;box-sizing:border-box;min-height:48px;max-width:100%;font-size:16px;opacity:1;visibility:visible;user-select:text;-webkit-user-select:text}
+#authScreen .tab,#authScreen .primary-btn{min-height:46px}
+#authScreen .form-panel label{cursor:text}
+#authScreen .hidden{display:none!important}
+@media(max-width:600px){
+ #authScreen.auth-screen{display:block;padding:12px 10px calc(24px + env(safe-area-inset-bottom))}
+ #authScreen .auth-card{margin:0 auto;padding:20px 16px;border-radius:22px}
+ #authScreen .form-panel{padding-top:18px}
+ #authScreen .form-panel h1{font-size:26px}
+ #authScreen input,#authScreen select{font-size:16px}
+}

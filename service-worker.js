@@ -1,5 +1,5 @@
-const CACHE="kets-display-v11-buttons-transparent-20261024";
-const APP_SHELL=["/","/index.html","/styles.css?v=20261024buttonsfix","/app.js?v=20261024buttonsfix","/manifest.json","/eric-investments-background.png","/icon-192.png","/icon-512.png"];
+const CACHE="kets-mobile-touchfix-v12-20261024";
+const APP_SHELL=["/","/index.html","/styles.css?v=20261024touchfix3","/app.js?v=20261024touchfix3","/manifest.json","/eric-investments-background.png","/icon-192.png","/icon-512.png"];
 self.addEventListener("install",event=>{
   event.waitUntil((async()=>{
     const cache=await caches.open(CACHE);
