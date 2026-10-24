@@ -1,7 +1,11 @@
-KETS cTrader account ownership note
+KETS cTrader account isolation
 
-The cTrader OAuth callback saves the authorization token against the KETS user ID embedded in the signed OAuth state, and account connections are retrieved by that KETS user ID. The accounts displayed on cTrader's own authorization screen are determined by the cTrader ID currently signed in to the browser. KETS cannot change the identity of the cTrader user who is authorizing access.
+- Each cTrader connection is stored against the signed-in KETS user ID.
+- OAuth state is signed and time-limited, binding the callback to the KETS user who started authorization.
+- KETS fails closed if it cannot enumerate the accounts granted by cTrader.
+- A dedicated ctrader_account_owners table reserves each cTrader account ID for one KETS user. The reservation and connection save occur in one database transaction.
+- A cTrader account already reserved by another KETS user is rejected. Disconnect releases that user's reservations.
+- The website warns users to check the cTrader ID in the browser before approving authorization.
 
-This build adds a pre-authorization warning to the Connect cTrader button. If a user sees accounts belonging to someone else, they must cancel on cTrader, sign out of that cTrader ID, sign in with their own cTrader ID, then reconnect. Do not approve access to another person's accounts.
-
-This UI warning does not change cTrader's login session or prove account ownership. Test with a separate KETS account and a separate cTrader ID before deploying to production.
+Important limitation:
+cTrader's authorization screen is hosted by cTrader, and this application does not receive a separately verified human identity for the cTrader ID from the account-list response. Therefore KETS can enforce account-ID isolation, but cannot independently prove that two different account IDs belong to different human cTrader identities. Users must sign into their own cTrader ID before authorizing. Test with two separate KETS users and separate cTrader IDs before production deployment.

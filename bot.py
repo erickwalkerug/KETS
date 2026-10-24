@@ -469,6 +469,13 @@ def init_db():
     );
     CREATE INDEX IF NOT EXISTS idx_ctrader_connections_user
       ON ctrader_connections(user_id);
+    CREATE TABLE IF NOT EXISTS ctrader_account_owners (
+        account_id TEXT PRIMARY KEY,
+        user_id TEXT NOT NULL,
+        linked_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_ctrader_account_owners_user
+      ON ctrader_account_owners(user_id);
     """
     with DB_LOCK:
         conn = db_conn()
@@ -540,6 +547,22 @@ def init_db():
                 db_execute(conn, "UPDATE ctrader_connections SET strategy_selection_json=?, kets_strategy_enabled=0 WHERE (strategy_selection_json IS NULL OR TRIM(strategy_selection_json)='' OR strategy_selection_json='[]')", ('["smc"]',))
             except Exception:
                 pass
+            # Backfill ownership reservations for accounts connected before this
+            # isolation migration. Existing account conflicts are never overwritten.
+            try:
+                legacy_connections = db_execute(conn, "SELECT user_id,account_ids_json,created_at FROM ctrader_connections").fetchall()
+                for legacy in legacy_connections:
+                    try:
+                        legacy_accounts = json.loads(legacy["account_ids_json"] or "[]")
+                    except Exception:
+                        legacy_accounts = []
+                    for account in legacy_accounts:
+                        if not isinstance(account, dict) or account.get("id") is None:
+                            continue
+                        db_execute(conn, "INSERT INTO ctrader_account_owners(account_id,user_id,linked_at) VALUES(?,?,?) ON CONFLICT(account_id) DO NOTHING",
+                                   (str(account["id"]), str(legacy["user_id"]), str(legacy["created_at"] or _now_iso())))
+            except Exception:
+                app.logger.exception("Could not backfill existing cTrader account ownership records")
             conn.commit()
         finally:
             conn.close()
@@ -1196,52 +1219,60 @@ def ctrader_callback():
     now = _now_iso()
     connection_id = str(uuid.uuid4())
 
-    # Discover accounts before saving tokens. Never attach an account already
-    # linked to a different KETS user; this prevents cross-user account leakage.
+    # Fail closed: never save a cTrader authorization unless KETS can enumerate
+    # the accounts granted by cTrader. Account ownership is enforced in a
+    # dedicated table with account_id as a primary key, inside the same DB lock
+    # and transaction as saving the connection.
     try:
         accounts = _ctrader_discover_accounts(access_token)
     except Exception as exc:
         app.logger.warning("cTrader account discovery failed during authorization: %s", exc)
         accounts = []
-
-    discovered_ids = {str(a.get("id")) for a in accounts if a.get("id") is not None}
-    if discovered_ids:
-        try:
-            conn = db_conn()
-            rows = db_execute(conn, "SELECT user_id, account_ids_json FROM ctrader_connections WHERE user_id<>?", (user_id,)).fetchall()
-            conn.close()
-            conflicts = set()
-            for other in rows:
-                try:
-                    other_accounts = json.loads(other["account_ids_json"] or "[]")
-                except Exception:
-                    other_accounts = []
-                other_ids = {str(a.get("id")) for a in other_accounts if isinstance(a, dict) and a.get("id") is not None}
-                if discovered_ids.intersection(other_ids):
-                    conflicts.update(discovered_ids.intersection(other_ids))
-            if conflicts:
-                app.logger.warning("Blocked cTrader account reuse across KETS users; user_id=%s", user_id)
-                return ("<h2>KETS cTrader connection blocked</h2>"
-                        "<p>One or more cTrader accounts in this authorization are already linked to another KETS user. "
-                        "For your privacy, KETS did not save this connection. Sign out of the other person's cTrader ID, "
-                        "sign in with your own cTrader ID, then start Connect cTrader again from your KETS account.</p>"), 403
-        except Exception:
-            app.logger.exception("Could not verify cTrader account ownership; refusing to save authorization")
-            return "<h2>KETS cTrader connection</h2><p>KETS could not verify that these accounts are separate from other users. No connection was saved. Please try again.</p>", 503
+    discovered_ids = {str(a.get("id")) for a in accounts if isinstance(a, dict) and a.get("id") is not None}
+    if not accounts or not discovered_ids:
+        return ("<h2>KETS cTrader connection not completed</h2>"
+                "<p>KETS could not verify the accounts granted by cTrader, so no connection or token was saved. "
+                "Please retry authorization. If the problem continues, contact KETS support.</p>"), 503
 
     try:
         with DB_LOCK:
             conn = db_conn()
-            db_execute(conn, "DELETE FROM ctrader_connections WHERE user_id=?", (user_id,))
-            db_execute(conn, """INSERT INTO ctrader_connections
-                (id,user_id,broker,account_ids_json,selected_account_id,access_token_enc,refresh_token_enc,expires_at,permission_scope,status,created_at,updated_at)
-                VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
-                (connection_id, user_id, "cTrader", json.dumps(accounts), None, _ctrader_encrypt(access_token), _ctrader_encrypt(refresh_token),
-                 expires_at, "trading", "CONNECTED" if accounts else "AUTHORIZED", now, now))
-            conn.commit()
-            conn.close()
+            try:
+                # Reject every account already registered to a different KETS user.
+                placeholders = ",".join(["?"] * len(discovered_ids))
+                existing = db_execute(conn,
+                    f"SELECT account_id,user_id FROM ctrader_account_owners WHERE account_id IN ({placeholders})",
+                    tuple(discovered_ids)).fetchall()
+                conflicts = [r for r in existing if str(r["user_id"]) != user_id]
+                if conflicts:
+                    conn.rollback()
+                    app.logger.warning("Blocked cTrader account reuse across KETS users; user_id=%s", user_id)
+                    return ("<h2>KETS cTrader connection blocked</h2>"
+                            "<p>One or more cTrader accounts in this authorization are already linked to another KETS user. "
+                            "KETS did not save this connection. Cancel authorization, sign out of the other person's cTrader ID, "
+                            "sign in with your own cTrader ID, then reconnect from your KETS account.</p>"), 403
+
+                # Replace this user's ownership records and connection atomically.
+                db_execute(conn, "DELETE FROM ctrader_account_owners WHERE user_id=?", (user_id,))
+                for account_id in discovered_ids:
+                    db_execute(conn,
+                        "INSERT INTO ctrader_account_owners(account_id,user_id,linked_at) VALUES(?,?,?)",
+                        (account_id, user_id, now))
+                db_execute(conn, "DELETE FROM ctrader_connections WHERE user_id=?", (user_id,))
+                db_execute(conn, """INSERT INTO ctrader_connections
+                    (id,user_id,broker,account_ids_json,selected_account_id,access_token_enc,refresh_token_enc,expires_at,permission_scope,status,created_at,updated_at)
+                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    (connection_id, user_id, "cTrader", json.dumps(accounts), None, _ctrader_encrypt(access_token), _ctrader_encrypt(refresh_token),
+                     expires_at, "trading", "CONNECTED", now, now))
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                raise
+            finally:
+                conn.close()
     except Exception:
-        return "<h2>KETS cTrader connection</h2><p>Authorization succeeded, but KETS could not save the connection.</p>", 500
+        app.logger.exception("Could not atomically verify/save cTrader account ownership")
+        return "<h2>KETS cTrader connection</h2><p>KETS could not verify account ownership safely. No connection was saved. Please try again.</p>", 503
     base = os.environ.get("KETS_PUBLIC_BASE_URL", "").strip().rstrip("/") or "https://kets.onrender.com"
     return redirect(base + "/?ctrader=connected#managed-trading", code=302)
 
@@ -1277,6 +1308,7 @@ def ctrader_disconnect():
     with DB_LOCK:
         conn = db_conn()
         db_execute(conn, "DELETE FROM ctrader_connections WHERE user_id=?", (user["id"],))
+        db_execute(conn, "DELETE FROM ctrader_account_owners WHERE user_id=?", (user["id"],))
         conn.commit()
         conn.close()
     return jsonify({"ok": True, "connected": False, "status": "NOT_CONNECTED"})

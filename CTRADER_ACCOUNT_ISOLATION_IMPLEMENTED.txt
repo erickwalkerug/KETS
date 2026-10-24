@@ -1,0 +1,11 @@
+KETS cTrader account-isolation hardening
+
+Implemented in bot.py:
+1. Fails closed when cTrader account discovery fails or returns no accounts; tokens are not saved.
+2. Adds ctrader_account_owners with account_id as the primary key.
+3. Checks account ownership and saves account reservations + OAuth connection atomically.
+4. Rejects any account ID already reserved by another KETS user.
+5. Releases account reservations when the user disconnects cTrader.
+6. Retains user-bound signed OAuth state and per-user connection lookup.
+
+Existing website UI warning retained. See CTRADER_USER_ACCOUNT_ISOLATION_NOTE.txt for the remaining cTrader identity-verification limitation and deployment test guidance.
