@@ -901,3 +901,42 @@ section, article, nav, header, footer, main, aside, form, fieldset,
   background-color: transparent !important;
   background-image: none !important;
 }
+
+
+/* Modal behavior: hide the previous page completely while a front dialog is open.
+   Keep the shared background and transparent glass dialog; restore the page on close. */
+body:has(> .modal:not(.hidden)) > :not(.modal) {
+  display: none !important;
+}
+body .modal {
+  position: fixed !important;
+  inset: 0 !important;
+  z-index: 99999 !important;
+  display: grid !important;
+  place-items: center !important;
+  padding: 16px !important;
+  background: transparent !important;
+  background-color: transparent !important;
+  background-image: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+body .modal .modal-box {
+  position: relative !important;
+  z-index: 100000 !important;
+  width: min(480px, 100%) !important;
+  max-height: 88vh !important;
+  overflow-y: auto !important;
+  background: rgba(255,255,255,.045) !important;
+  background-color: rgba(255,255,255,.045) !important;
+  background-image: none !important;
+  backdrop-filter: blur(2px) !important;
+  -webkit-backdrop-filter: blur(2px) !important;
+  box-shadow: none !important;
+}
+body .modal .modal-box input,
+body .modal .modal-box select {
+  background: rgba(255,255,255,.06) !important;
+  background-color: rgba(255,255,255,.06) !important;
+  color: #fff !important;
+}
