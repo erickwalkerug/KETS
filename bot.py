@@ -3837,11 +3837,11 @@ def developer_data():
 # One subscription price for every customer. Payment amounts are selected
 # server-side from the saved account country, never from client-supplied values.
 PAYMENT_PLANS = {
-    "30_days": {"name": "30 Days", "ugx": 500000, "usd": 150, "seconds": 30*24*60*60},
+    "1_day": {"name": "1 Day Access", "ugx": 25000, "usd": 6, "seconds": 24*60*60},
+    "7_days": {"name": "1 Week Access", "ugx": 150000, "usd": 30, "seconds": 7*24*60*60},
+    "30_days": {"name": "30 Days Access", "ugx": 500000, "usd": 150, "seconds": 30*24*60*60},
 }
-# All paid access uses the single 30-day subscription duration. Older payment
-# records with retired plan IDs are also normalized to 30 days; shorter legacy
-# durations are no longer supported anywhere in subscription expiry logic.
+# Access duration is determined by the selected active plan. Unknown legacy IDs default to 30 days.
 def _subscription_expiry(plan_id, start_iso):
     try:
         seconds = PAYMENT_PLANS.get(plan_id, {}).get("seconds", 30*24*60*60)
@@ -4371,13 +4371,15 @@ def api_payment_manual_public():
     if not user:
         return jsonify({"error": "Create your KETS account first, then submit payment."}), 404
     is_uganda = str(user["country_code"] or "").upper() == "UG"
-    if is_uganda and method == "BANK_TRANSFER":
-        return jsonify({"error": "Bank transfer is available for international customers only."}), 400
-    if not is_uganda and method in {"MTN", "AIRTEL"}:
-        return jsonify({"error": "MTN/Airtel manual payments are available to Uganda accounts only."}), 400
     plan = PAYMENT_PLANS[plan_id]
-    currency = "UGX" if is_uganda else "USD"
-    amount = float(plan["ugx"] if is_uganda else plan["usd"])
+    currency = str(body.get("currency", "UGX" if is_uganda else "USD")).upper()
+    if currency not in {"UGX", "USD"}:
+        return jsonify({"error": "Choose UGX or USD."}), 400
+    if currency == "UGX" and method == "BANK_TRANSFER":
+        return jsonify({"error": "Choose MTN or Airtel for UGX payments."}), 400
+    if currency == "USD" and method in {"MTN", "AIRTEL"}:
+        return jsonify({"error": "Choose bank transfer for USD payments."}), 400
+    amount = float(plan["ugx"] if currency == "UGX" else plan["usd"])
     tx_ref = f"KETS-MANUAL-{secrets.token_hex(8)}"
     now = _now_iso()
     network = "BANK_TRANSFER" if method == "BANK_TRANSFER" else method

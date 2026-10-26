@@ -987,3 +987,9 @@ html{background-color:#07111f!important}
 }
 html { scroll-behavior:auto !important; }
 button, a, input, select, textarea { touch-action:manipulation; }
+
+/* Eric Investments pricing, capital guidance, and age/terms consent. */
+.investment-info{margin:0 0 20px;padding:14px 16px;border:1px solid #6f5be088;border-radius:16px;background:rgba(5,12,24,.2);font-size:12px;line-height:1.55;color:var(--text)}
+.investment-info h3{margin:0 0 6px;font-size:16px}.investment-info p{margin:6px 0}.investment-info .risk-warning{color:#ffcf82;font-weight:800}.investment-info-inline{font-size:9px;line-height:1.55;color:#d4dced;margin-top:8px;max-width:460px}
+.terms-consent{display:flex!important;align-items:flex-start;gap:9px;padding:12px;border:1px solid var(--line);border-radius:12px;line-height:1.5!important}.terms-consent input{width:18px!important;height:18px;flex:0 0 18px;margin:1px 0 0!important}.terms-consent a{color:#c2b5ff;text-decoration:underline}.currency-picker{display:block;margin:10px 0;font-size:11px;color:var(--muted)}.currency-picker select{display:block;width:100%;margin-top:6px;padding:10px;border:1px solid var(--line);border-radius:10px;background:rgba(5,12,24,.35);color:var(--text)}
+.terms-details{margin:12px 0;padding:10px 12px;border:1px solid var(--line);border-radius:10px;font-size:11px;line-height:1.55;color:var(--muted)}.terms-details summary{cursor:pointer;color:#c2b5ff;font-weight:800}.terms-details p{margin-bottom:0}.plans-page-currency{display:flex;align-items:center;gap:12px;flex-wrap:wrap}.plans-page-currency .currency-picker{min-width:220px}

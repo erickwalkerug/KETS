@@ -47,9 +47,10 @@ async function api(path,opts={}){
 function money(v,currency="UGX"){return v==null||!Number.isFinite(Number(v))?"--":currency+" "+Number(v).toLocaleString();}
 function signalMoney(v){return money(v,"USD");}
 function isUganda(){return String(state.user?.country_code||"UG").toUpperCase()==="UG";}
-function planAmount(p){return isUganda()?p?.ugx:p?.usd;}
-function planCurrency(){return isUganda()?"UGX":"USD";}
+function planAmount(p){return planCurrency()==="UGX"?p?.ugx:p?.usd;}
+function planCurrency(){const authVisible=!$("authScreen")?.classList.contains("hidden");const v=authVisible?($("authCurrencySelect")?.value||$("registerCurrencySelect")?.value||"UGX"):($("insideCurrencySelect")?.value||"UGX");return String(v).toUpperCase()==="USD"?"USD":"UGX";}
 function authIsUganda(){return ($("regCountry")?.value||"UG")==="UG";}
+function authCurrency(){return String($("authCurrencySelect")?.value||$("registerCurrencySelect")?.value||"UGX").toUpperCase()==="USD"?"USD":"UGX";}
 function countdown(sec){sec=Math.max(0,Math.floor(Number(sec)||0));return `${String(Math.floor(sec/3600)).padStart(2,"0")}:${String(Math.floor(sec%3600/60)).padStart(2,"0")}:${String(sec%60).padStart(2,"0")}`;}
 function esc(v){return String(v??"").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#039;"}[c]));}
 function serverNowMs(){return Date.now()+state.clockOffsetMs;}
@@ -140,7 +141,9 @@ function warmBackend(){
  fetch(API_BASE+"/api/health",{cache:"no-store"}).catch(()=>{});
 }
 const BUILTIN_PLANS={
- "30_days":{name:"30 Days",ugx:500000,usd:150,seconds:2592000}
+ "1_day":{name:"1 Day Access",ugx:25000,usd:6,seconds:86400},
+ "7_days":{name:"1 Week Access",ugx:150000,usd:30,seconds:604800},
+ "30_days":{name:"30 Days Access",ugx:500000,usd:150,seconds:2592000}
 };
 function renderAuthPlans(plans){
  const targets=["loginPlansGrid","registerPlansGrid"];
@@ -148,8 +151,8 @@ function renderAuthPlans(plans){
    const el=$(id); if(!el)return;
    const entries=Object.entries(plans||{}).filter(([_,p])=>authIsUganda()||p.usd!=null);
    el.innerHTML=entries.length?entries.map(([key,p])=>{
-     const cur=authIsUganda()?"UGX":"USD", amount=authIsUganda()?p.ugx:p.usd;
-     return `<div class="plan"><span class="plan-tag">${p.seconds<=3600?"SHORT ACCESS":"SUBSCRIPTION"}</span><h3>${esc(p.name)}</h3><strong>${money(amount,cur)}</strong><span class="payment-maintenance-note">Payment required to activate 30-day access</span><span>${cur}</span><button class="primary-btn full" onclick="openAuthPayment('${esc(key)}')">Pay & activate</button></div>`;
+     const cur=authCurrency(), amount=cur==="UGX"?p.ugx:p.usd;
+     return `<div class="plan"><span class="plan-tag">${p.seconds<=3600?"SHORT ACCESS":"SUBSCRIPTION"}</span><h3>${esc(p.name)}</h3><strong>${money(amount,cur)}</strong><span class="payment-maintenance-note">Payment required to activate access</span><span>${cur}</span><button class="primary-btn full" onclick="openAuthPayment('${esc(key)}')">Pay & activate</button></div>`;
    }).join(""):`<div class="empty">No payment plans are currently available.</div>`;
  });
 }
@@ -169,7 +172,7 @@ window.openAuthPayment=async plan=>{
  let planData=p;
  if(!planData){try{const d=await api("/api/plans");planData=d.plans?.[plan];}catch{}}
  if(!planData){authMsg("Payment plan unavailable.");return;}
- const abroad=!authIsUganda(),cur=abroad?"USD":"UGX",amt=abroad?planData.usd:planData.ugx;
+ const cur=authCurrency(),abroad=cur==="USD",amt=cur==="USD"?planData.usd:planData.ugx;
  const m=document.createElement("div");m.className="modal";
  m.innerHTML=`<div class="modal-box"><button class="close-btn" onclick="this.closest('.modal').remove()">×</button><span class="eyebrow">ACTIVATE KETS</span><h2>${esc(planData.name)} · ${money(amt,cur)}</h2><p class="muted">Pay by ${abroad?"international bank transfer":"MTN or Airtel Mobile Money"}. After paying, submit the transaction reference. Access starts only after admin verification and approval.</p><label>Account email<input id="authPayEmail" type="email" value="${esc(email)}" placeholder="you@example.com"></label>${abroad?`<div class="payment-instructions"><strong>Bank transfer account</strong><p>Account number: <strong>9030028492447</strong></p><p>Amount: <strong>${money(amt,cur)}</strong></p></div><input id="authPayMethod" type="hidden" value="BANK_TRANSFER">`:`<div class="payment-instructions"><strong>Mobile Money payment</strong><p>MTN: <strong>256791058183</strong></p><p>Airtel: <strong>256747427556</strong></p><p>Amount: <strong>${money(amt,cur)}</strong></p></div><label>Paid using<select id="authPayMethod"><option value="MTN">MTN Mobile Money</option><option value="AIRTEL">Airtel Money</option></select></label><label>Phone used to pay<input id="authPayPhone" type="tel" placeholder="07XXXXXXXX"></label>`}<label>Transaction reference<input id="authPayReference" placeholder="Enter bank/mobile-money transaction ID"></label><button class="primary-btn full" onclick="submitManualAuthPayment('${esc(plan)}')">Submit payment for approval</button><div id="authPayResult" class="payment-result"></div></div>`;
  document.body.appendChild(m);
@@ -180,7 +183,7 @@ window.submitManualAuthPayment=async plan=>{
  try{
   const d=await api("/api/payments/manual-public",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
    plan,email:$("authPayEmail").value.trim(),method:$("authPayMethod").value,
-   reference:$("authPayReference").value.trim(),phone:$("authPayPhone")?.value.trim()||""
+   reference:$("authPayReference").value.trim(),currency:planCurrency(),phone:$("authPayPhone")?.value.trim()||""
   })});
   r.textContent=`Submitted: ${d.tx_ref}. Access activates after the admin verifies and approves your payment.`;
  }catch(e){r.textContent=e.message;}
@@ -196,6 +199,7 @@ async function register(){
  if(!name){authMsg("Enter your full name.",true,"registerMsg");return;}
  if(!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)){authMsg("Enter a valid email address.",true,"registerMsg");return;}
  if(password.length<8){authMsg("Password must be at least 8 characters.",true,"registerMsg");return;}
+ if(!$("regTermsAge")?.checked){authMsg("You must agree to the Terms and Conditions and confirm you are at least 18 years old.",true,"registerMsg");return;}
  registerInProgress=true;
  const btn=$("registerBtn");
  if(btn){btn.disabled=true;btn.dataset.originalText=btn.textContent;btn.textContent="Creating account…";}
@@ -844,8 +848,8 @@ function renderStatus(){
 }
 function renderPlans(){
  const abroad=!isUganda();
- const entries=Object.entries(state.plans).filter(([id,p])=>!abroad || p.usd!=null);if($("plansCurrencyLabel"))$("plansCurrencyLabel").textContent=planCurrency();
- $("plansGrid").innerHTML=entries.map(([id,p])=>{const cur=planCurrency(),amt=planAmount(p);return `<div class="plan"><span class="plan-tag">${p.seconds<=3600?"SHORT ACCESS":"SUBSCRIPTION"}</span><h3>${esc(p.name)}</h3><strong>${money(amt,cur)}</strong><span class="payment-maintenance-note">Payment required to activate 30-day access</span><span>${isUganda()?"MTN / Airtel Mobile Money":"International bank transfer"} · ${cur}</span><button class="primary-btn" onclick="openPayment('${esc(id)}')">Choose plan</button></div>`}).join("");
+ const entries=Object.entries(state.plans).filter(([id,p])=>planCurrency()==="UGX" || p.usd!=null);if($("plansCurrencyLabel"))$("plansCurrencyLabel").textContent=planCurrency();
+ $("plansGrid").innerHTML=entries.map(([id,p])=>{const cur=planCurrency(),amt=planAmount(p);return `<div class="plan"><span class="plan-tag">${p.seconds<=3600?"SHORT ACCESS":"SUBSCRIPTION"}</span><h3>${esc(p.name)}</h3><strong>${money(amt,cur)}</strong><span class="payment-maintenance-note">Payment required to activate access</span><span>${isUganda()?"MTN / Airtel Mobile Money":"International bank transfer"} · ${cur}</span><button class="primary-btn" onclick="openPayment('${esc(id)}')">Choose plan</button></div>`}).join("");
 }
 window.openPayment=plan=>{
  const p=state.plans[plan], abroad=!isUganda(), cur=planCurrency(), amt=planAmount(p),m=document.createElement("div");m.className="modal";
@@ -854,7 +858,7 @@ window.openPayment=plan=>{
 };
 window.startPayment=async plan=>{
  const r=document.getElementById("payResult");r.textContent="Submitting payment for admin review…";
- try{const d=await api("/api/payments/manual-public",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({plan,email:state.user.email,phone:document.getElementById("payPhone")?.value.trim()||"",method:document.getElementById("payMethod").value,reference:document.getElementById("payReference").value.trim()})});r.textContent=`Submitted: ${d.tx_ref}. Access activates after the admin verifies and approves your payment.`;}catch(e){r.textContent=e.message;}
+ try{const d=await api("/api/payments/manual-public",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({plan,email:state.user.email,phone:document.getElementById("payPhone")?.value.trim()||"",method:document.getElementById("payMethod").value,reference:document.getElementById("payReference").value.trim(),currency:planCurrency()})});r.textContent=`Submitted: ${d.tx_ref}. Access activates after the admin verifies and approves your payment.`;}catch(e){r.textContent=e.message;}
 };
 
 function openProfile(){
@@ -1025,17 +1029,34 @@ function convertManagedValue(value,sourceCurrency,targetCurrency){
  if(src==="UGX"&&dst==="USD") return n/rate;
  return null;
 }
+function renderInvestmentCapitalGuide(){
+ const select=$("investmentCurrencySelect"), target=$("investmentCapitalAmounts"), note=$("investmentExchangeRateNote");
+ if(!select||!target)return;
+ const currency=String(select.value||"UGX").toUpperCase()==="USD"?"USD":"UGX";
+ const rate=Number(state.usdUgxRate)||4422;
+ target.innerHTML=[[100,"0.05"],[500,"0.10"],[1000,"0.50"],[5000,"1.00"]].map(([usd,lot])=>{
+  const amount=currency==="UGX"?Math.round(usd*rate):usd;
+  const formatted=Number(amount).toLocaleString(undefined,{maximumFractionDigits:currency==="USD"?0:0});
+  return `<span>${currency} ${formatted} capital — lot size ${lot}</span>`;
+ }).join("<br>");
+ if(note){
+  const stamp=state.usdUgxUpdatedAt?new Date(state.usdUgxUpdatedAt).toLocaleString():"";
+  note.textContent=`${state.usdUgxRate?"Current reference rate":"Indicative rate"}: 1 USD = UGX ${rate.toLocaleString(undefined,{maximumFractionDigits:2})}${stamp?" · updated "+stamp:""}. Actual bank/payment rates may differ.`;
+ }
+}
 async function refreshManagedExchangeRate(){
  const note=$("managedExchangeRateNote");
  try{
   const d=await api("/api/exchange-rate/usd-ugx",{timeoutMs:7000});
   if(Number(d.rate)>0){state.usdUgxRate=Number(d.rate);state.usdUgxUpdatedAt=d.updated_at||null;}
+  renderInvestmentCapitalGuide();
   if(note&&state.usdUgxRate) {
    const updated=state.usdUgxUpdatedAt?new Date(state.usdUgxUpdatedAt).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"}):"";
    note.textContent=`Live USD/UGX: 1 USD = UGX ${Number(state.usdUgxRate).toLocaleString(undefined,{maximumFractionDigits:2})}${updated?" · checked "+updated:""}${d.stale?" · using last saved rate":""}`;
   }
   if(typeof refreshManagedStatus==="function") refreshManagedStatus();
  }catch(e){
+  renderInvestmentCapitalGuide();
   if(note)note.textContent="Live exchange rate unavailable. Values will remain in the account currency until the rate loads.";
  }
 }
@@ -1614,7 +1635,13 @@ warmBackend();
 $("regCountry")?.addEventListener("change",()=>{updateCountryCurrency();loadAuthPlans();});updateCountryCurrency();
 if($("loginBtn")) $("loginBtn").onclick=login;
 if($("registerBtn")) $("registerBtn").onclick=register;
+["insideCurrencySelect","authCurrencySelect","registerCurrencySelect"].forEach(id=>{const el=$(id);if(el)el.addEventListener("change",()=>{["insideCurrencySelect","authCurrencySelect","registerCurrencySelect"].forEach(otherId=>{const other=$(otherId);if(other)other.value=el.value;});renderAuthPlans(state.plans||BUILTIN_PLANS);if(state.plans&&Object.keys(state.plans).length)renderPlans();});});
+["authCurrencySelect","registerCurrencySelect"].forEach(id=>{const el=$(id);if(el)el.addEventListener("change",()=>{const other=$(id==="authCurrencySelect"?"registerCurrencySelect":"authCurrencySelect");if(other)other.value=el.value;renderAuthPlans(state.plans||BUILTIN_PLANS);});});
 
+const investmentCurrencySelect=$("investmentCurrencySelect");
+if(investmentCurrencySelect)investmentCurrencySelect.addEventListener("change",renderInvestmentCapitalGuide);
+renderInvestmentCapitalGuide();
+refreshManagedExchangeRate();
 const q=new URLSearchParams(location.search);if(q.get("payment")==="success")history.replaceState({},document.title,location.pathname+location.search);
 state.nextRefreshDeadlineMs=serverNowMs()+REFRESH_MS;
 if(state.token){loadAll();}else showAuth("login");
