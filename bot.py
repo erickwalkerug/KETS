@@ -1714,6 +1714,7 @@ def managed_status():
             "pending_auto_direction":str(row.get("pending_auto_direction") or ""),
             "pending_auto_signal_id":str(row.get("pending_auto_signal_id") or ""),
             "opposite_signal_confirmation":bool(row.get("opposite_signal_confirmation")),
+            "pressure_ratio_threshold":_num(row.get("pressure_ratio_threshold")) if row.get("pressure_ratio_threshold") is not None else 2.0,
             "auto_profit_total":_num(row.get("auto_profit_total")),
             "min_quality":_num(row.get("min_quality")) if row.get("min_quality") is not None else 40,
             "strong_only":bool(row.get("strong_only")),
