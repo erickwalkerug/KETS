@@ -1573,18 +1573,18 @@ if($("saveManagedSettings"))$("saveManagedSettings").onclick=async()=>{
  try{
   btn.disabled=true;btn.dataset.oldText=btn.textContent;btn.textContent="Saving…";setManagedActionMessage("Saving trading controls…","busy");
   await api("/api/managed/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
-   lot_size:Number($("managedLotSize").value||0.01),
-   target_profit_total:Number($("managedProfitTarget").value||25),
-   min_quality:Number($("managedMinQuality").value||85),
-   strong_only:$("managedStrongOnly").checked,
-   low_stability_entry:$("managedLowStability").checked,
-   high_stability_entry:$("managedHighStability").checked,
-   opposite_signal_confirmation:$("managedOppositeConfirmation").checked,
+   lot_size:Number($("managedLotSize")?.value||0.01),
+   target_profit_total:Number($("managedProfitTarget")?.value||25),
+   min_quality:Number($("managedMinQuality")?.value||85),
+   strong_only:!!$("managedStrongOnly")?.checked,
+   low_stability_entry:!!$("managedLowStability")?.checked,
+   high_stability_entry:!!$("managedHighStability")?.checked,
+   opposite_signal_confirmation:!!$("managedOppositeConfirmation")?.checked,
    strategy_selection:KETS_ADDITIONAL_STRATEGY_CONTROLS
      .filter(([id])=>$(id)?.checked).map(([,key])=>key),
    max_lot:10,
-   max_open_trades:Number($("managedMaxTrades").value||1),
-   allocation_pct:Number($("managedAllocation").value||10),
+   max_open_trades:Number($("managedMaxTrades")?.value||1),
+   allocation_pct:Number($("managedAllocation")?.value||10),
    auto_symbol:String($("autoTradeSymbol")?.value||"XAUUSD")
   })});
   saveAutoTraderBrowserState();
