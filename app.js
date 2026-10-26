@@ -152,7 +152,7 @@ function renderAuthPlans(plans){
    const entries=Object.entries(plans||{}).filter(([_,p])=>authIsUganda()||p.usd!=null);
    el.innerHTML=entries.length?entries.map(([key,p])=>{
      const cur=authCurrency(), amount=cur==="UGX"?p.ugx:p.usd;
-     return `<div class="plan"><span class="plan-tag">${p.seconds<=3600?"SHORT ACCESS":"SUBSCRIPTION"}</span><h3>${esc(p.name)}</h3><strong>${money(amount,cur)}</strong><span class="payment-maintenance-note">Payment required to activate access</span><span>${cur}</span><button class="primary-btn full" onclick="openAuthPayment('${esc(key)}')">Pay & activate</button></div>`;
+     return `<div class="plan"><span class="plan-tag">${p.seconds<=3600?"SHORT ACCESS":"MEMBERSHIP FEE"}</span><h3>${esc(p.name)}</h3><strong>${money(amount,cur)}</strong><span class="payment-maintenance-note">Service fee required to activate access</span><span>${cur}</span><button class="primary-btn full" onclick="openAuthPayment('${esc(key)}')">Pay membership fee</button></div>`;
    }).join(""):`<div class="empty">No payment plans are currently available.</div>`;
  });
 }
@@ -849,7 +849,7 @@ function renderStatus(){
 function renderPlans(){
  const abroad=!isUganda();
  const entries=Object.entries(state.plans).filter(([id,p])=>planCurrency()==="UGX" || p.usd!=null);if($("plansCurrencyLabel"))$("plansCurrencyLabel").textContent=planCurrency();
- $("plansGrid").innerHTML=entries.map(([id,p])=>{const cur=planCurrency(),amt=planAmount(p);return `<div class="plan"><span class="plan-tag">${p.seconds<=3600?"SHORT ACCESS":"SUBSCRIPTION"}</span><h3>${esc(p.name)}</h3><strong>${money(amt,cur)}</strong><span class="payment-maintenance-note">Payment required to activate access</span><span>${isUganda()?"MTN / Airtel Mobile Money":"International bank transfer"} · ${cur}</span><button class="primary-btn" onclick="openPayment('${esc(id)}')">Choose plan</button></div>`}).join("");
+ $("plansGrid").innerHTML=entries.map(([id,p])=>{const cur=planCurrency(),amt=planAmount(p);return `<div class="plan"><span class="plan-tag">${p.seconds<=3600?"SHORT ACCESS":"MEMBERSHIP FEE"}</span><h3>${esc(p.name)}</h3><strong>${money(amt,cur)}</strong><span class="payment-maintenance-note">Service fee required to activate access</span><span>${isUganda()?"MTN / Airtel Mobile Money":"International bank transfer"} · ${cur}</span><button class="primary-btn" onclick="openPayment('${esc(id)}')">Choose plan</button></div>`}).join("");
 }
 window.openPayment=plan=>{
  const p=state.plans[plan], abroad=!isUganda(), cur=planCurrency(), amt=planAmount(p),m=document.createElement("div");m.className="modal";
