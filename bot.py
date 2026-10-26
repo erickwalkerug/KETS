@@ -524,6 +524,7 @@ def init_db():
                     ("auto_profit_total", "DOUBLE PRECISION DEFAULT 0"),
                     ("auto_entry_signal_id", "TEXT"),
                     ("auto_entry_pressure_ratio", "DOUBLE PRECISION DEFAULT 0"),
+                    ("pressure_ratio_threshold", "DOUBLE PRECISION DEFAULT 2.0"),
                     ("balance", "DOUBLE PRECISION DEFAULT 0"),
                     ("equity", "DOUBLE PRECISION DEFAULT 0"),
                     ("free_margin", "DOUBLE PRECISION DEFAULT 0"),
@@ -1768,6 +1769,8 @@ def managed_settings():
         body=request.get_json(silent=True) or {}
         try: lot=max(0.01,min(float(body.get("lot_size",row.get("lot_size") or .01)),10))
         except Exception: lot=.01
+        try: pressure_ratio_threshold=max(1.0,min(float(body.get("pressure_ratio_threshold",row.get("pressure_ratio_threshold") or 2.0)),100.0))
+        except Exception: pressure_ratio_threshold=2.0
         try: target=max(0,min(float(body.get("target_profit_total",body.get("profit_target",row.get("target_profit_total") or row.get("profit_target") or 25))),100000))
         except Exception: target=25
         try: quality=max(0,min(float(body.get("min_quality",row.get("min_quality") if row.get("min_quality") is not None else 40)),100))
@@ -1805,9 +1808,9 @@ def managed_settings():
         break_even=1 if bool(body.get("break_even_enabled",row.get("break_even_enabled") or 0)) else 0
         trailing=1 if bool(body.get("trailing_stop_enabled",row.get("trailing_stop_enabled") or 0)) else 0
         with DB_LOCK:
-            conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET lot_size=?,profit_target=?,target_profit_total=?,min_quality=?,strong_only=?,smc_only=?,strategy_selection_json=?,kets_strategy_enabled=?,low_stability_entry=?,high_stability_entry=?,opposite_signal_confirmation=?,max_lot=?,max_open_trades=?,allocation_pct=?,break_even_enabled=?,trailing_stop_enabled=?,auto_symbol=?,updated_at=? WHERE id=?",(lot,target,target,quality,strong,smc_only,strategy_selection_json,kets_strategy_enabled,low_stability,high_stability,opposite_confirmation,max_lot,max_open,allocation,break_even,trailing,auto_symbol,_now_iso(),row["id"])); conn.commit(); conn.close()
+            conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET lot_size=?,profit_target=?,target_profit_total=?,min_quality=?,strong_only=?,smc_only=?,strategy_selection_json=?,kets_strategy_enabled=?,low_stability_entry=?,high_stability_entry=?,opposite_signal_confirmation=?,max_lot=?,max_open_trades=?,allocation_pct=?,break_even_enabled=?,trailing_stop_enabled=?,auto_symbol=?,pressure_ratio_threshold=?,updated_at=? WHERE id=?",(lot,target,target,quality,strong,smc_only,strategy_selection_json,kets_strategy_enabled,low_stability,high_stability,opposite_confirmation,max_lot,max_open,allocation,break_even,trailing,auto_symbol,pressure_ratio_threshold,_now_iso(),row["id"])); conn.commit(); conn.close()
         row=_ctrader_row_for_user(user["id"])
-    return jsonify({"ok":True,"lot_size":_num(row.get("lot_size")) or .01,"profit_target":_num(row.get("target_profit_total")) if row.get("target_profit_total") is not None else (_num(row.get("profit_target")) if row.get("profit_target") is not None else 25),"target_profit_total":_num(row.get("target_profit_total")) if row.get("target_profit_total") is not None else (_num(row.get("profit_target")) if row.get("profit_target") is not None else 25),"min_quality":_num(row.get("min_quality")) if row.get("min_quality") is not None else 40,"strong_only":bool(row.get("strong_only")),"smc_only":False,"kets_strategy_enabled":bool(row.get("kets_strategy_enabled") if row.get("kets_strategy_enabled") is not None else 0),"strategy_selection":json.loads(row.get("strategy_selection_json") or '["smc"]') if str(row.get("strategy_selection_json") or "").strip() else ["smc"],"low_stability_entry":bool(row.get("low_stability_entry")),"high_stability_entry":bool(row.get("high_stability_entry")),"opposite_signal_confirmation":bool(row.get("opposite_signal_confirmation")),"max_lot":_num(row.get("max_lot")) or 10,"max_open_trades":int(row.get("max_open_trades") or 1),"allocation_pct":_num(row.get("allocation_pct")) or 10,"break_even_enabled":bool(row.get("break_even_enabled")),"trailing_stop_enabled":bool(row.get("trailing_stop_enabled")),"auto_symbol":str(row.get("auto_symbol") or "XAUUSD").upper()})
+    return jsonify({"ok":True,"lot_size":_num(row.get("lot_size")) or .01,"profit_target":_num(row.get("target_profit_total")) if row.get("target_profit_total") is not None else (_num(row.get("profit_target")) if row.get("profit_target") is not None else 25),"target_profit_total":_num(row.get("target_profit_total")) if row.get("target_profit_total") is not None else (_num(row.get("profit_target")) if row.get("profit_target") is not None else 25),"min_quality":_num(row.get("min_quality")) if row.get("min_quality") is not None else 40,"strong_only":bool(row.get("strong_only")),"smc_only":False,"kets_strategy_enabled":bool(row.get("kets_strategy_enabled") if row.get("kets_strategy_enabled") is not None else 0),"strategy_selection":json.loads(row.get("strategy_selection_json") or '["smc"]') if str(row.get("strategy_selection_json") or "").strip() else ["smc"],"low_stability_entry":bool(row.get("low_stability_entry")),"high_stability_entry":bool(row.get("high_stability_entry")),"opposite_signal_confirmation":bool(row.get("opposite_signal_confirmation")),"max_lot":_num(row.get("max_lot")) or 10,"max_open_trades":int(row.get("max_open_trades") or 1),"allocation_pct":_num(row.get("allocation_pct")) or 10,"break_even_enabled":bool(row.get("break_even_enabled")),"trailing_stop_enabled":bool(row.get("trailing_stop_enabled")),"auto_symbol":str(row.get("auto_symbol") or "XAUUSD").upper(),"pressure_ratio_threshold":_num(row.get("pressure_ratio_threshold")) or 2.0})
 
 @app.route("/api/managed/move-break-even", methods=["POST"])
 def managed_move_break_even():
@@ -2603,7 +2606,7 @@ def _latest_smc_history_signal(requested_symbol=None):
             return valid
     return None
 
-def _order_flow_execution_decision(flow):
+def _order_flow_execution_decision(flow, required_ratio=2.0):
     """Build the same rolling major-trend checks as the Order Flow page."""
     if not isinstance(flow, dict):
         return None, 0.0, "No fresh order-flow record."
@@ -2637,15 +2640,17 @@ def _order_flow_execution_decision(flow):
     direction = "BUY" if pressure_bias == "BULLISH" else "SELL" if pressure_bias == "BEARISH" else ""
     regime = pressure_bias if aligned else "UNCONFIRMED"
     classification = f"{pressure_bias} PRESSURE + PRICE ALIGNMENT" if aligned else "PRESSURE / PRICE CONFLICT"
-    confirming = aligned and ratio > 2.0 and price_bias == pressure_bias and pressure_bias in {"BULLISH", "BEARISH"}
+    try: required_ratio=max(1.0,min(float(required_ratio),100.0))
+    except (TypeError,ValueError): required_ratio=2.0
+    confirming = aligned and ratio >= required_ratio and price_bias == pressure_bias and pressure_bias in {"BULLISH", "BEARISH"}
     # Attach the calculated rolling checks so execution uses the same facts as the page.
     flow["_kets_pressure_ratio"] = ratio
     flow["_kets_price_direction"] = price_bias
     flow["_kets_market_regime"] = regime
     flow["_kets_signal_classification"] = classification
     flow["_kets_pressure_alignment"] = "AGREE" if aligned else "UNCONFIRMED"
-    if ratio < 2.0:
-        return None, ratio, "Pressure ratio is below 2.0."
+    if ratio < required_ratio:
+        return None, ratio, f"Pressure ratio is below the selected {required_ratio:g}× threshold."
     if not confirming or not direction:
         return None, ratio, "Market regime, classification, alignment, price direction and confirmation must all agree."
     return direction, ratio, "Order-flow conditions confirmed."
@@ -2692,7 +2697,7 @@ def _ctrader_autotrade_once():
             except Exception:
                 selected_strategies=[]
             flow = _latest_order_flow_for_asset(auto_symbol)
-            flow_direction, flow_ratio, flow_reason = _order_flow_execution_decision(flow)
+            flow_direction, flow_ratio, flow_reason = _order_flow_execution_decision(flow, row.get("pressure_ratio_threshold") or 2.0)
             previous_direction=str(row.get("auto_direction") or "").upper()
             # A ratio-drop exit is attempted only once per open-trade cycle.
             # If cTrader does not confirm that first attempt, freeze this cycle:

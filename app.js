@@ -1138,6 +1138,7 @@ async function refreshManagedStatus(){
   }
   const st=d.settings||{};
   if($("managedLotSize")&&document.activeElement!==$("managedLotSize"))$("managedLotSize").value=Number(st.lot_size||0.01).toFixed(2);
+  if($("managedPressureRatio")&&document.activeElement!==$("managedPressureRatio"))$("managedPressureRatio").value=Number(st.pressure_ratio_threshold||2).toString();
   if($("managedProfitTarget")&&document.activeElement!==$("managedProfitTarget"))$("managedProfitTarget").value=Number(st.target_profit_total??st.profit_target??25).toFixed(0);
   if($("managedMinQuality"))$("managedMinQuality").value=String(st.min_quality||40);
   if($("managedStrongOnly"))$("managedStrongOnly").checked=!!st.strong_only;
@@ -1192,6 +1193,30 @@ async function setAutoTradeControl(enabled,label){
  finally{buttons.forEach(b=>{b.textContent=b.dataset.oldText||b.textContent;});}
 }
 if($("managedAutoTrade")) $("managedAutoTrade").onchange=async()=>{await setAutoTradeControl($("managedAutoTrade").checked,"toggle");};
+async function savePressureRatioThreshold(){
+ const el=$("managedPressureRatio"); if(!el)return;
+ const value=Number(el.value);
+ if(!Number.isFinite(value)||value<1||value>100){setManagedActionMessage("Pressure ratio must be between 1 and 100.","error");return;}
+ try{
+  el.disabled=true;
+  await api("/api/managed/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+   pressure_ratio_threshold:value, lot_size:Number($("managedLotSize")?.value||0.01),
+   target_profit_total:Number($("managedProfitTarget")?.value||25),
+   min_quality:Number($("managedMinQuality")?.value||40),
+   strong_only:!!$("managedStrongOnly")?.checked,
+   low_stability_entry:!!$("managedLowStability")?.checked,
+   high_stability_entry:!!$("managedHighStability")?.checked,
+   opposite_signal_confirmation:!!$("managedOppositeConfirmation")?.checked,
+   max_lot:10, max_open_trades:Number($("managedMaxTrades")?.value||1),
+   allocation_pct:Number($("managedAllocation")?.value||10), auto_symbol:String($("autoTradeSymbol")?.value||"XAUUSD")
+  })});
+  setManagedActionMessage(`Pressure ratio requirement saved: ${value}×. Auto-Trader checks this threshold before opening new trades.`,"ok");
+  await refreshManagedStatus();
+ }catch(e){setManagedActionMessage(e.message||"Could not save pressure ratio requirement.","error");}
+ finally{el.disabled=false;}
+}
+if($("managedPressureRatio"))$("managedPressureRatio").onchange=savePressureRatioThreshold;
+
 async function setStrongOnlyControl(enabled){
  const el=$("managedStrongOnly");
  try{
@@ -1398,6 +1423,7 @@ async function saveAutoTraderSettings(){
   if($("atSMC")?.checked) selected.unshift("smc");
   const body={
     opposite_signal_confirmation:!!$("atTwoSignal")?.checked,
+    pressure_ratio_threshold:Number($("managedPressureRatio")?.value||2),
     low_stability_entry:!!$("atLowStability")?.checked,
     high_stability_entry:!!$("atHighStability")?.checked,
     strong_only:!!$("atStrongReversal")?.checked,
