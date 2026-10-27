@@ -1,5 +1,4 @@
-/* KETS background slideshow — reliable inline background rotation.
-   Only changes the page wallpaper; it does not alter app/trading behavior. */
+/* KETS background slideshow — fixes the fixed wallpaper layer without changing app/trading behavior. */
 (function () {
   'use strict';
 
@@ -11,45 +10,31 @@
   var current = -1;
   var timer = null;
 
-  function setImportant(element, property, value) {
-    element.style.setProperty(property, value, 'important');
-  }
-
   function applySlide(index) {
-    if (!document.body) return;
+    if (!document.documentElement || !slides.length) return;
     current = ((index % slides.length) + slides.length) % slides.length;
-
-    // Apply the wallpaper directly to BODY. Inline !important takes precedence
-    // over the legacy stylesheet rules that previously pinned one static image.
-    setImportant(document.body, 'background-image',
-      'linear-gradient(135deg, rgba(3,8,18,.12), rgba(3,8,18,.22)), url("' +
-      slides[current] + '")');
-    setImportant(document.body, 'background-position', 'center center');
-    setImportant(document.body, 'background-repeat', 'no-repeat');
-    setImportant(document.body, 'background-size', 'cover');
-    setImportant(document.body, 'background-attachment',
-      window.matchMedia && window.matchMedia('(max-width: 700px)').matches ? 'scroll' : 'fixed');
-    setImportant(document.body, 'background-color', '#07111f');
+    // The visible wallpaper is body::before (the body itself is intentionally transparent).
+    // Update its CSS variable instead of body.backgroundImage, which is hidden by the fixed pseudo-element.
+    document.documentElement.style.setProperty('--kets-slide-image', 'url("' + slides[current] + '")', 'important');
+    document.documentElement.setAttribute('data-kets-slide', String(current + 1));
   }
 
   function start() {
-    // Preload images without blocking rotation if one image is unavailable.
     slides.forEach(function (src) {
       var image = new Image();
+      image.onload = function () {};
       image.src = src;
     });
-
     applySlide(0);
     if (timer) window.clearInterval(timer);
     timer = window.setInterval(function () {
       applySlide(current + 1);
     }, 7000);
-
     window.addEventListener('pageshow', function () {
       applySlide(current < 0 ? 0 : current);
     });
     document.addEventListener('visibilitychange', function () {
-      if (!document.hidden && current < 0) applySlide(0);
+      if (!document.hidden) applySlide(current < 0 ? 0 : current);
     });
   }
 
