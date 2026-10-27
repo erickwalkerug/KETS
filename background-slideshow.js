@@ -1,38 +1,35 @@
-/* KETS background slideshow: rotate the original background and two added photos.
-   Uses a real background-image rule (not a custom property) so it overrides the
-   existing !important background declaration in styles.css. */
+/* KETS background slideshow - robust CSS override and image preload */
 (function () {
   'use strict';
-
   var slides = [
-    '/eric-investments-background.png?v=20261027slide1',
-    '/executive-car-background.jpg?v=20261027slide2',
-    '/executive-boardroom-background.jpg?v=20261027slide3'
+    '/eric-investments-background.png?v=20261027slide1fix',
+    '/executive-car-background.jpg?v=20261027slide2fix',
+    '/executive-boardroom-background.jpg?v=20261027slide3fix'
   ];
   var current = 0;
   var style;
 
   function applySlide(index) {
-    current = index % slides.length;
+    current = ((index % slides.length) + slides.length) % slides.length;
     if (!style) return;
-    style.textContent =
-      'body::before {' +
-      ' background-image: linear-gradient(135deg,rgba(3,8,18,.16),rgba(3,8,18,.28)), url("' +
-      slides[current] + '") !important;' +
-      ' transition: background-image .8s ease-in-out;' +
+    // Override the legacy !important background shorthand with a more specific rule.
+    style.textContent = 'html body::before {' +
+      'content:"" !important; display:block !important; position:fixed !important;' +
+      'inset:0 !important; z-index:-1 !important; pointer-events:none !important;' +
+      'background:linear-gradient(135deg,rgba(3,8,18,.16),rgba(3,8,18,.28)), ' +
+      'url("' + slides[current] + '") center center / cover no-repeat !important;' +
       '}';
   }
 
   function start() {
-    if (document.getElementById('kets-background-slideshow-style')) {
-      style = document.getElementById('kets-background-slideshow-style');
-    } else {
+    style = document.getElementById('kets-background-slideshow-style');
+    if (!style) {
       style = document.createElement('style');
       style.id = 'kets-background-slideshow-style';
       document.head.appendChild(style);
     }
 
-    // Preload the photos so each change is ready when the interval fires.
+    // Preload each image; rotating continues even if one asset fails.
     slides.forEach(function (src) {
       var image = new Image();
       image.src = src;
@@ -40,8 +37,11 @@
 
     applySlide(0);
     window.setInterval(function () {
-      applySlide((current + 1) % slides.length);
+      applySlide(current + 1);
     }, 7000);
+
+    // Re-apply if the page is restored from the mobile browser's back-forward cache.
+    window.addEventListener('pageshow', function () { applySlide(current); });
   }
 
   if (document.readyState === 'loading') {
