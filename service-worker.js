@@ -1,5 +1,5 @@
-const CACHE="kets-display-v14-login-device-fix-20261024";
-const APP_SHELL=["/","/index.html","/styles.css?v=20261024transparentfix","/app.js?v=20261024devicefix","/manifest.json","/eric-investments-background.png","/icon-192.png","/icon-512.png"];
+const CACHE="kets-display-v15-background-slideshow-fix-20261027";
+const APP_SHELL=["/","/index.html","/styles.css?v=20261024transparentfix","/app.js?v=20261024devicefix","/manifest.json","/eric-investments-background.png","/icon-192.png","/icon-512.png","/background-slideshow.js?v=20261027","/executive-car-background.jpg","/executive-boardroom-background.jpg"];
 self.addEventListener("install",event=>{
   event.waitUntil((async()=>{
     const cache=await caches.open(CACHE);
