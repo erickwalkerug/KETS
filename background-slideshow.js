@@ -1,47 +1,56 @@
-/* KETS background slideshow - robust CSS override and image preload */
+/* KETS background slideshow — reliable inline background rotation.
+   Only changes the page wallpaper; it does not alter app/trading behavior. */
 (function () {
   'use strict';
+
   var slides = [
-    '/eric-investments-background.png?v=20261027slide1fix',
-    '/executive-car-background.jpg?v=20261027slide2fix',
-    '/executive-boardroom-background.jpg?v=20261027slide3fix'
+    '/eric-investments-background.png?v=20261027slide1',
+    '/executive-car-background.jpg?v=20261027slide2',
+    '/executive-boardroom-background.jpg?v=20261027slide3'
   ];
-  var current = 0;
-  var style;
+  var current = -1;
+  var timer = null;
+
+  function setImportant(element, property, value) {
+    element.style.setProperty(property, value, 'important');
+  }
 
   function applySlide(index) {
+    if (!document.body) return;
     current = ((index % slides.length) + slides.length) % slides.length;
-    if (!style) return;
-    // Override the legacy !important background shorthand with a more specific rule.
-    style.textContent = 'html body::before {' +
-      'content:"" !important; display:block !important; position:fixed !important;' +
-      'inset:0 !important; z-index:-1 !important; pointer-events:none !important;' +
-      'background:linear-gradient(135deg,rgba(3,8,18,.16),rgba(3,8,18,.28)), ' +
-      'url("' + slides[current] + '") center center / cover no-repeat !important;' +
-      '}';
+
+    // Apply the wallpaper directly to BODY. Inline !important takes precedence
+    // over the legacy stylesheet rules that previously pinned one static image.
+    setImportant(document.body, 'background-image',
+      'linear-gradient(135deg, rgba(3,8,18,.12), rgba(3,8,18,.22)), url("' +
+      slides[current] + '")');
+    setImportant(document.body, 'background-position', 'center center');
+    setImportant(document.body, 'background-repeat', 'no-repeat');
+    setImportant(document.body, 'background-size', 'cover');
+    setImportant(document.body, 'background-attachment',
+      window.matchMedia && window.matchMedia('(max-width: 700px)').matches ? 'scroll' : 'fixed');
+    setImportant(document.body, 'background-color', '#07111f');
   }
 
   function start() {
-    style = document.getElementById('kets-background-slideshow-style');
-    if (!style) {
-      style = document.createElement('style');
-      style.id = 'kets-background-slideshow-style';
-      document.head.appendChild(style);
-    }
-
-    // Preload each image; rotating continues even if one asset fails.
+    // Preload images without blocking rotation if one image is unavailable.
     slides.forEach(function (src) {
       var image = new Image();
       image.src = src;
     });
 
     applySlide(0);
-    window.setInterval(function () {
+    if (timer) window.clearInterval(timer);
+    timer = window.setInterval(function () {
       applySlide(current + 1);
     }, 7000);
 
-    // Re-apply if the page is restored from the mobile browser's back-forward cache.
-    window.addEventListener('pageshow', function () { applySlide(current); });
+    window.addEventListener('pageshow', function () {
+      applySlide(current < 0 ? 0 : current);
+    });
+    document.addEventListener('visibilitychange', function () {
+      if (!document.hidden && current < 0) applySlide(0);
+    });
   }
 
   if (document.readyState === 'loading') {
