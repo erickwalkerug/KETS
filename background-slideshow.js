@@ -3,9 +3,9 @@
   'use strict';
 
   var slides = [
-    '/eric-investments-background.png?v=20261027slide1',
-    '/executive-car-background.jpg?v=20261027slide2',
-    '/executive-boardroom-background.jpg?v=20261027slide3'
+    '/eric-investments-gold-background.jpg?v=20261028slide1',
+    '/eric-investments-diamonds-background.jpg?v=20261028slide2',
+    '/eric-investments-shares-presentation-background.jpg?v=20261028slide3'
   ];
   var current = -1;
   var timer = null;
