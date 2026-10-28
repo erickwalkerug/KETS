@@ -1,4 +1,4 @@
-/* KETS background slideshow — six-photo version; preserve the existing app and behavior. */
+/* KETS background slideshow — reliable six-photo rotation. */
 (function () {
   'use strict';
 
@@ -10,36 +10,45 @@
     '/eric-investments-diamonds-background.jpg?v=20261028slide5',
     '/eric-investments-shares-presentation-background.jpg?v=20261028slide6'
   ];
-  var current = -1;
+  var availableSlides = [];
+  var current = 0;
   var timer = null;
 
   function applySlide(index) {
-    if (!document.documentElement || !slides.length) return;
-    current = ((index % slides.length) + slides.length) % slides.length;
+    if (!document.documentElement || !availableSlides.length) return;
+    current = ((index % availableSlides.length) + availableSlides.length) % availableSlides.length;
     document.documentElement.style.setProperty(
       '--kets-slide-image',
-      'url("' + slides[current] + '")',
+      'url("' + availableSlides[current] + '")',
       'important'
     );
     document.documentElement.setAttribute('data-kets-slide', String(current + 1));
   }
 
-  function start() {
-    if (timer) window.clearInterval(timer);
-    slides.forEach(function (src) {
-      var image = new Image();
-      image.onload = function () {};
-      image.src = src;
-    });
+  function startRotation() {
+    if (!availableSlides.length) return;
     applySlide(0);
+    if (timer) window.clearInterval(timer);
     timer = window.setInterval(function () {
       applySlide(current + 1);
     }, 7000);
-    window.addEventListener('pageshow', function () {
-      applySlide(current < 0 ? 0 : current);
-    });
+    window.addEventListener('pageshow', function () { applySlide(current); });
     document.addEventListener('visibilitychange', function () {
-      if (!document.hidden) applySlide(current < 0 ? 0 : current);
+      if (!document.hidden) applySlide(current);
+    });
+  }
+
+  function start() {
+    Promise.all(slides.map(function (src) {
+      return new Promise(function (resolve) {
+        var image = new Image();
+        image.onload = function () { resolve(src); };
+        image.onerror = function () { resolve(null); };
+        image.src = src;
+      });
+    })).then(function (results) {
+      availableSlides = results.filter(Boolean);
+      startRotation();
     });
   }
 
