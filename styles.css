@@ -1007,3 +1007,29 @@ body::before {
 
 /* Small supporting investment tagline below the brand */
 .investment-tagline{display:block;font-size:11px;line-height:1.35;font-weight:500;opacity:.88;margin-top:5px;letter-spacing:.01em}
+
+
+/* SIX-PHOTO SLIDESHOW DISPLAY FIX (2026-10-28)
+   Make the rotating CSS variable control the actual fixed wallpaper layer.
+   This final override intentionally comes after legacy background-image rules. */
+:root { --kets-slide-image: url('/eric-investments-background.png?v=20261028sixslide1'); }
+html, body { min-height: 100%; }
+body {
+  background: transparent !important;
+  background-image: none !important;
+}
+body::before {
+  content: "" !important;
+  display: block !important;
+  position: fixed !important;
+  inset: 0 !important;
+  z-index: -1 !important;
+  pointer-events: none !important;
+  background: linear-gradient(135deg, rgba(3,8,18,.12), rgba(3,8,18,.22)), var(--kets-slide-image) center center / cover no-repeat !important;
+}
+@media (max-width: 700px) {
+  body::before {
+    background-position: center center !important;
+    background-size: cover !important;
+  }
+}
