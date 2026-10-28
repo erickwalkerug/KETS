@@ -166,7 +166,9 @@ def static_files(filename):
     allowed = {
         "styles.css", "app.js", "admin.html", "service-worker.js", "manifest.json",
         "icon-192.png", "icon-512.png", "kets-android.apk", "eric-investments-background.png",
-        "background-slideshow.js", "executive-car-background.jpg", "executive-boardroom-background.jpg"
+        "background-slideshow.js", "executive-car-background.jpg", "executive-boardroom-background.jpg",
+        "eric-investments-gold-background.jpg", "eric-investments-diamonds-background.jpg",
+        "eric-investments-shares-presentation-background.jpg"
     }
     if filename not in allowed:
         return jsonify({"error": "Not found"}), 404
