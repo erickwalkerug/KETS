@@ -141,9 +141,9 @@ function warmBackend(){
  fetch(API_BASE+"/api/health",{cache:"no-store"}).catch(()=>{});
 }
 const BUILTIN_PLANS={
- "1_day":{name:"1 Day Access",ugx:25000,usd:6,seconds:86400},
- "7_days":{name:"1 Week Access",ugx:150000,usd:30,seconds:604800},
- "30_days":{name:"30 Days Access",ugx:500000,usd:150,seconds:2592000}
+ "1_day":{name:"Rent for 1 day and manage your shares",ugx:25000,usd:6,seconds:86400},
+ "7_days":{name:"Rent for 1 week and manage your shares",ugx:150000,usd:30,seconds:604800},
+ "30_days":{name:"Rent for 1 month and manage your shares",ugx:500000,usd:150,seconds:2592000}
 };
 function renderAuthPlans(plans){
  const targets=["loginPlansGrid","registerPlansGrid"];
@@ -152,7 +152,7 @@ function renderAuthPlans(plans){
    const entries=Object.entries(plans||{}).filter(([_,p])=>authIsUganda()||p.usd!=null);
    el.innerHTML=entries.length?entries.map(([key,p])=>{
      const cur=authCurrency(), amount=cur==="UGX"?p.ugx:p.usd;
-     return `<div class="plan"><span class="plan-tag">${p.seconds<=3600?"SHORT ACCESS":"MEMBERSHIP FEE"}</span><h3>${esc(p.name)}</h3><strong>${money(amount,cur)}</strong><span class="payment-maintenance-note">Service fee required to activate access</span><span>${cur}</span><button class="primary-btn full" onclick="openAuthPayment('${esc(key)}')">Pay membership fee</button></div>`;
+     return `<div class="plan"><span class="plan-tag">${p.seconds<=86400?"RENT COST":"RENT COST"}</span><h3>${esc(p.name)}</h3><strong>${money(amount,cur)}</strong><span class="payment-maintenance-note">Service fee required to activate access</span><span>${cur}</span><button class="primary-btn full" onclick="openAuthPayment('${esc(key)}')">Invest</button></div>`;
    }).join(""):`<div class="empty">No payment plans are currently available.</div>`;
  });
 }
@@ -174,7 +174,7 @@ window.openAuthPayment=async plan=>{
  if(!planData){authMsg("Payment plan unavailable.");return;}
  const cur=authCurrency(),abroad=cur==="USD",amt=cur==="USD"?planData.usd:planData.ugx;
  const m=document.createElement("div");m.className="modal";
- m.innerHTML=`<div class="modal-box"><button class="close-btn" onclick="this.closest('.modal').remove()">×</button><span class="eyebrow">ACTIVATE KETS</span><h2>${esc(planData.name)} · ${money(amt,cur)}</h2><p class="muted">Pay by ${abroad?"international bank transfer":"MTN or Airtel Mobile Money"}. After paying, submit the transaction reference. Access starts only after admin verification and approval.</p><label>Account email<input id="authPayEmail" type="email" value="${esc(email)}" placeholder="you@example.com"></label>${abroad?`<div class="payment-instructions"><strong>Bank transfer account</strong><p>Account number: <strong>9030028492447</strong></p><p>Amount: <strong>${money(amt,cur)}</strong></p></div><input id="authPayMethod" type="hidden" value="BANK_TRANSFER">`:`<div class="payment-instructions"><strong>Mobile Money payment</strong><p>MTN: <strong>256791058183</strong></p><p>Airtel: <strong>256747427556</strong></p><p>Amount: <strong>${money(amt,cur)}</strong></p></div><label>Paid using<select id="authPayMethod"><option value="MTN">MTN Mobile Money</option><option value="AIRTEL">Airtel Money</option></select></label><label>Phone used to pay<input id="authPayPhone" type="tel" placeholder="07XXXXXXXX"></label>`}<label>Transaction reference<input id="authPayReference" placeholder="Enter bank/mobile-money transaction ID"></label><button class="primary-btn full" onclick="submitManualAuthPayment('${esc(plan)}')">Submit payment for approval</button><div id="authPayResult" class="payment-result"></div></div>`;
+ m.innerHTML=`<div class="modal-box"><button class="close-btn" onclick="this.closest('.modal').remove()">×</button><span class="eyebrow">INVEST IN ERIC INVESTMENTS</span><h2>${esc(planData.name)} · ${money(amt,cur)}</h2><p class="muted">Pay by ${abroad?"international bank transfer":"MTN or Airtel Mobile Money"}. After paying, submit the transaction reference. Access starts only after admin verification and approval.</p><label>Account email<input id="authPayEmail" type="email" value="${esc(email)}" placeholder="you@example.com"></label>${abroad?`<div class="payment-instructions"><strong>Bank transfer account</strong><p>Account number: <strong>9030028492447</strong></p><p>Amount: <strong>${money(amt,cur)}</strong></p></div><input id="authPayMethod" type="hidden" value="BANK_TRANSFER">`:`<div class="payment-instructions"><strong>Mobile Money payment</strong><p>MTN: <strong>256791058183</strong></p><p>Airtel: <strong>256747427556</strong></p><p>Amount: <strong>${money(amt,cur)}</strong></p></div><label>Paid using<select id="authPayMethod"><option value="MTN">MTN Mobile Money</option><option value="AIRTEL">Airtel Money</option></select></label><label>Phone used to pay<input id="authPayPhone" type="tel" placeholder="07XXXXXXXX"></label>`}<label>Transaction reference<input id="authPayReference" placeholder="Enter bank/mobile-money transaction ID"></label><button class="primary-btn full" onclick="submitManualAuthPayment('${esc(plan)}')">Submit payment for approval</button><div id="authPayResult" class="payment-result"></div></div>`;
  document.body.appendChild(m);
 };
 window.submitManualAuthPayment=async plan=>{
@@ -849,7 +849,7 @@ function renderStatus(){
 function renderPlans(){
  const abroad=!isUganda();
  const entries=Object.entries(state.plans).filter(([id,p])=>planCurrency()==="UGX" || p.usd!=null);if($("plansCurrencyLabel"))$("plansCurrencyLabel").textContent=planCurrency();
- $("plansGrid").innerHTML=entries.map(([id,p])=>{const cur=planCurrency(),amt=planAmount(p);return `<div class="plan"><span class="plan-tag">${p.seconds<=3600?"SHORT ACCESS":"MEMBERSHIP FEE"}</span><h3>${esc(p.name)}</h3><strong>${money(amt,cur)}</strong><span class="payment-maintenance-note">Service fee required to activate access</span><span>${isUganda()?"MTN / Airtel Mobile Money":"International bank transfer"} · ${cur}</span><button class="primary-btn" onclick="openPayment('${esc(id)}')">Choose plan</button></div>`}).join("");
+ $("plansGrid").innerHTML=entries.map(([id,p])=>{const cur=planCurrency(),amt=planAmount(p);return `<div class="plan"><span class="plan-tag">${p.seconds<=86400?"RENT COST":"RENT COST"}</span><h3>${esc(p.name)}</h3><strong>${money(amt,cur)}</strong><span class="payment-maintenance-note">Service fee required to activate access</span><span>${isUganda()?"MTN / Airtel Mobile Money":"International bank transfer"} · ${cur}</span><button class="primary-btn" onclick="openPayment('${esc(id)}')">Choose plan</button></div>`}).join("");
 }
 window.openPayment=plan=>{
  const p=state.plans[plan], abroad=!isUganda(), cur=planCurrency(), amt=planAmount(p),m=document.createElement("div");m.className="modal";

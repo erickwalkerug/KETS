@@ -1004,3 +1004,6 @@ body::before {
 @media (max-width:700px) {
   body::before { background-position:center center !important; }
 }
+
+/* Small supporting investment tagline below the brand */
+.investment-tagline{display:block;font-size:11px;line-height:1.35;font-weight:500;opacity:.88;margin-top:5px;letter-spacing:.01em}

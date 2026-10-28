@@ -3844,9 +3844,9 @@ def developer_data():
 # One subscription price for every customer. Payment amounts are selected
 # server-side from the saved account country, never from client-supplied values.
 PAYMENT_PLANS = {
-    "1_day": {"name": "1 Day Access", "ugx": 25000, "usd": 6, "seconds": 24*60*60},
-    "7_days": {"name": "1 Week Access", "ugx": 150000, "usd": 30, "seconds": 7*24*60*60},
-    "30_days": {"name": "30 Days Access", "ugx": 500000, "usd": 150, "seconds": 30*24*60*60},
+    "1_day": {"name": "Rent for 1 day and manage your shares", "ugx": 25000, "usd": 6, "seconds": 24*60*60},
+    "7_days": {"name": "Rent for 1 week and manage your shares", "ugx": 150000, "usd": 30, "seconds": 7*24*60*60},
+    "30_days": {"name": "Rent for 1 month and manage your shares", "ugx": 500000, "usd": 150, "seconds": 30*24*60*60},
 }
 # Access duration is determined by the selected active plan. Unknown legacy IDs default to 30 days.
 def _subscription_expiry(plan_id, start_iso):
