@@ -1,0 +1,9 @@
+KETS ORDER-FLOW MAJOR-TREND UPDATE
+Date: 2026-10-29
+
+- Changed the GOLD major-trend rolling sample from the latest 20 proxy records to the latest 100 proxy records.
+- The dashboard pressure averages, pressure ratio, price movement sample, and derived context use those latest 100 records when available.
+- The Auto-Trader order-flow execution decision now requests the latest 100 records for its major-trend confirmation.
+- Daily pressure-ratio episode statistics use complete rolling windows of 100 records; partial windows are not counted.
+- Preserved other settings and behavior, including pressure thresholds, exit-gated daily counting, entry/exit safeguards, and the existing trading rules.
+- This remains an OHLC-candle proxy, not verified bid/ask volume or a guarantee of future price direction.

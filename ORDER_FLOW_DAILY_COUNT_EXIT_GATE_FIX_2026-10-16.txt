@@ -2,7 +2,7 @@ ORDER FLOW DAILY PRESSURE COUNT — EXIT-GATED FIX
 Date: 2026-10-16
 
 Changed behavior:
-- Maximum pressure ratio continues to use the exact rolling 20-record major-trend calculation and is independent of Auto-Trader trade state.
+- Maximum pressure ratio continues to use the exact rolling 100-record major-trend calculation and is independent of Auto-Trader trade state.
 - “Times pressure ratio exceeded 2x today” no longer increments for every rolling window above 2x.
 - A confirmed automatic ENTRY disables counting while that automatic trade cycle is active.
 - A confirmed automatic EXIT enables counting again.

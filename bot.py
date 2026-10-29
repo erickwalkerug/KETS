@@ -2615,7 +2615,7 @@ def _order_flow_execution_decision(flow, required_ratio=2.0):
     if not isinstance(flow, dict):
         return None, 0.0, "No fresh order-flow record."
     asset = str(flow.get("asset") or flow.get("symbol") or "").upper()
-    samples = _order_flow_items(asset=asset, limit=20) if asset else []  # Preserve the established 20-record Major-Trend rule.
+    samples = _order_flow_items(asset=asset, limit=100) if asset else []  # Use the latest 100 records for Major-Trend.
     samples = [x for x in samples if isinstance(x, dict)]
     if len(samples) < 3:
         return None, 0.0, "Need at least 3 recent order-flow records."
@@ -3632,9 +3632,9 @@ def api_order_flow():
     eat_now = get_eat_time()
     eat_midnight = eat_now.replace(hour=0, minute=0, second=0, microsecond=0)
     cutoff_utc = eat_midnight.astimezone(datetime.timezone.utc).isoformat()
-    # Load preceding records too: the first major-trend calculation of today
-    # still needs the 19 records immediately before midnight. Only windows
-    # ending on a record received today contribute to today's statistics.
+    # Load preceding records too: the first 100-record major-trend window of today
+    # needs up to 99 records immediately before midnight. Only windows ending
+    # on a record received today contribute to today's statistics.
     stats_sql = "SELECT payload, timestamp FROM order_flow_history WHERE timestamp >= ?"
     stats_params = [(eat_midnight - datetime.timedelta(days=2)).astimezone(datetime.timezone.utc).isoformat()]
     if asset:
@@ -3657,7 +3657,7 @@ def api_order_flow():
         app.logger.warning("Order-flow daily stats read failed: %s", str(exc)[:250])
     # Daily ratio statistics must use the SAME calculation as Major-Trend Check:
     # average bullish/bearish pressure over the latest rolling window of exactly
-    # 20 records, then divide the larger average by the smaller average.
+    # 100 records, then divide the larger average by the smaller average.
     # Evaluate that rolling calculation once per new stored record; do not
     # calculate ratios from individual raw records.
     records_by_asset = {}
@@ -3707,7 +3707,7 @@ def api_order_flow():
         today_records = sum(1 for record in records if record["is_today"])
         stats = {"asset": name, "max_pressure_ratio": None, "times_above_2x": 0,
                  "samples": today_records, "date_eat": eat_midnight.date().isoformat(),
-                 "ratio_method": "exact_20_record_major_trend"}
+                 "ratio_method": "exact_100_record_major_trend"}
         # Do not count partial windows. The counter is cycle-aware: only a
         # ratio episode observed after a confirmed auto-trader EXIT can count;
         # any subsequent ENTRY disables counting until the next confirmed EXIT.
@@ -3716,11 +3716,11 @@ def api_order_flow():
         event_index = 0
         exited_and_waiting = False
         counted_this_episode = False
-        # Do not count partial windows; use exactly 20 valid records.
-        for end in range(20, len(records) + 1):
+        # Do not count partial windows; use exactly 100 valid records.
+        for end in range(100, len(records) + 1):
             if not records[end - 1]["is_today"]:
                 continue
-            window = records[end - 20:end]
+            window = records[end - 100:end]
             window_stamp = records[end - 1]["timestamp"]
             while event_index < len(trade_events) and trade_events[event_index][0] <= window_stamp:
                 _, event_type = trade_events[event_index]
