@@ -1,0 +1,16 @@
+FRVP MONITOR PAGE — 2026-11-02
+
+Added a separate FRVP page and top navigation link.
+The page is read-only and visualizes the existing Auto-Trader entry requirements:
+- Rolling 100-record Order Flow direction and pressure-ratio confirmation.
+- Required OHLC candles with positive tick volume.
+- Latest completed directional swing range.
+- 48-bin swing-anchored tick-volume Fixed Range Volume Profile and POC.
+- Directional POC retest.
+- Confirmed post-retest ZigZag structure (bullish higher-low + higher-high; bearish lower-high + lower-low).
+- A clear WAITING / CONFIRMED status and per-step checklist.
+
+No Auto-Trader execution rules, exits, lot sizing, account handling, or other settings were changed.
+Tick-volume distribution is an approximation of volume-at-price, not exchange-traded real volume.
+If the incoming /api/order-flow feed does not provide sufficient OHLC + tick-volume candle data,
+the page clearly reports that it is waiting; it does not fabricate a profile or authorize an entry.

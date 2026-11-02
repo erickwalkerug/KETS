@@ -797,7 +797,44 @@ function renderOrderFlowHistory(){
  if(updated)updated.textContent=`${state.orderFlowHistory.length} proxy record${state.orderFlowHistory.length===1?"":"s"} · 2-day history`;
 }
 async function refreshOrderFlowHistory(){
- try{const d=await api("/api/order-flow?limit=200",{timeoutMs:10000});state.orderFlowHistory=d.history||[];state.orderFlowDailyStats=d.daily_stats||[];renderOrderFlowTrendSummary();renderOrderFlowHistory();}catch(e){const el=$("orderFlowHistoryList");if(el&&!state.orderFlowHistory.length)el.innerHTML=`<div class="empty">Order-flow history unavailable: ${esc(e.message)}</div>`;}
+ try{const d=await api("/api/order-flow?limit=200",{timeoutMs:10000});state.orderFlowHistory=d.history||[];state.orderFlowDailyStats=d.daily_stats||[];renderOrderFlowTrendSummary();renderOrderFlowHistory();renderFRVPPage();}catch(e){const el=$("orderFlowHistoryList");if(el&&!state.orderFlowHistory.length)el.innerHTML=`<div class="empty">Order-flow history unavailable: ${esc(e.message)}</div>`;}
+}
+
+
+function renderFRVPPage(){
+ const overview=$("frvpOverview"), profileEl=$("frvpProfile"), checklistEl=$("frvpChecklist"), zigzagEl=$("frvpZigzag"), updated=$("frvpLastUpdated"), pocLabel=$("frvpPocLabel");
+ if(!overview||!profileEl||!checklistEl||!zigzagEl)return;
+ const all=state.orderFlowHistory||[];
+ const assets=[...new Set(all.map(x=>String(x.asset||x.symbol||"XAUUSD").toUpperCase()))];
+ const asset=String($("autoTradeSymbol")?.value||assets[0]||"XAUUSD").toUpperCase();
+ const records=all.filter(x=>String(x.asset||x.symbol||"").toUpperCase()===asset).slice(0,100);
+ const candles=[];
+ records.slice().reverse().forEach(item=>{
+  const nested=Array.isArray(item.candles)?item.candles:[item.candle||item];
+  nested.forEach(c=>{if(!c||typeof c!=="object")return;const o=Number(c.open),h=Number(c.high),l=Number(c.low),cl=Number(c.close),v=Number(c.tick_volume??c.volume??c.tickVolume??0);if([o,h,l,cl,v].every(Number.isFinite)&&h>=Math.max(o,cl,l)&&l<=Math.min(o,cl,h)&&v>0)candles.push({open:o,high:h,low:l,close:cl,volume:v});});
+ });
+ const fmt=v=>Number.isFinite(v)?Number(v).toFixed(asset.includes("BTC")?2:5):"--";
+ const item=(label,value,ok,detail="")=>`<div class="frvp-check ${ok===true?"pass":ok===false?"fail":"pending"}"><span class="frvp-check-icon">${ok===true?"✓":ok===false?"×":"…"}</span><div><b>${esc(label)}</b><strong>${esc(value)}</strong>${detail?`<small>${esc(detail)}</small>`:""}</div></div>`;
+ const latest=records[0]||null;
+ let bullish=0,bearish=0,ratio=0,trend="WAIT",priceBias="FLAT",flowOk=false,flowReason="Need at least 3 recent Order Flow records.";
+ if(records.length>=3){const bv=records.map(x=>Number(x.bullish_pressure)).filter(Number.isFinite),sv=records.map(x=>Number(x.bearish_pressure)).filter(Number.isFinite);if(bv.length>=3&&sv.length>=3){bullish=bv.reduce((a,b)=>a+b,0)/bv.length;bearish=sv.reduce((a,b)=>a+b,0)/sv.length;ratio=Math.min(bullish,bearish)>0?Math.max(bullish,bearish)/Math.min(bullish,bearish):0;const newest=records.find(x=>Number(x.market_price??x.price??x.close??x.current_price)>0),oldest=[...records].reverse().find(x=>Number(x.market_price??x.price??x.close??x.current_price)>0);if(newest&&oldest){const np=Number(newest.market_price??newest.price??newest.close??newest.current_price),op=Number(oldest.market_price??oldest.price??oldest.close??oldest.current_price),change=op?((np-op)/op)*100:0;priceBias=Math.abs(change)<.02?"FLAT":change>0?"BULLISH":"BEARISH";const pb=bullish>=55?"BULLISH":bearish>=55?"BEARISH":"BALANCED";trend=pb==="BULLISH"?"BUY":pb==="BEARISH"?"SELL":"WAIT";const required=Math.max(1,Number($("managedPressureRatio")?.value||2));flowOk=pb!=="BALANCED"&&pb===priceBias&&ratio>=required;flowReason=flowOk?`${pb} pressure and price agree; ${ratio.toFixed(2)}× meets ${required.toFixed(2)}× threshold.`:ratio<required?`Pressure ratio ${ratio.toFixed(2)}× is below ${required.toFixed(2)}×.`:`Major trend / price alignment is not confirmed.`;}}}
+ const direction=flowOk?trend:null;
+ let reason="Waiting for sufficient candle data."; let poc=null,lowPrice=null,highPrice=null,bins=[],highs=[],lows=[],swing=null,testIndex=null,zigOk=false,profileOk=false;
+ if(candles.length>=12&&direction){
+  for(let i=2;i<candles.length-2;i++){const w=candles.slice(i-2,i+3);if(candles[i].high>=Math.max(...w.map(x=>x.high))&&w.filter(x=>x.high===candles[i].high).length===1)highs.push([i,candles[i].high]);if(candles[i].low<=Math.min(...w.map(x=>x.low))&&w.filter(x=>x.low===candles[i].low).length===1)lows.push([i,candles[i].low]);}
+  if(highs.length&&lows.length){let pairs;if(direction==="BUY")pairs=lows.flatMap(lo=>highs.filter(hi=>lo[0]<hi[0]).map(hi=>[lo,hi]));else pairs=highs.flatMap(hi=>lows.filter(lo=>hi[0]<lo[0]).map(lo=>[hi,lo]));if(pairs.length){swing=pairs.sort((a,b)=>b[1][0]-a[1][0])[0];const start=swing[0][0],end=swing[1][0];if(end-start>=4){const selected=candles.slice(start,end+1);lowPrice=Math.min(...selected.map(x=>x.low));highPrice=Math.max(...selected.map(x=>x.high));const step=(highPrice-lowPrice)/48;if(step>0){bins=Array(48).fill(0);selected.forEach(c=>{const first=Math.max(0,Math.min(47,Math.floor((c.low-lowPrice)/step))),last=Math.max(0,Math.min(47,Math.floor((c.high-lowPrice)/step))),share=c.volume/(last-first+1);for(let b=first;b<=last;b++)bins[b]+=share;});const pi=bins.indexOf(Math.max(...bins));poc=lowPrice+(pi+.5)*step;profileOk=true;const tol=Math.max(step*1.25,Math.abs(poc)*.00003);for(let i=Math.max(end+1,candles.length-10);i<candles.length;i++){const c=candles[i],prev=candles[i-1]||c,touched=c.low<=poc+tol&&c.high>=poc-tol,approach=direction==="BUY"?(prev.close>poc&&c.close<=prev.close):(prev.close<poc&&c.close>=prev.close);if(touched&&approach)testIndex=i;}
+  if(testIndex!==null){if(direction==="BUY"){const prior=lows.filter(x=>x[0]<testIndex),postL=lows.filter(x=>x[0]>testIndex),postH=highs.filter(x=>x[0]>testIndex);zigOk=!!(prior.length&&postL.length&&postH.length&&postL.at(-1)[1]>prior.at(-1)[1]&&postH.at(-1)[1]>Math.max(...highs.filter(x=>x[0]<postH.at(-1)[0]).map(x=>x[1]),0));}else{const prior=highs.filter(x=>x[0]<testIndex),postH=highs.filter(x=>x[0]>testIndex),postL=lows.filter(x=>x[0]>testIndex);zigOk=!!(prior.length&&postH.length&&postL.length&&postH.at(-1)[1]<prior.at(-1)[1]&&postL.at(-1)[1]<Math.min(...lows.filter(x=>x[0]<postL.at(-1)[0]).map(x=>x[1]),Infinity));}}
+ }}}}
+ }
+ if(!flowOk)reason=flowReason;else if(candles.length<12)reason=`Only ${candles.length} valid OHLC + tick-volume candles. At least 12 are required.`;else if(!profileOk)reason="Waiting for a completed swing range and valid FRVP calculation.";else if(testIndex===null)reason=`Waiting for price to retest POC ${fmt(poc)} from ${direction==="BUY"?"above while moving downward":"below while moving upward"}.`;else if(!zigOk)reason=`POC retested. Waiting for confirmed ${direction==="BUY"?"bullish higher-low and higher-high":"bearish lower-high and lower-low"} ZigZag.`;else reason=`FRVP POC retest and ${direction} ZigZag confirmed. The FRVP entry gate is satisfied.`;
+ const ready=!!(flowOk&&profileOk&&testIndex!==null&&zigOk);
+ overview.innerHTML=`<div class="frvp-overview-grid"><article><span>MARKET</span><b>${esc(asset)}</b><small>${records.length} / 100 recent records</small></article><article><span>MAJOR TREND</span><b class="${direction==="BUY"?"buy-text":direction==="SELL"?"sell-text":""}">${esc(direction||"UNCONFIRMED")}</b><small>Rolling 100-record pressure + price check</small></article><article><span>PRESSURE RATIO</span><b>${records.length>=3?ratio.toFixed(2)+"×":"--"}</b><small>Required ${Number($("managedPressureRatio")?.value||2).toFixed(2)}×</small></article><article><span>FRVP ENTRY STATUS</span><b class="${ready?"buy-text":""}">${ready?"CONFIRMED":"WAITING"}</b><small>${esc(reason)}</small></article></div>`;
+ checklistEl.innerHTML=[item("Order Flow major trend",direction||"Not confirmed",flowOk,flowReason),item("Candle history",`${candles.length} valid candles`,candles.length>=12,"At least 12 OHLC candles with positive tick volume are required."),item("Completed swing range",swing?`${fmt(lowPrice)} – ${fmt(highPrice)}`:"Not available",!!swing,"Bullish: swing low → swing high. Bearish: swing high → swing low."),item("FRVP POC",poc===null?"Not calculated":fmt(poc),profileOk,"POC is the highest-volume bin in the 48-bin swing profile."),item("POC retest",testIndex===null?"Not yet tested":`Tested on candle ${testIndex+1}`,testIndex!==null,"BUY approaches from above; SELL approaches from below."),item("ZigZag confirmation",zigOk?`${direction} structure confirmed`:testIndex===null?"Waiting for POC test":"Waiting for confirmed pivots",zigOk,direction==="BUY"?"Higher low + higher high after the POC test.":direction==="SELL"?"Lower high + lower low after the POC test.":"Requires a confirmed major-trend direction.")].join("");
+ if(pocLabel)pocLabel.textContent=`POC: ${poc===null?"--":fmt(poc)}`;
+ if(profileOk){const max=Math.max(...bins)||1;profileEl.innerHTML=bins.map((v,i)=>{const price=lowPrice+(i+.5)*(highPrice-lowPrice)/48;const isPoc=Math.abs(price-poc)<(highPrice-lowPrice)/48*.01;return `<div class="frvp-bin ${isPoc?"is-poc":""}"><span>${esc(fmt(price))}</span><div><i style="width:${(v/max*100).toFixed(1)}%"></i></div><small>${Math.round(v).toLocaleString()}</small></div>`;}).reverse().join("");}else profileEl.innerHTML=`<div class="empty">${candles.length<12?"Waiting for at least 12 valid OHLC + tick-volume candles.":"Waiting for a confirmed directional swing and valid profile range."}</div>`;
+ const pivots=[...highs.map(x=>({i:x[0],v:x[1],t:"Swing high"})),...lows.map(x=>({i:x[0],v:x[1],t:"Swing low"}))].sort((a,b)=>a.i-b.i).slice(-10).reverse();
+ zigzagEl.innerHTML=pivots.length?pivots.map(x=>`<div class="frvp-pivot"><span>${esc(x.t)}</span><b>${esc(fmt(x.v))}</b><small>Candle ${x.i+1}${testIndex!==null&&x.i>testIndex?" · after POC test":""}</small></div>`).join(""):`<div class="empty">${candles.length<5?"Candle data is not available yet.":"Waiting for confirmed 5-bar ZigZag pivots."}</div>`;
+ if(updated)updated.textContent=`${asset} · ${candles.length} OHLC/tick-volume candles · ${latest?.timestamp_utc||latest?.timestamp||"feed pending"}`;
 }
 
 function renderPayments(){
@@ -907,7 +944,7 @@ function renderManagedTrading(){
  el.innerHTML=`<div class="managed-trade-head"><div><span class="eyebrow">${esc(market)}</span><h3>${direction==='BUY'?'🟢 BUY / LONG':'🔴 SELL / SHORT'}</h3></div><span class="managed-quality">Signal strength ${esc(score)}%</span></div><div class="managed-level-grid"><div><span>ENTRY</span><b>${signalMoney(price)}</b></div><div><span>TAKE PROFIT</span><b>${signalMoney(tp)}</b></div><div><span>STOP LOSS</span><b>${signalMoney(sl)}</b></div><div><span>STATUS</span><b>READY</b></div></div><p class="managed-execution-note"><strong>${esc(targetText)}</strong><br>This is the current KETS manual-trading plan. Use these levels only when the status shows READY. Automatic trading uses its separate Signal History flow.</p>`;
 }
 
-const PAGE_IDS={dashboard:"dashboardHome",live:"liveMarketsPage",plans:"accessPlansPage",payments:"paymentHistoryPage",stop:"stopLossPage",history:"bullBearHistoryPage",managed:"managedTradingPage",autoTrader:"autoTraderPage",smcHistory:"smcHistoryPage",orderFlow:"orderFlowPage"};
+const PAGE_IDS={dashboard:"dashboardHome",live:"liveMarketsPage",plans:"accessPlansPage",payments:"paymentHistoryPage",stop:"stopLossPage",history:"bullBearHistoryPage",managed:"managedTradingPage",autoTrader:"autoTraderPage",smcHistory:"smcHistoryPage",orderFlow:"orderFlowPage",frvp:"frvpPage"};
 function showPage(name,updateHash=true){
  Object.values(PAGE_IDS).forEach(id=>$(id)?.classList.add("hidden"));
  const target=$(PAGE_IDS[name]||PAGE_IDS.dashboard);
@@ -917,8 +954,9 @@ function showPage(name,updateHash=true){
  if(name==="managed"){renderManagedTrading();refreshCTraderStatus();}
  if(name==="smcHistory"){renderSMCHistory();}
  if(name==="orderFlow"){refreshOrderFlowHistory();}
+ if(name==="frvp"){refreshOrderFlowHistory().then(()=>renderFRVPPage());}
  if(updateHash){
-   const hash={live:"#live-markets",plans:"#access-plans",payments:"#payment-history",stop:"#stop-loss-management",history:"#bullish-bearish-history",managed:"#managed-trading",autoTrader:"#auto-trader",smcHistory:"#smc-history",orderFlow:"#order-flow",dashboard:""}[name]||"";
+   const hash={live:"#live-markets",plans:"#access-plans",payments:"#payment-history",stop:"#stop-loss-management",history:"#bullish-bearish-history",managed:"#managed-trading",autoTrader:"#auto-trader",smcHistory:"#smc-history",orderFlow:"#order-flow",frvp:"#frvp",dashboard:""}[name]||"";
    try{history.replaceState({},document.title,location.pathname+location.search+hash);}catch(e){}
  }
  window.scrollTo({top:0,behavior:"smooth"});
@@ -936,6 +974,7 @@ function handleHistoryRoute(){
  else if(h==="#auto-trader")showPage("autoTrader",false);
  else if(h==="#smc-history")showPage("smcHistory",false);
  else if(h==="#order-flow")showPage("orderFlow",false);
+ else if(h==="#frvp")showPage("frvp",false);
  else showPage("dashboard",false);
 }
 
@@ -950,6 +989,8 @@ if($("managedTradingBtn")) $("managedTradingBtn").onclick=()=>showPage("managed"
 if($("autoTraderBtn")) $("autoTraderBtn").onclick=()=>showPage("autoTrader");
 if($("smcHistoryBtn")) $("smcHistoryBtn").onclick=()=>showPage("smcHistory");
 if($("orderFlowBtn")) $("orderFlowBtn").onclick=()=>showPage("orderFlow");
+if($("frvpBtn")) $("frvpBtn").onclick=()=>showPage("frvp");
+if($("autoTradeSymbol")) $("autoTradeSymbol").onchange=()=>renderFRVPPage();
 if($("dashboardLiveMarkets")) $("dashboardLiveMarkets").onclick=()=>showPage("live");
  if($("dashboardOrderFlow")) $("dashboardOrderFlow").onclick=()=>showPage("orderFlow");
 if($("dashboardStopLoss")) $("dashboardStopLoss").onclick=()=>showPage("stop");
@@ -1644,10 +1685,10 @@ async function loadAll(){
      renderStatus(); renderSignals(); renderStopManagement();
    }).catch(()=>{});
 
-  Promise.all([api("/api/history",{timeoutMs:12000}),api("/api/smc-history",{timeoutMs:12000}),api("/api/order-flow?limit=200",{timeoutMs:12000}).catch(()=>({history:state.orderFlowHistory}))]).then(([d,smc,flow])=>{state.history=d.history||[];state.smcHistory=smc.history||[];state.orderFlowHistory=flow.history||[];state.orderFlowDailyStats=flow.daily_stats||[];renderHistory();renderSMCHistory();renderOrderFlowTrendSummary();renderOrderFlowHistory();}).catch(()=>{
+  Promise.all([api("/api/history",{timeoutMs:12000}),api("/api/smc-history",{timeoutMs:12000}),api("/api/order-flow?limit=200",{timeoutMs:12000}).catch(()=>({history:state.orderFlowHistory}))]).then(([d,smc,flow])=>{state.history=d.history||[];state.smcHistory=smc.history||[];state.orderFlowHistory=flow.history||[];state.orderFlowDailyStats=flow.daily_stats||[];renderHistory();renderSMCHistory();renderOrderFlowTrendSummary();renderOrderFlowHistory();renderFRVPPage();}).catch(()=>{
    api("/api/history",{timeoutMs:12000}).then(d=>{state.history=d.history||[];renderHistory();}).catch(()=>{});
    api("/api/smc-history",{timeoutMs:12000}).then(d=>{state.smcHistory=d.history||[];renderSMCHistory();}).catch(()=>{});
-   api("/api/order-flow?limit=200",{timeoutMs:12000}).then(d=>{state.orderFlowHistory=d.history||[];state.orderFlowDailyStats=d.daily_stats||[];renderOrderFlowTrendSummary();renderOrderFlowHistory();}).catch(()=>{});
+   api("/api/order-flow?limit=200",{timeoutMs:12000}).then(d=>{state.orderFlowHistory=d.history||[];state.orderFlowDailyStats=d.daily_stats||[];renderOrderFlowTrendSummary();renderOrderFlowHistory();renderFRVPPage();}).catch(()=>{});
   });
   api("/api/plans",{timeoutMs:8000}).then(d=>{if(d?.plans){state.plans=d.plans;renderPlans();renderAuthPlans(d.plans);}}).catch(()=>{});
   api("/api/payments/history",{timeoutMs:12000}).then(d=>{state.payments=d.payments||[];renderPayments();}).catch(()=>{});
@@ -1691,7 +1732,7 @@ async function refreshDisplayedSignals(){
   state.signalDelayMinutes=0;
   state.history=historyFeed.history||[];
   state.smcHistory=smcHistoryFeed.history||[];
-  state.orderFlowHistory=orderFlowFeed.history||[];state.orderFlowDailyStats=orderFlowFeed.daily_stats||[];
+  state.orderFlowHistory=orderFlowFeed.history||[];state.orderFlowDailyStats=orderFlowFeed.daily_stats||[];renderFRVPPage();
   state.status=statusFeed;
   state.access=accessFeed;
   setTimerDeadlines(statusFeed);

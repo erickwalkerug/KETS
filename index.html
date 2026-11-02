@@ -65,7 +65,7 @@
 <div id="app" class="hidden">
 <header class="topbar">
   <div class="brand"><div class="investment-brand"><strong>ERIC INVESTMENTS</strong><span>INSTANT INVESTING</span><span>INSTANT WITHDRAWS</span><div class="investment-info-inline">Capital guide: $100 → 0.05 lot · $500 → 0.10 lot · $1,000 → 0.50 lot · $5,000 → 1.00 lot<br>Profitability depends on current market pressure. Caution: investments can go positive or negative. Choose a 30-day service plan to start investing.</div></div></div>
-  <div class="header-actions"><span class="header-status"><i></i><span id="engineStatus">Connecting...</span></span><div class="page-nav" aria-label="KETS pages"><button class="ghost-btn page-nav-btn" id="liveMarketsBtn">Live Markets</button><button class="ghost-btn page-nav-btn" id="accessPlansBtn">Rent Costs</button><button class="ghost-btn page-nav-btn" id="paymentHistoryBtn">Payment History</button><button class="ghost-btn page-nav-btn" id="stopLossBtn">Stop Loss</button><button class="ghost-btn page-nav-btn" id="bullBearHistoryBtn">Bullish / Bearish History</button><button class="ghost-btn page-nav-btn" id="managedTradingBtn">Invest Shares</button><button class="ghost-btn page-nav-btn" id="autoTraderBtn">🤖 Auto Trader</button><button class="ghost-btn page-nav-btn" id="smcHistoryBtn">SMC History</button><button class="ghost-btn page-nav-btn" id="orderFlowBtn">Order Flow</button><button class="ghost-btn page-nav-btn" id="adminPaymentsBtn" type="button">Admin Payments</button></div><button class="profile-mini" id="profileBtn"><span id="miniName">Profile</span></button></div>
+  <div class="header-actions"><span class="header-status"><i></i><span id="engineStatus">Connecting...</span></span><div class="page-nav" aria-label="KETS pages"><button class="ghost-btn page-nav-btn" id="liveMarketsBtn">Live Markets</button><button class="ghost-btn page-nav-btn" id="accessPlansBtn">Rent Costs</button><button class="ghost-btn page-nav-btn" id="paymentHistoryBtn">Payment History</button><button class="ghost-btn page-nav-btn" id="stopLossBtn">Stop Loss</button><button class="ghost-btn page-nav-btn" id="bullBearHistoryBtn">Bullish / Bearish History</button><button class="ghost-btn page-nav-btn" id="managedTradingBtn">Invest Shares</button><button class="ghost-btn page-nav-btn" id="autoTraderBtn">🤖 Auto Trader</button><button class="ghost-btn page-nav-btn" id="smcHistoryBtn">SMC History</button><button class="ghost-btn page-nav-btn" id="orderFlowBtn">Order Flow</button><button class="ghost-btn page-nav-btn" id="frvpBtn">FRVP</button><button class="ghost-btn page-nav-btn" id="adminPaymentsBtn" type="button">Admin Payments</button></div><button class="profile-mini" id="profileBtn"><span id="miniName">Profile</span></button></div>
 </header>
 
 <main>
@@ -254,6 +254,19 @@
   </section>
   <section id="orderFlowTrendSummary" class="order-flow-trend-summary"><div class="empty">Trend bias will appear when enough proxy records arrive.</div></section>
   <section class="history-card" id="orderFlowHistoryList"><div class="empty">Loading order-flow history…</div></section>
+</section>
+
+<section id="frvpPage" class="history-page hidden">
+  <div class="history-page-head">
+    <div><span class="eyebrow">AUTOTRADER ENTRY VISUALIZER</span><h2>📊 FRVP · Fixed Range Volume Profile</h2><p class="muted">See the swing range, estimated volume-at-price, Point of Control (POC) retest and confirmed ZigZag conditions used before an Auto-Trader entry.</p></div>
+    <button class="ghost-btn page-back-btn" data-page="dashboard">← Dashboard</button>
+  </div>
+  <div class="live-page-status"><span class="live-dot">FRVP MONITOR</span><small id="frvpLastUpdated">Waiting for order-flow candle data…</small></div>
+  <section class="history-card frvp-intro"><strong>How the entry is checked</strong><p>FRVP uses the latest completed swing as a fixed range. Tick volume is spread across 48 price bins to estimate the POC. BUY requires a downward POC retest followed by a confirmed bullish higher-low and higher-high. SELL requires an upward POC retest followed by a confirmed bearish lower-high and lower-low. The existing 100-record Order Flow confirmation and pressure-ratio threshold must also pass.</p><small>Volume is a tick-volume approximation, not exchange-traded real volume. This page is a read-only monitor; it does not change or manually trigger trades.</small></section>
+  <section id="frvpOverview" class="frvp-overview"><div class="empty">FRVP status will appear when Order Flow records arrive.</div></section>
+  <section class="history-card frvp-profile-card"><div class="frvp-section-head"><div><h3>Fixed Range Volume Profile</h3><p class="muted">Estimated tick-volume distribution across the selected swing range.</p></div><span id="frvpPocLabel" class="frvp-poc-label">POC: --</span></div><div id="frvpProfile" class="frvp-profile"><div class="empty">Waiting for sufficient OHLC + tick-volume candle data.</div></div></section>
+  <section class="history-card frvp-steps-card"><h3>Entry confirmation checklist</h3><div id="frvpChecklist" class="frvp-checklist"><div class="empty">Waiting for FRVP inputs…</div></div></section>
+  <section class="history-card frvp-steps-card"><h3>Confirmed ZigZag swing points</h3><div id="frvpZigzag" class="frvp-zigzag"><div class="empty">No confirmed ZigZag points yet.</div></div></section>
 </section>
 
 <section id="autoTraderPage" class="history-page hidden">

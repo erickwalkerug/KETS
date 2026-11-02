@@ -2660,6 +2660,115 @@ def _order_flow_execution_decision(flow, required_ratio=2.0):
     return direction, ratio, "Order-flow conditions confirmed."
 
 
+def _autotrader_volume_profile_zigzag_entry(flow, trend_direction, asset=None):
+    """Require a swing-anchored tick-volume POC retest and a confirming ZigZag.
+
+    The Order Flow receiver may carry either a `candles` array or one OHLCV
+    candle per proxy record. Tick volume is an approximation of traded volume;
+    entries are blocked when OHLC/tick-volume inputs are insufficient.
+    """
+    if trend_direction not in {"BUY", "SELL"} or not isinstance(flow, dict):
+        return None, "No confirmed major-trend direction."
+
+    raw_items = _order_flow_items(asset=asset or flow.get("asset") or flow.get("symbol"), limit=100)
+    candles = []
+    for item in reversed(raw_items):  # oldest -> newest
+        nested = item.get("candles")
+        candidates = nested if isinstance(nested, list) else [item.get("candle") or item]
+        for c in candidates:
+            if not isinstance(c, dict):
+                continue
+            try:
+                o = float(c.get("open")); h = float(c.get("high")); l = float(c.get("low")); cl = float(c.get("close"))
+                vol = float(c.get("tick_volume", c.get("volume", c.get("tickVolume", 0))) or 0)
+                if all(math.isfinite(v) for v in (o, h, l, cl, vol)) and h >= max(o, cl, l) and l <= min(o, cl, h) and vol > 0:
+                    candles.append({"open": o, "high": h, "low": l, "close": cl, "volume": vol})
+            except (TypeError, ValueError):
+                continue
+    if len(candles) < 12:
+        return None, "Waiting for at least 12 OHLC candles with broker tick-volume data."
+
+    # Confirmed 5-bar ZigZag pivots (two candles on either side).
+    highs, lows = [], []
+    for i in range(2, len(candles) - 2):
+        w = candles[i-2:i+3]
+        if candles[i]["high"] >= max(x["high"] for x in w) and sum(candles[i]["high"] == x["high"] for x in w) == 1:
+            highs.append((i, candles[i]["high"]))
+        if candles[i]["low"] <= min(x["low"] for x in w) and sum(candles[i]["low"] == x["low"] for x in w) == 1:
+            lows.append((i, candles[i]["low"]))
+    if len(highs) < 1 or len(lows) < 1:
+        return None, "Waiting for confirmed swing high and swing low."
+
+    # Choose the latest completed directional swing: low->high for bullish,
+    # high->low for bearish. Do not use an unfinished right-edge pivot.
+    if trend_direction == "BUY":
+        pairs = [(lo, hi) for lo in lows for hi in highs if lo[0] < hi[0]]
+        if not pairs:
+            return None, "No completed bullish swing low-to-high range."
+        lo, hi = max(pairs, key=lambda pair: pair[1][0])
+        start, end = lo[0], hi[0]
+    else:
+        pairs = [(hi, lo) for hi in highs for lo in lows if hi[0] < lo[0]]
+        if not pairs:
+            return None, "No completed bearish swing high-to-low range."
+        hi, lo = max(pairs, key=lambda pair: pair[1][0])
+        start, end = hi[0], lo[0]
+    if end - start < 4:
+        return None, "The latest swing range is too short for a reliable volume profile."
+
+    selected = candles[start:end+1]
+    low_price = min(x["low"] for x in selected)
+    high_price = max(x["high"] for x in selected)
+    if high_price <= low_price:
+        return None, "Invalid swing range for volume profile."
+    # Fixed-range volume profile: distribute each candle's tick volume across
+    # the price bins touched by its range (uniform allocation approximation).
+    bins_count = 48
+    step = (high_price - low_price) / bins_count
+    profile = [0.0] * bins_count
+    for c in selected:
+        first = max(0, min(bins_count - 1, int((c["low"] - low_price) / step)))
+        last = max(0, min(bins_count - 1, int((c["high"] - low_price) / step)))
+        touched = max(1, last - first + 1)
+        share = c["volume"] / touched
+        for b in range(first, last + 1):
+            profile[b] += share
+    poc_index = max(range(bins_count), key=lambda b: profile[b])
+    poc = low_price + (poc_index + 0.5) * step
+    tolerance = max(step * 1.25, abs(poc) * 0.00003)
+
+    # Find the most recent POC test approached from the required side.
+    test_index = None
+    for i in range(max(end + 1, len(candles) - 10), len(candles)):
+        c = candles[i]
+        prev = candles[i-1] if i else c
+        touched = c["low"] <= poc + tolerance and c["high"] >= poc - tolerance
+        approach = (prev["close"] > poc and c["close"] <= prev["close"]) if trend_direction == "BUY" else (prev["close"] < poc and c["close"] >= prev["close"])
+        if touched and approach:
+            test_index = i
+    if test_index is None:
+        side = "from above while moving downward" if trend_direction == "BUY" else "from below while moving upward"
+        return None, f"Waiting for price to test the swing POC {side} (POC {poc:.5f})."
+
+    # ZigZag confirmation must form after the POC test, not before it.
+    post_highs = [(i, v) for i, v in highs if i > test_index]
+    post_lows = [(i, v) for i, v in lows if i > test_index]
+    if trend_direction == "BUY":
+        prior_lows = [(i, v) for i, v in lows if i < test_index]
+        if not post_lows or not prior_lows or post_lows[-1][1] <= prior_lows[-1][1]:
+            return None, f"POC {poc:.5f} tested; waiting for bullish ZigZag higher-low confirmation."
+        if not post_highs or post_highs[-1][1] <= max((v for i, v in highs if i < post_highs[-1][0]), default=0):
+            return None, f"POC {poc:.5f} tested; waiting for bullish ZigZag higher-high confirmation."
+    else:
+        prior_highs = [(i, v) for i, v in highs if i < test_index]
+        if not post_highs or not prior_highs or post_highs[-1][1] >= prior_highs[-1][1]:
+            return None, f"POC {poc:.5f} tested; waiting for bearish ZigZag lower-high confirmation."
+        if not post_lows or post_lows[-1][1] >= min((v for i, v in lows if i < post_lows[-1][0]), default=float("inf")):
+            return None, f"POC {poc:.5f} tested; waiting for bearish ZigZag lower-low confirmation."
+
+    return trend_direction, f"Swing FRVP POC retest and {'bullish' if trend_direction == 'BUY' else 'bearish'} ZigZag confirmed; POC={poc:.5f}."
+
+
 def _latest_autotrader_signal(requested_symbol, kets_strategy_enabled=True, selected_strategies=None):
     """Auto-Trader uses only a fresh, unanimously confirmed order-flow record."""
     flow = _latest_order_flow_for_asset(requested_symbol)
@@ -2701,7 +2810,13 @@ def _ctrader_autotrade_once():
             except Exception:
                 selected_strategies=[]
             flow = _latest_order_flow_for_asset(auto_symbol)
-            flow_direction, flow_ratio, flow_reason = _order_flow_execution_decision(flow, row.get("pressure_ratio_threshold") or 2.0)
+            # Keep the existing 100-record major-trend / pressure-ratio check,
+            # but require a swing-anchored tick-volume FRVP POC retest and a
+            # post-retest ZigZag confirmation before any new automatic entry.
+            trend_direction, flow_ratio, flow_reason = _order_flow_execution_decision(flow, row.get("pressure_ratio_threshold") or 2.0)
+            flow_direction, entry_reason = _autotrader_volume_profile_zigzag_entry(flow, trend_direction, auto_symbol) if trend_direction else (None, flow_reason)
+            if trend_direction and not flow_direction:
+                app.logger.debug("cTrader AutoTrader entry gate: %s", entry_reason)
             previous_direction=str(row.get("auto_direction") or "").upper()
             # A ratio-drop exit is attempted only once per open-trade cycle.
             # If cTrader does not confirm that first attempt, freeze this cycle:

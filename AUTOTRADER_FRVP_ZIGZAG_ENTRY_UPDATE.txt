@@ -1,0 +1,17 @@
+KETS AUTOTRADER ENTRY UPDATE
+
+Changed:
+- AutoTrader entry direction still requires the existing rolling 100-record major-trend and configured pressure-ratio confirmation.
+- New entries additionally require a swing-anchored Fixed Range Volume Profile POC retest and a confirmed post-retest ZigZag in the trend direction.
+- Bullish: confirmed swing low -> swing high; downward approach and POC test; bullish higher-low/higher-high ZigZag; BUY.
+- Bearish: confirmed swing high -> swing low; upward approach and POC test; bearish lower-high/lower-low ZigZag; SELL.
+- Tick volume is distributed across 48 price bins as an approximation of volume-at-price. This is not exchange-traded real volume.
+- Entries are blocked if sufficient OHLC and tick-volume candle data is not present in the order-flow records.
+
+Unchanged:
+- Existing AutoTrader exit logic, including the 0.05 drop from the peak pressure ratio.
+- Existing major-trend 100-record calculation, pressure-ratio threshold, trade sizing, account handling, and other settings.
+
+Deployment:
+- This source-only ZIP excludes kets-android.apk and Python bytecode to keep the archive small.
+- The incoming /api/order-flow records must include either a `candles` array of OHLC + tick_volume/volume candles, or one OHLC + tick_volume/volume candle per record. If the current external scanner sends only bullish_pressure/bearish_pressure and market_price, the new gate will safely wait and will not open trades until candle data is supplied.
