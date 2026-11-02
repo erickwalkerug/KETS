@@ -1,0 +1,21 @@
+V16 GOLD / DXY AUTOTRADER
+
+- Auto-Trader entry and exit decisions now use only the V16 Gold/DXY snapshot.
+- Entry BUY: Gold M5 direction bullish while DXY M5 direction bearish, OR Gold
+  closes above prior 20 completed M5-bar resistance while DXY closes below its
+  prior 20 completed M5-bar support.
+- Entry SELL: inverse of the BUY conditions.
+- M15 structure and M1 feed prices are displayed for monitoring; M5 completed
+  candles drive entry/exit confirmation.
+- Same-direction movement is neutral: it neither blocks a valid V16 entry nor
+  closes an existing trade.
+- An open position closes only when the opposite V16 confirmation appears.
+- No Order Flow, SMC, FRVP, ZigZag, POC, old strategy candidates, SL or TP are
+  used by the V16 Auto-Trader entry/exit decision.
+- Existing cTrader connection, selected account, lot size, trading schedule,
+  Auto-Trader ON/OFF control, and broker execution path are retained.
+- V16 monitor page is available from the top navigation and route #v16.
+- Feed must be fresh (maximum age 240 seconds) before Auto-Trader can act.
+
+The FRVP page and Order Flow/SMC history pages remain as read-only monitoring
+pages; they are no longer Auto-Trader decision sources.

@@ -12,3 +12,9 @@ Render service settings:
 - Start command: gunicorn app:app --workers 1 --threads 4 --timeout 120
 
 Trading schedule: Monday-Friday 06:00-18:00 EAT; Saturday-Sunday offline.
+
+V16 GOLD / DXY UPDATE (2026-11-02)
+- KETS exposes POST/GET /api/v16-market. POST is authenticated using KETS_SIGNAL_RECEIVER_KEY (or the configured source key fallback).
+- Set KETS_SIGNAL_RECEIVER_KEY to the same secret used by the trading bot's KETS_SIGNAL_SOURCE_KEY or KETS_API_KEY.
+- Auto-Trader uses only fresh V16 Gold/DXY confirmation; previous Order Flow, SMC, FRVP, ZigZag and strategy candidates are not entry/exit sources.
+- The V16 monitor displays the Twelve Data Gold feed and Infoway DXY feed. The V16 monitor is available in the top navigation at #v16.

@@ -2428,9 +2428,9 @@ def _queue_and_execute_ctrader(row, sig, automatic=True):
     if not entry: raise RuntimeError("The current KETS signal has no entry price.")
     sid=_signal_id(sig)
     lot=max(.01,min(_num(row.get("lot_size")) or .01,_num(row.get("max_lot")) or 10))
-    # Auto-Trader is Order-Flow-only. Automatic entries deliberately carry no
-    # stop-loss or take-profit; the required exit rule is a live Order Flow
-    # pressure ratio below 2.0. Manual orders retain their existing SL/TP rules.
+    # V16 automatic entries deliberately carry no stop-loss or take-profit;
+    # automatic exits are governed only by the opposite Gold/DXY confirmation.
+    # Manual orders retain their existing SL/TP rules.
     order={"symbol":str(row.get("auto_symbol") or sig.get("symbol") or ("XAUUSD" if str(sig.get("asset")).upper() in ("GOLD","XAUUSD") else "BTCUSD")),"direction":direction,"volume":lot,"entry":entry}
     tp=_num(sig.get("take_profit") or sig.get("tp") or sig.get("target"))
     sl=_num(sig.get("stop_loss") or sig.get("sl") or sig.get("stop"))
@@ -2454,8 +2454,6 @@ def _queue_and_execute_ctrader(row, sig, automatic=True):
         conn=db_conn()
         db_execute(conn,"UPDATE ctrader_connections SET selected_account_id=?,last_signal_id=?,auto_entry_signal_id=?,auto_entry_pressure_ratio=?,auto_direction=?,last_error=NULL,status=?,updated_at=? WHERE id=?",(selected,sid,sid,_num(sig.get("_order_flow_ratio", sig.get("_kets_pressure_ratio", 0))),direction,"CONNECTED",_now_iso(),row["id"]))
         conn.commit(); conn.close()
-    if automatic:
-        _record_order_flow_trade_event(row.get("auto_symbol") or sig.get("asset") or "XAUUSD", "ENTRY", row.get("id"))
     _ctrader_invalidate_snapshot(row)
     return result
 
@@ -2785,196 +2783,68 @@ def _latest_autotrader_signal(requested_symbol, kets_strategy_enabled=True, sele
 
 
 def _ctrader_autotrade_once():
-    # Position protection/management remains available at all times.
-    # New signal-driven automatic entries are restricted to ACTIVE sessions.
-    session = trading_session()
+    """V16-only Auto-Trader: Gold/DXY opposite movement or paired S/R breaks."""
+    session=trading_session()
+    with V16_MARKET_LOCK:
+        market=dict(V16_MARKET_SNAPSHOT)
+    try:
+        stamp=datetime.datetime.fromisoformat(str(market.get("source_data_timestamp_utc") or market.get("timestamp_utc")).replace("Z","+00:00"))
+        age=(datetime.datetime.now(datetime.timezone.utc)-stamp).total_seconds()
+    except Exception: age=999999
+    fresh=bool(market) and 0 <= age <= 240
+    gold=market.get("gold",{}); dxy=market.get("dxy",{})
+    g5=gold.get("m5",{}); d5=dxy.get("m5",{})
+    gd=str(g5.get("direction") or "UNKNOWN").upper(); dd=str(d5.get("direction") or "UNKNOWN").upper()
+    opposite=(gd=="BULLISH" and dd=="BEARISH") or (gd=="BEARISH" and dd=="BULLISH")
+    buy_break=str(g5.get("break"))=="RESISTANCE" and str(d5.get("break"))=="SUPPORT"
+    sell_break=str(g5.get("break"))=="SUPPORT" and str(d5.get("break"))=="RESISTANCE"
+    direction="BUY" if ((opposite and gd=="BULLISH") or buy_break) else ("SELL" if ((opposite and gd=="BEARISH") or sell_break) else None)
+    signal_id=str(market.get("id") or market.get("timestamp_utc") or "")
     with DB_LOCK:
         conn=db_conn(); rows=db_execute(conn,"SELECT * FROM ctrader_connections WHERE (auto_enabled=1 OR auto_direction IS NOT NULL OR auto_entry_signal_id IS NOT NULL) AND status IN ('AUTHORIZED','CONNECTED')").fetchall(); conn.close()
     if not rows: return
     for rr in rows:
         row=dict(rr)
         try:
-            auto_symbol=str(row.get("auto_symbol") or "XAUUSD").upper()
-            if bool(row.get("break_even_enabled")) or bool(row.get("trailing_stop_enabled")):
-                _manage_auto_positions_from_row(row)
-                fresh_row=_ctrader_row_for_user(row["user_id"])
-                if fresh_row: row=dict(fresh_row)
-            # During IDLE/OUTSIDE_HOURS, existing position protection above is
-            # preserved, but no new signal-driven automatic entry is processed.
-            if not session["active"]:
-                continue
-            # Order Flow is the sole Auto-Trader entry authority. SMC history,
-            # regular KETS Signal History, and other strategy feeds are never read.
-            try:
-                selected_strategies=json.loads(row.get("strategy_selection_json") or "[]")
-            except Exception:
-                selected_strategies=[]
-            flow = _latest_order_flow_for_asset(auto_symbol)
-            # Keep the existing 100-record major-trend / pressure-ratio check,
-            # but require a swing-anchored tick-volume FRVP POC retest and a
-            # post-retest ZigZag confirmation before any new automatic entry.
-            trend_direction, flow_ratio, flow_reason = _order_flow_execution_decision(flow, row.get("pressure_ratio_threshold") or 2.0)
-            flow_direction, entry_reason = _autotrader_volume_profile_zigzag_entry(flow, trend_direction, auto_symbol) if trend_direction else (None, flow_reason)
-            if trend_direction and not flow_direction:
-                app.logger.debug("cTrader AutoTrader entry gate: %s", entry_reason)
-            previous_direction=str(row.get("auto_direction") or "").upper()
-            # A ratio-drop exit is attempted only once per open-trade cycle.
-            # If cTrader does not confirm that first attempt, freeze this cycle:
-            # do not retry the close and do not allow a new automatic entry.
-            # The user must inspect/close any still-open position manually.
-            last_error_text=str(row.get("last_error") or "")
-            if previous_direction and last_error_text.startswith("ORDER_FLOW_EXIT_ATTEMPTED_ONCE:"):
-                continue
-            # Track the peak Order Flow pressure ratio during this open trade.
-            # Exit after a fall of 0.05 or more from that peak. Auto-Trader is
-            # switched OFF only after cTrader confirms the automatic position
-            # is no longer open.
-            peak_pressure_ratio = _num(row.get("auto_entry_pressure_ratio"))
-            if previous_direction and flow and peak_pressure_ratio > 0:
-                if flow_ratio > peak_pressure_ratio:
-                    peak_pressure_ratio = flow_ratio
-                    with DB_LOCK:
-                        conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET auto_entry_pressure_ratio=?,updated_at=? WHERE id=?",(peak_pressure_ratio,_now_iso(),row["id"])); conn.commit(); conn.close()
-                    row["auto_entry_pressure_ratio"] = peak_pressure_ratio
-                if flow_ratio <= peak_pressure_ratio - 0.05:
-                    try:
-                        _ctrader_close_positions(row, auto_only=True)
-                        _record_order_flow_trade_event(auto_symbol, "EXIT", row.get("id"))
-                        # Successful auto-only close returns only after a fresh
-                        # broker snapshot confirms all KETS_AUTO positions gone.
-                        with DB_LOCK:
-                            conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET auto_enabled=0,auto_direction=NULL,auto_entry_signal_id=NULL,auto_entry_pressure_ratio=0,pending_auto_direction=NULL,pending_auto_signal_id=NULL,last_signal_id=NULL,last_error=NULL,updated_at=? WHERE id=?",(_now_iso(),row["id"])); conn.commit(); conn.close()
-                    except Exception as close_exc:
-                        app.logger.exception("Order Flow ratio-drop close was not confirmed; one attempt only, no automatic retry")
-                        # Persist a latch so later worker cycles cannot send a
-                        # second close request or open another position for this
-                        # trade cycle. Auto-Trader is not marked OFF unless the
-                        # broker actually confirms closure, per the user's rule.
-                        with DB_LOCK:
-                            conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET last_error=?,updated_at=? WHERE id=?",(f"ORDER_FLOW_EXIT_ATTEMPTED_ONCE: cTrader did not confirm closure. No retry will be sent. Check/close the position manually. Details: {str(close_exc)[:300]}",_now_iso(),row["id"])); conn.commit(); conn.close()
-                        row["last_error"] = "ORDER_FLOW_EXIT_ATTEMPTED_ONCE: cTrader did not confirm closure. No retry will be sent."
-                    continue
-            # Auto-Trader OFF still permits management/exit of a recorded automatic trade,
-            # but it must never authorize a fresh entry while disabled.
-            if not bool(row.get("auto_enabled")):
-                continue
-            if not flow_direction:
-                continue
-            sig=dict(flow)
-            sig["direction"]=flow_direction
-            sig["signal"]=flow_direction
-            sig["id"]=str(flow.get("id") or flow.get("signal_id") or flow.get("timestamp_utc") or flow.get("timestamp") or "")
-            sig["_signal_source"]="ORDER_FLOW"
-            sig["_order_flow_ratio"] = flow_ratio
-            sid=_signal_id(sig)
-            direction=flow_direction
-            if not sid:
-                continue
-
-
-            # Refresh account equity only when the cached row does not yet have
-            # a baseline. The dashboard itself refreshes these fields every few
-            # seconds, keeping the hot signal loop fast.
+            if not fresh or not session["active"]: continue
+            # V16 is a Gold-only system. Do not accidentally route its signals
+            # into a BTC or other selected instrument.
+            if str(row.get("auto_symbol") or "XAUUSD").upper().replace("/", "") not in {"XAUUSD", "GOLD", "XAU"}: continue
+            previous=str(row.get("auto_direction") or "").upper()
+            # The same V16 confirmation controls exits. Same-direction Gold/DXY
+            # movement alone is deliberately neutral and never forces an exit.
+            if previous and direction and direction != previous:
+                _ctrader_close_positions(row, auto_only=True)
+                with DB_LOCK:
+                    conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET auto_direction=NULL,auto_entry_signal_id=NULL,pending_auto_direction=NULL,pending_auto_signal_id=NULL,last_signal_id=NULL,last_error=NULL,updated_at=? WHERE id=?",(_now_iso(),row["id"])); conn.commit(); conn.close()
+                previous=""
+                row["auto_direction"]=""
+            # Auto-Trader OFF never authorizes a fresh entry.
+            if not bool(row.get("auto_enabled")) or not direction or previous==direction: continue
+            if not signal_id or str(row.get("auto_entry_signal_id") or "")==signal_id: continue
+            price=_num(market.get("gold_price"))
+            if not price or price <= 0: continue
+            sig={"id":signal_id,"asset":"GOLD","symbol":"XAUUSD","direction":direction,"signal":direction,"entry":price,"price":price,"market_price":price,"timestamp_utc":market.get("timestamp_utc"),"signal_source":"V16_GOLD_DXY","_signal_source":"V16_GOLD_DXY"}
+            row["auto_symbol"]="XAUUSD"
             if _num(row.get("auto_cycle_start_equity")) <= 0:
                 try:
-                    snap=_ctrader_account_snapshot(row)
-                    baseline=_num(snap.get("equity")) or _num(snap.get("balance"))
+                    snap=_ctrader_account_snapshot(row); baseline=_num(snap.get("equity")) or _num(snap.get("balance"))
                     with DB_LOCK:
                         conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET auto_cycle_start_equity=?,equity=?,balance=?,free_margin=?,positions_json=?,auto_profit_total=?,updated_at=? WHERE id=?",(baseline,snap.get("equity",0),snap.get("balance",0),snap.get("free_margin",0),json.dumps(snap.get("positions",[])),0,_now_iso(),row["id"])); conn.commit(); conn.close()
-                    row["auto_cycle_start_equity"]=baseline; row["equity"]=snap.get("equity",0); row["balance"]=snap.get("balance",0)
-                except Exception as snap_exc:
-                    app.logger.warning("cTrader auto-trade baseline refresh failed: %s",snap_exc)
-
-            previous_direction=str(row.get("auto_direction") or "").upper()
-            previous_sid=str(row.get("auto_entry_signal_id") or "")
-
-            # Never re-enter the same signal/candidate repeatedly while the
-            # worker polls the account every few seconds.
-            if previous_sid and sid == previous_sid:
-                continue
-
-            # Optional two-signal confirmation for reversals:
-            # current SELL + first BUY = keep SELL open;
-            # second distinct BUY signal = close SELL and enter BUY.
-            # The same rule applies BUY -> SELL.
-            confirmation_on=bool(row.get("opposite_signal_confirmation"))
-            pending_direction=str(row.get("pending_auto_direction") or "").upper()
-            pending_sid=str(row.get("pending_auto_signal_id") or "")
-
-            if previous_direction and direction == previous_direction:
-                # A same-direction signal cancels an unfinished reversal request.
-                if pending_direction:
-                    with DB_LOCK:
-                        conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET pending_auto_direction=NULL,pending_auto_signal_id=NULL,updated_at=? WHERE id=?",(_now_iso(),row["id"])); conn.commit(); conn.close()
-                pending_direction=""
-                pending_sid=""
-
-            if previous_direction and direction != previous_direction:
-                # Entry requirements must be satisfied before an opposite signal
-                # is counted as a valid confirmation; otherwise the existing
-                # position remains protected and is not closed.
-                if not _stability_entry_allowed(row):
-                    continue
-
-                if confirmation_on:
-                    if pending_direction == direction and pending_sid and sid != pending_sid:
-                        _ctrader_close_positions(row, auto_only=True)
-                        _record_order_flow_trade_event(auto_symbol, "EXIT", row.get("id"))
-                        with DB_LOCK:
-                            conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET auto_direction=NULL,auto_entry_signal_id=NULL,pending_auto_direction=NULL,pending_auto_signal_id=NULL,last_signal_id=NULL,last_error=NULL,updated_at=? WHERE id=?",(_now_iso(),row["id"])); conn.commit(); conn.close()
-                        previous_direction=""
-                        previous_sid=""
-                        pending_direction=""
-                        pending_sid=""
-                    else:
-                        # First opposite signal: remember it but do not close
-                        # the current automatic position.
-                        if pending_direction != direction or pending_sid != sid:
-                            with DB_LOCK:
-                                conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET pending_auto_direction=?,pending_auto_signal_id=?,updated_at=? WHERE id=?",(direction,sid,_now_iso(),row["id"])); conn.commit(); conn.close()
-                        continue
-                else:
-                    _ctrader_close_positions(row, auto_only=True)
-                    _record_order_flow_trade_event(auto_symbol, "EXIT", row.get("id"))
-                    with DB_LOCK:
-                        conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET auto_direction=NULL,auto_entry_signal_id=NULL,pending_auto_direction=NULL,pending_auto_signal_id=NULL,last_signal_id=NULL,last_error=NULL,updated_at=? WHERE id=?",(_now_iso(),row["id"])); conn.commit(); conn.close()
-                    previous_direction=""
-                    previous_sid=""
-                    pending_direction=""
-                    pending_sid=""
-
-            progress=_auto_profit_progress(row)
-            target=_num(row.get("target_profit_total")) if row.get("target_profit_total") is not None else (_num(row.get("profit_target")) or 25)
+                    row["auto_cycle_start_equity"]=baseline
+                except Exception as snap_exc: app.logger.warning("V16 cTrader baseline refresh failed: %s",snap_exc)
+            claim="__EXECUTING__:"+signal_id
             with DB_LOCK:
-                conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET auto_profit_total=?,updated_at=? WHERE id=?",(progress,_now_iso(),row["id"])); conn.commit(); conn.close()
-            if target > 0 and progress >= target:
-                # Target total reached: stop NEW automatic entries. Existing
-                # auto positions remain open until the KETS direction changes.
-                app.logger.info("cTrader auto-trade target total reached: %.2f / %.2f",progress,target)
-                continue
-
-            # Current KETS rule: one automatic entry for the active direction.
-            # Repeated same-direction signals do not open duplicate positions.
-            # Only an opposite signal closes the active auto position and
-            # starts the new direction.
-            if direction == previous_direction:
-                continue
-
-            claim=f"__EXECUTING__:{sid}"
-            with DB_LOCK:
-                conn=db_conn()
-                cur=db_execute(conn,"UPDATE ctrader_connections SET last_signal_id=? WHERE id=? AND (last_signal_id IS NULL OR (last_signal_id<>? AND last_signal_id<>?))",(claim,row["id"],sid,claim))
-                claimed=getattr(cur,"rowcount",1)>0
-                conn.commit(); conn.close()
+                conn=db_conn(); cur=db_execute(conn,"UPDATE ctrader_connections SET last_signal_id=? WHERE id=? AND (last_signal_id IS NULL OR last_signal_id<>?)",(claim,row["id"],claim)); claimed=getattr(cur,"rowcount",1)>0; conn.commit(); conn.close()
             if not claimed: continue
             try:
                 _queue_and_execute_ctrader(row,sig,automatic=True)
             except Exception as exec_exc:
                 with DB_LOCK:
-                    conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET last_signal_id=NULL,last_error=?,updated_at=? WHERE id=? AND last_signal_id=?",("Auto-trade execution failed; retrying: "+str(exec_exc)[:420],_now_iso(),row["id"],claim)); conn.commit(); conn.close()
+                    conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET last_signal_id=NULL,last_error=?,updated_at=? WHERE id=? AND last_signal_id=?",("V16 execution failed: "+str(exec_exc)[:420],_now_iso(),row["id"],claim)); conn.commit(); conn.close()
                 raise
         except Exception as exc:
-            app.logger.warning("cTrader auto-trade skipped: %s",exc)
+            app.logger.warning("V16 Auto-Trader skipped: %s",exc)
             with DB_LOCK:
                 conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET last_error=?,updated_at=? WHERE id=?",(str(exc)[:500],_now_iso(),row["id"])); conn.commit(); conn.close()
 
@@ -3685,6 +3555,32 @@ def _latest_order_flow_for_asset(requested_symbol=None):
         return item
     return None
 
+
+V16_MARKET_SNAPSHOT = {}
+V16_MARKET_LOCK = Lock()
+
+@app.route("/api/v16-market", methods=["GET", "POST"])
+def api_v16_market():
+    global V16_MARKET_SNAPSHOT
+    if request.method == "POST":
+        if not _source_request_authorized():
+            return jsonify({"error":"Unauthorized V16 feed"}), 401
+        payload=request.get_json(silent=True) or {}
+        if payload.get("source") != "V16_GOLD_DXY" or not isinstance(payload.get("gold"),dict) or not isinstance(payload.get("dxy"),dict):
+            return jsonify({"error":"Invalid V16 market payload"}), 400
+        with V16_MARKET_LOCK:
+            V16_MARKET_SNAPSHOT=dict(payload)
+        return jsonify({"ok":True,"received":True,"id":payload.get("id")})
+    with V16_MARKET_LOCK:
+        snap=dict(V16_MARKET_SNAPSHOT)
+    if snap:
+        try:
+            stamp=datetime.datetime.fromisoformat(str(snap.get("source_data_timestamp_utc") or snap.get("timestamp_utc")).replace("Z","+00:00"))
+            age=max(0,(datetime.datetime.now(datetime.timezone.utc)-stamp).total_seconds())
+        except Exception: age=None
+        snap["age_seconds"]=age
+        snap["fresh"]=age is not None and age <= 240
+    return jsonify({"ok":True,"snapshot":snap})
 
 @app.route("/api/order-flow", methods=["GET", "POST"])
 def api_order_flow():

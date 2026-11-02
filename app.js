@@ -945,7 +945,7 @@ function renderManagedTrading(){
  el.innerHTML=`<div class="managed-trade-head"><div><span class="eyebrow">${esc(market)}</span><h3>${direction==='BUY'?'🟢 BUY / LONG':'🔴 SELL / SHORT'}</h3></div><span class="managed-quality">Signal strength ${esc(score)}%</span></div><div class="managed-level-grid"><div><span>ENTRY</span><b>${signalMoney(price)}</b></div><div><span>TAKE PROFIT</span><b>${signalMoney(tp)}</b></div><div><span>STOP LOSS</span><b>${signalMoney(sl)}</b></div><div><span>STATUS</span><b>READY</b></div></div><p class="managed-execution-note"><strong>${esc(targetText)}</strong><br>This is the current KETS manual-trading plan. Use these levels only when the status shows READY. Automatic trading uses its separate Signal History flow.</p>`;
 }
 
-const PAGE_IDS={dashboard:"dashboardHome",live:"liveMarketsPage",plans:"accessPlansPage",payments:"paymentHistoryPage",stop:"stopLossPage",history:"bullBearHistoryPage",managed:"managedTradingPage",autoTrader:"autoTraderPage",smcHistory:"smcHistoryPage",orderFlow:"orderFlowPage",frvp:"frvpPage"};
+const PAGE_IDS={dashboard:"dashboardHome",live:"liveMarketsPage",plans:"accessPlansPage",payments:"paymentHistoryPage",stop:"stopLossPage",history:"bullBearHistoryPage",managed:"managedTradingPage",autoTrader:"autoTraderPage",smcHistory:"smcHistoryPage",orderFlow:"orderFlowPage",frvp:"frvpPage",v16:"v16Page"};
 function showPage(name,updateHash=true){
  Object.values(PAGE_IDS).forEach(id=>$(id)?.classList.add("hidden"));
  const target=$(PAGE_IDS[name]||PAGE_IDS.dashboard);
@@ -956,8 +956,9 @@ function showPage(name,updateHash=true){
  if(name==="smcHistory"){renderSMCHistory();}
  if(name==="orderFlow"){refreshOrderFlowHistory();}
  if(name==="frvp"){refreshOrderFlowHistory().then(()=>renderFRVPPage());}
+ if(name==="v16"){refreshV16Page();}
  if(updateHash){
-   const hash={live:"#live-markets",plans:"#access-plans",payments:"#payment-history",stop:"#stop-loss-management",history:"#bullish-bearish-history",managed:"#managed-trading",autoTrader:"#auto-trader",smcHistory:"#smc-history",orderFlow:"#order-flow",frvp:"#frvp",dashboard:""}[name]||"";
+   const hash={live:"#live-markets",plans:"#access-plans",payments:"#payment-history",stop:"#stop-loss-management",history:"#bullish-bearish-history",managed:"#managed-trading",autoTrader:"#auto-trader",smcHistory:"#smc-history",orderFlow:"#order-flow",frvp:"#frvp",v16:"#v16",dashboard:""}[name]||"";
    try{history.replaceState({},document.title,location.pathname+location.search+hash);}catch(e){}
  }
  window.scrollTo({top:0,behavior:"smooth"});
@@ -976,6 +977,7 @@ function handleHistoryRoute(){
  else if(h==="#smc-history")showPage("smcHistory",false);
  else if(h==="#order-flow")showPage("orderFlow",false);
  else if(h==="#frvp")showPage("frvp",false);
+ else if(h==="#v16")showPage("v16",false);
  else showPage("dashboard",false);
 }
 
@@ -991,6 +993,7 @@ if($("autoTraderBtn")) $("autoTraderBtn").onclick=()=>showPage("autoTrader");
 if($("smcHistoryBtn")) $("smcHistoryBtn").onclick=()=>showPage("smcHistory");
 if($("orderFlowBtn")) $("orderFlowBtn").onclick=()=>showPage("orderFlow");
 if($("frvpBtn")) $("frvpBtn").onclick=()=>showPage("frvp");
+if($("v16Btn")) $("v16Btn").onclick=()=>showPage("v16");
 if($("autoTradeSymbol")) $("autoTradeSymbol").onchange=()=>renderFRVPPage();
 if($("dashboardLiveMarkets")) $("dashboardLiveMarkets").onclick=()=>showPage("live");
  if($("dashboardOrderFlow")) $("dashboardOrderFlow").onclick=()=>showPage("orderFlow");
@@ -1819,3 +1822,19 @@ document.addEventListener("DOMContentLoaded",()=>{
   };
   if(isIosKets()) setTimeout(showKetsInstallPrompt,1200);
 });
+
+
+async function refreshV16Page(){
+ const status=$("v16FeedStatus"), updated=$("v16LastUpdated");
+ try{const d=await api("/api/v16-market");const m=d.snapshot||{};if(!m.timestamp_utc){if(status)status.textContent="WAITING FOR FEED";return;}
+ const fmt=v=>v==null?"--":Number(v).toLocaleString(undefined,{maximumFractionDigits:5});
+ const g=m.gold||{},x=m.dxy||{},g5=g.m5||{},g15=g.m15||{},x5=x.m5||{},x15=x.m15||{};
+ if($("v16GoldPrice"))$("v16GoldPrice").textContent=fmt(m.gold_price);if($("v16DxyPrice"))$("v16DxyPrice").textContent=fmt(m.dxy_price);
+ if($("v16GoldReadings"))$("v16GoldReadings").textContent=`M5: ${g5.direction||"--"} · M15: ${g15.direction||"--"}`;if($("v16DxyReadings"))$("v16DxyReadings").textContent=`M5: ${x5.direction||"--"} · M15: ${x15.direction||"--"}`;
+ if($("v16GoldLevels"))$("v16GoldLevels").textContent=`M5 S: ${fmt(g5.support)} · R: ${fmt(g5.resistance)} · ${g5.break||"--"} | M15: ${g15.direction||"--"} · ${g15.break||"--"}`;if($("v16DxyLevels"))$("v16DxyLevels").textContent=`M5 S: ${fmt(x5.support)} · R: ${fmt(x5.resistance)} · ${x5.break||"--"} | M15: ${x15.direction||"--"} · ${x15.break||"--"}`;
+ const sig=m.signal||"NO ENTRY CONFIRMATION", fresh=m.fresh!==false; if(status)status.textContent=fresh?"LIVE FEED":"STALE FEED";if(updated)updated.textContent=`Updated ${m.timestamp_utc} · age ${Math.round(m.age_seconds||0)} sec · Gold: ${m.gold_source||"Twelve Data"} · DXY: ${m.dxy_source||"Infoway"} (${m.dxy_symbol||"DXY"}) · ${fresh?"fresh":"stale"}`;
+ if($("v16Decision"))$("v16Decision").textContent=fresh?sig:`FEED STALE — ${sig}`;
+ if($("v16Checks"))$("v16Checks").innerHTML=[`Gold M5: ${g5.direction||"--"}`,`DXY M5: ${x5.direction||"--"}`,`Opposite movement: ${m.opposite_movement?"YES":"NO"}`,`Paired S/R breakout: ${m.paired_breakout?"YES":"NO"}`,`Same direction: ${m.same_direction?"YES":"NO — not a trade blocker"}`,`M15 Gold / DXY: ${g15.direction||"--"} / ${x15.direction||"--"}`].map(x=>`<div>${esc(x)}</div>`).join("");
+ }catch(e){if(status)status.textContent="FEED ERROR";if(updated)updated.textContent=e.message||"Could not load V16 data";}
+}
+setInterval(()=>{if(!$("v16Page")?.classList.contains("hidden"))refreshV16Page();},5000);
