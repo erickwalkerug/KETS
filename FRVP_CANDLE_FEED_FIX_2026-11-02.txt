@@ -1,0 +1,9 @@
+FRVP CANDLE FEED FIX — 2026-11-02
+
+KETS now reads candle arrays attached to Order Flow history records, de-duplicates repeated candles by timestamp, sorts them chronologically, and uses up to 200 unique candles for swing/profile calculations.
+
+The matching trading bot forwards up to 100 completed candles from the market-data response already fetched during each scan. No additional Twelve Data request is introduced. Provider volume is passed through only when present and positive; no volume is fabricated.
+
+Important data-quality limit: Twelve Data's `volume` field is provider-supplied volume and may be absent for some XAUUSD/CFD feeds. It must not be described as guaranteed exchange tick volume. If the feed supplies no positive volume, FRVP correctly remains waiting for valid volume rather than calculating a misleading POC.
+
+Deploy the KETS ZIP to the KETS service and the bot ZIP to the trading-bot service. Both sides must be updated for the candle array to reach the FRVP page. Existing Order Flow confirmation and Auto-Trader execution rules are not changed by this patch.
