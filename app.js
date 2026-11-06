@@ -1853,7 +1853,7 @@ async function refreshCoPilotPage(){
    ["macd","MACD","12, 26, 9 · MACD / signal"],
    ["rsi","RSI","14 · midpoint 50"]
   ];
-  if(status)status.textContent=d.fresh?"LIVE GOLD FEED":"STALE / WAITING";
+  if(status)status.textContent=d.fresh?"LIVE KETS BOT SIGNAL":"STALE / WAITING FOR BOT SIGNAL";
   if(updated)updated.textContent=`${d.timeframe||"M5"} · ${d.candles_used||0} completed bars from ${d.raw_candles_received||0} Gold candles · ${d.age_seconds==null?"age unknown":Math.round(d.age_seconds)+" sec old"} · ${d.bar_timestamp||"No completed bar"}`;
   if($("copilotDecision")){$("copilotDecision").textContent=d.entry_authorized?`CONFIRMED ${d.direction}`:"WAIT — NOT CONFIRMED";$ ("copilotDecision").className=d.entry_authorized?"copilot-decision-buy":"copilot-decision-wait";}
   if($("copilotReason"))$("copilotReason").textContent=d.reason||"Waiting for indicator confirmation.";

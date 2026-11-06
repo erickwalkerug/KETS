@@ -2814,7 +2814,7 @@ def _copilot_candle_timestamp(candle):
 
 def _copilot_extract_gold_candles(snapshot):
     """Accept the documented top-level field and common nested Gold feed shapes."""
-    candidates = [snapshot.get("gold_candles"), snapshot.get("candles")]
+    candidates = [snapshot.get("copilot_candles"), snapshot.get("gold_candles"), snapshot.get("candles")]
     gold = snapshot.get("gold") if isinstance(snapshot.get("gold"), dict) else {}
     candidates.extend(gold.get(k) for k in ("candles", "history", "ohlc", "bars", "data"))
     for value in candidates:
@@ -2860,6 +2860,8 @@ def _copilot_indicator_state(snapshot=None):
         "candles_used": len(completed), "raw_candles_received": len(raw), "direction": None, "confirmed": False,
         "indicators": {}, "reason": "Loading historical Gold M1 candles.",
         "timestamp_utc": snapshot.get("source_data_timestamp_utc") or snapshot.get("timestamp_utc"),
+        "bot_signal_id": snapshot.get("signal_id"),
+        "source": snapshot.get("source") or "KETS_BOT_SIGNAL",
     }
     if len(completed) < 40:
         result["reason"] = (f"Need 40 completed Gold M1 candles; received {len(completed)}. "
@@ -2919,7 +2921,7 @@ def _copilot_indicator_state(snapshot=None):
 def _latest_autotrader_signal(requested_symbol, kets_strategy_enabled=True, selected_strategies=None):
     """Only the four unanimous Co-pilot indicators may authorize an entry."""
     with V16_MARKET_LOCK:
-        market = dict(V16_MARKET_SNAPSHOT)
+        market = dict(COPILOT_SIGNAL_SNAPSHOT)
     state = _copilot_indicator_state(market)
     if not state.get("confirmed") or str(requested_symbol or "XAUUSD").upper().replace("/", "") not in {"XAUUSD", "XAU", "GOLD"}:
         return None
@@ -2932,7 +2934,7 @@ def _ctrader_autotrade_once():
     """Co-pilot-only Auto-Trader: entries require unanimous MA/Stoch/MACD/RSI."""
     session=trading_session()
     with V16_MARKET_LOCK:
-        market=dict(V16_MARKET_SNAPSHOT)
+        market=dict(COPILOT_SIGNAL_SNAPSHOT)
     try:
         stamp=datetime.datetime.fromisoformat(str(market.get("source_data_timestamp_utc") or market.get("timestamp_utc")).replace("Z","+00:00"))
         age=(datetime.datetime.now(datetime.timezone.utc)-stamp).total_seconds()
@@ -3539,6 +3541,27 @@ def api_signals():
                     kept = kept[-MAX_IN_MEMORY_SIGNALS:]
                 SIGNAL_HISTORY[:] = kept
         _persist_signal(item)
+
+        # Co-pilot is driven by the incoming KETS trading-bot signal itself.
+        # Reuse the OHLC bars already attached by the bot to that same signal;
+        # do not wait for a separate V16 candle-feed POST or another API call.
+        incoming_candles = item.get("copilot_candles")
+        if asset in {"GOLD", "XAU", "XAUUSD", "XAU/USD"} and isinstance(incoming_candles, list) and incoming_candles:
+            latest_candle = incoming_candles[-1] if isinstance(incoming_candles[-1], dict) else {}
+            candle_stamp = item.get("timestamp_utc") or item.get("timestamp") or now.isoformat()
+            with V16_MARKET_LOCK:
+                COPILOT_SIGNAL_SNAPSHOT.clear()
+                COPILOT_SIGNAL_SNAPSHOT.update({
+                    "source": "KETS_BOT_SIGNAL",
+                    "source_data_timestamp_utc": candle_stamp,
+                    "timestamp_utc": item.get("timestamp_utc") or item.get("timestamp") or now.isoformat(),
+                    "gold_price": item.get("market_price") or item.get("price") or item.get("entry"),
+                    "gold_candles": incoming_candles[-400:],
+                    "signal_id": item.get("id"),
+                    "signal_direction": direction,
+                    "bar_timestamp": latest_candle.get("datetime") or latest_candle.get("timestamp"),
+                    "gold_symbol": item.get("symbol") or "XAU/USD",
+                })
         return jsonify({"ok": True, "accepted": True, "signal": item}), 200
 
     # The private website bridge must be able to read the bot feed without
@@ -3699,6 +3722,9 @@ def _latest_order_flow_for_asset(requested_symbol=None):
 
 V16_MARKET_SNAPSHOT = {}
 V16_MARKET_LOCK = Lock()
+# Co-pilot has its own source slot: only an authenticated incoming trading-bot
+# signal can update it. The independent V16 dashboard snapshot cannot overwrite it.
+COPILOT_SIGNAL_SNAPSHOT = {}
 
 @app.route("/api/v16-market", methods=["GET", "POST"])
 def api_v16_market():
@@ -3729,7 +3755,7 @@ def api_copilot():
     user, error = _require_active_access()
     if error: return error
     with V16_MARKET_LOCK:
-        market = dict(V16_MARKET_SNAPSHOT)
+        market = dict(COPILOT_SIGNAL_SNAPSHOT)
     try:
         stamp=datetime.datetime.fromisoformat(str(market.get("source_data_timestamp_utc") or market.get("timestamp_utc")).replace("Z","+00:00"))
         age=max(0.0,(datetime.datetime.now(datetime.timezone.utc)-stamp).total_seconds())
@@ -3741,7 +3767,7 @@ def api_copilot():
     if not state["fresh"]:
         state["confirmed"] = False
         state["direction"] = None
-        state["reason"] = "Gold candle feed is stale or unavailable; entries are blocked."
+        state["reason"] = "Latest KETS Gold bot signal is stale or unavailable; entries are blocked."
         for item in state.get("indicators", {}).values():
             item["confirmed"] = False
     state["entry_authorized"] = bool(state.get("fresh") and state.get("confirmed"))

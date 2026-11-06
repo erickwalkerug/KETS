@@ -1,0 +1,10 @@
+KETS CO-PILOT DIRECT SIGNAL SOURCE — 2026-11-06
+
+- Co-pilot now reads only COPILOT_SIGNAL_SNAPSHOT populated by authenticated POST /api/signals from the KETS trading bot.
+- The bot's incoming GOLD signal includes copilot_candles, taken from the existing scan's already-fetched OHLC list.
+- The website does not need a separate /api/v16-market feed for Co-pilot.
+- The separate V16 dashboard snapshot remains independent and cannot overwrite Co-pilot's signal snapshot.
+- Co-pilot and its Auto-Trader use the same direct-signal snapshot.
+- No 40-minute live wait is introduced: historical candles arrive inside the first signal payload and are calculated immediately.
+- Existing four-indicator unanimity and freshness safeguards remain active.
+- Older signal-history records created before this update cannot be retroactively used to calculate missing indicator inputs. The first new bot signal after both deployments carries the needed candle history.
