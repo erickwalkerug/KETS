@@ -9,7 +9,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 
-<link rel="stylesheet" href="/styles.css?v=20261028sixphotodisplayfix"><title>ERIC INVESTMENTS — INSTANT INVESTING · INSTANT WITHDRAWS</title>
+<link rel="stylesheet" href="/styles.css?v=20261106copilot"><title>ERIC INVESTMENTS — INSTANT INVESTING · INSTANT WITHDRAWS</title>
 </head>
 <body>
 <div id="authScreen" class="auth-screen">
@@ -65,7 +65,7 @@
 <div id="app" class="hidden">
 <header class="topbar">
   <div class="brand"><div class="investment-brand"><strong>ERIC INVESTMENTS</strong><span>INSTANT INVESTING</span><span>INSTANT WITHDRAWS</span><div class="investment-info-inline">Capital guide: $100 → 0.05 lot · $500 → 0.10 lot · $1,000 → 0.50 lot · $5,000 → 1.00 lot<br>Profitability depends on current market pressure. Caution: investments can go positive or negative. Choose a 30-day service plan to start investing.</div></div></div>
-  <div class="header-actions"><span class="header-status"><i></i><span id="engineStatus">Connecting...</span></span><div class="page-nav" aria-label="KETS pages"><button class="ghost-btn page-nav-btn" id="liveMarketsBtn">Live Markets</button><button class="ghost-btn page-nav-btn" id="accessPlansBtn">Rent Costs</button><button class="ghost-btn page-nav-btn" id="paymentHistoryBtn">Payment History</button><button class="ghost-btn page-nav-btn" id="stopLossBtn">Stop Loss</button><button class="ghost-btn page-nav-btn" id="bullBearHistoryBtn">Bullish / Bearish History</button><button class="ghost-btn page-nav-btn" id="managedTradingBtn">Invest Shares</button><button class="ghost-btn page-nav-btn" id="autoTraderBtn">🤖 Auto Trader</button><button class="ghost-btn page-nav-btn" id="smcHistoryBtn">SMC History</button><button class="ghost-btn page-nav-btn" id="orderFlowBtn">Order Flow</button><button class="ghost-btn page-nav-btn" id="frvpBtn">FRVP</button><button class="ghost-btn page-nav-btn" id="v16Btn">V16</button><button class="ghost-btn page-nav-btn" id="adminPaymentsBtn" type="button">Admin Payments</button></div><button class="profile-mini" id="profileBtn"><span id="miniName">Profile</span></button></div>
+  <div class="header-actions"><span class="header-status"><i></i><span id="engineStatus">Connecting...</span></span><div class="page-nav" aria-label="KETS pages"><button class="ghost-btn page-nav-btn" id="liveMarketsBtn">Live Markets</button><button class="ghost-btn page-nav-btn" id="accessPlansBtn">Rent Costs</button><button class="ghost-btn page-nav-btn" id="paymentHistoryBtn">Payment History</button><button class="ghost-btn page-nav-btn" id="stopLossBtn">Stop Loss</button><button class="ghost-btn page-nav-btn" id="bullBearHistoryBtn">Bullish / Bearish History</button><button class="ghost-btn page-nav-btn" id="managedTradingBtn">Invest Shares</button><button class="ghost-btn page-nav-btn" id="autoTraderBtn">🤖 Auto Trader</button><button class="ghost-btn page-nav-btn" id="smcHistoryBtn">SMC History</button><button class="ghost-btn page-nav-btn" id="orderFlowBtn">Order Flow</button><button class="ghost-btn page-nav-btn" id="frvpBtn">FRVP</button><button class="ghost-btn page-nav-btn" id="v16Btn">V16</button><button class="ghost-btn page-nav-btn" id="coPilotBtn">Co-pilot</button><button class="ghost-btn page-nav-btn" id="adminPaymentsBtn" type="button">Admin Payments</button></div><button class="profile-mini" id="profileBtn"><span id="miniName">Profile</span></button></div>
 </header>
 
 <main>
@@ -86,7 +86,7 @@
 </section>
 
 <section class="section-head"><div><span class="eyebrow">MARKET TOOLS</span><h2>Open a KETS page</h2></div></section>
-<section class="dashboard-page-links"><button class="dashboard-page-card" id="dashboardLiveMarkets"><span>📈 LIVE MARKETS</span><strong>Latest qualifying signals</strong><small>Open the full live market dashboard.</small></button><button class="dashboard-page-card" id="dashboardOrderFlow"><span>📊 ORDER FLOW</span><strong>View calculated market pressure</strong><small>Open the Order Flow page to review the trading bot’s candle-pressure results.</small></button><button class="dashboard-page-card" id="dashboardStopLoss"><span>🛡 STOP LOSS MANAGEMENT</span><strong>Manage trade risk</strong><small>Open the dedicated stop-loss management page.</small></button><button class="dashboard-page-card" id="dashboardAccessPlans"><span>💳 RENT COSTS</span><strong>Rent a virtual office</strong><small>View plans and secure payment options.</small></button><button class="dashboard-page-card" id="dashboardPaymentHistory"><span>🧾 PAYMENT HISTORY</span><strong>Your payment records</strong><small>View completed and pending payments separately.</small></button><button class="dashboard-page-card" id="dashboardAdminPayments" type="button"><span>🛠 ADMIN PAYMENTS</span><strong>Review payment requests</strong><small>Open the admin payments approval page.</small></button><button class="dashboard-page-card managed-trading-card" id="dashboardManagedTrading"><span>🤖 INVEST SHARES</span><strong>Deposit &amp; let KETS trade</strong><small>Connect an authorized broker account, monitor entries/exits and track profits.</small></button></section>
+<section class="dashboard-page-links"><button class="dashboard-page-card" id="dashboardLiveMarkets"><span>📈 LIVE MARKETS</span><strong>Latest qualifying signals</strong><small>Open the full live market dashboard.</small></button><button class="dashboard-page-card" id="dashboardCoPilot"><span>🧭 CO-PILOT</span><strong>Indicator confirmation centre</strong><small>See confirmed and unconfirmed MA Cross, Stochastic, MACD and RSI readings.</small></button><button class="dashboard-page-card" id="dashboardOrderFlow"><span>📊 ORDER FLOW</span><strong>View calculated market pressure</strong><small>Open the Order Flow page to review the trading bot’s candle-pressure results.</small></button><button class="dashboard-page-card" id="dashboardStopLoss"><span>🛡 STOP LOSS MANAGEMENT</span><strong>Manage trade risk</strong><small>Open the dedicated stop-loss management page.</small></button><button class="dashboard-page-card" id="dashboardAccessPlans"><span>💳 RENT COSTS</span><strong>Rent a virtual office</strong><small>View plans and secure payment options.</small></button><button class="dashboard-page-card" id="dashboardPaymentHistory"><span>🧾 PAYMENT HISTORY</span><strong>Your payment records</strong><small>View completed and pending payments separately.</small></button><button class="dashboard-page-card" id="dashboardAdminPayments" type="button"><span>🛠 ADMIN PAYMENTS</span><strong>Review payment requests</strong><small>Open the admin payments approval page.</small></button><button class="dashboard-page-card managed-trading-card" id="dashboardManagedTrading"><span>🤖 INVEST SHARES</span><strong>Deposit &amp; let KETS trade</strong><small>Connect an authorized broker account, monitor entries/exits and track profits.</small></button></section>
 
 
 <section class="section-head"><div><span class="eyebrow">YOUR ACCOUNT</span><h2>Profile & payments</h2></div></section>
@@ -228,7 +228,7 @@
 
 <section id="smcHistoryPage" class="history-page hidden">
   <div class="history-page-head">
-    <div><span class="eyebrow">SMC AUTOTRADE SOURCE</span><h2>SMC Signal History</h2><p class="muted">Independent SMC signals only · this is the signal source used by SMC Auto-Trader.</p></div>
+    <div><span class="eyebrow">SMC AUTOTRADE SOURCE</span><h2>SMC Signal History</h2><p class="muted">Historical SMC records only · SMC is not an Auto-Trader entry source.</p></div>
     <button class="ghost-btn page-back-btn" data-page="dashboard">← Dashboard</button>
   </div>
   <div class="live-page-status"><span class="live-dot">SMC LIVE</span><small id="smcHistoryLastUpdated">Waiting for SMC signal feed…</small></div>
@@ -258,7 +258,7 @@
 
 <section id="frvpPage" class="history-page hidden">
   <div class="history-page-head">
-    <div><span class="eyebrow">AUTOTRADER ENTRY VISUALIZER</span><h2>📊 FRVP · Fixed Range Volume Profile</h2><p class="muted">Read-only FRVP analysis for observation. V16 Gold/DXY is now the only Auto-Trader entry and exit strategy.</p></div>
+    <div><span class="eyebrow">AUTOTRADER ENTRY VISUALIZER</span><h2>📊 FRVP · Fixed Range Volume Profile</h2><p class="muted">Read-only FRVP analysis for observation. KETS Co-pilot is the only Auto-Trader entry strategy. FRVP remains a read-only monitor.</p></div>
     <button class="ghost-btn page-back-btn" data-page="dashboard">← Dashboard</button>
   </div>
   <div class="live-page-status"><span class="live-dot">FRVP MONITOR</span><small id="frvpLastUpdated">Waiting for order-flow candle data…</small></div>
@@ -271,10 +271,18 @@
 
 
 <section id="v16Page" class="history-page hidden">
-  <div class="history-page-head"><div><span class="eyebrow">GOLD + DXY AUTOTRADER FEED</span><h2>V16 · GOLD / DXY MONITOR</h2><p class="muted">Gold feed: Twelve Data · DXY feed: Infoway. Shows the exact confirmation state used by the V16 Auto-Trader.</p></div><button class="ghost-btn page-back-btn" data-page="dashboard">← Dashboard</button></div>
+  <div class="history-page-head"><div><span class="eyebrow">GOLD + DXY MARKET DATA FEED</span><h2>V16 · GOLD / DXY MONITOR</h2><p class="muted">Gold feed: Twelve Data · DXY feed: Infoway. Read-only Gold/DXY market context. These readings do not authorize Auto-Trader entries.</p></div><button class="ghost-btn page-back-btn" data-page="dashboard">← Dashboard</button></div>
   <div class="live-page-status"><span class="live-dot" id="v16FeedStatus">WAITING FOR FEED</span><small id="v16LastUpdated">Waiting for incoming Gold and DXY candles…</small></div>
   <section class="v16-market-grid"><article class="history-card"><h3>XAU/USD · GOLD</h3><div class="v16-price" id="v16GoldPrice">--</div><div class="v16-metrics" id="v16GoldReadings">M5: -- · M15: --</div><p id="v16GoldLevels" class="muted">Support: -- · Resistance: --</p></article><article class="history-card"><h3>DXY · US DOLLAR INDEX</h3><div class="v16-price" id="v16DxyPrice">--</div><div class="v16-metrics" id="v16DxyReadings">M5: -- · M15: --</div><p id="v16DxyLevels" class="muted">Support: -- · Resistance: --</p></article></section>
-  <section class="history-card"><h3>V16 CONFIRMATION</h3><div id="v16Decision" class="v16-decision">Waiting for both market feeds.</div><div class="v16-checks" id="v16Checks"></div><p class="muted">M15 = structure context. M5 = completed-candle entry/exit confirmation. M1 = incoming candle feed. Same-direction movement does not itself block a valid entry or close an open trade.</p></section>
+  <section class="history-card"><h3>V16 CONFIRMATION</h3><div id="v16Decision" class="v16-decision">Waiting for both market feeds.</div><div class="v16-checks" id="v16Checks"></div><p class="muted">M15 and M5 show Gold/DXY context. These readings are not used for Auto-Trader entries; see Co-pilot for the four mandatory indicator confirmations.</p></section>
+</section>
+
+<section id="coPilotPage" class="history-page hidden">
+  <div class="history-page-head"><div><span class="eyebrow">FOUR-INDICATOR CONFIRMATION CENTRE</span><h2>🧭 KETS CO-PILOT</h2><p class="muted">Gold XAU/USD · M5 · EMA 9/21 · Stochastic 14,3,3 · MACD 12,26,9 · RSI 14</p></div><button class="ghost-btn page-back-btn" data-page="dashboard">← Dashboard</button></div>
+  <div class="live-page-status"><span class="live-dot" id="copilotFeedStatus">WAITING FOR FEED</span><small id="copilotLastUpdated">Waiting for completed Gold candles…</small></div>
+  <section class="history-card copilot-decision-card"><span class="eyebrow">AUTOTRADER ENTRY PERMISSION</span><h2 id="copilotDecision">WAITING</h2><p id="copilotReason" class="muted">No trade is allowed until all four indicators confirm the same direction.</p><div class="copilot-counts"><span id="copilotBuyCount">BUY: 0/4</span><span id="copilotSellCount">SELL: 0/4</span></div></section>
+  <section class="copilot-indicator-grid" id="copilotIndicators"><article class="history-card"><div class="empty">Loading indicator readings…</div></article></section>
+  <section class="history-card copilot-rules"><h3>Entry rules · all four must agree</h3><ul><li><strong>BUY:</strong> EMA 9 above EMA 21; Stochastic %K crosses above %D; MACD above its signal line; RSI above 50.</li><li><strong>SELL:</strong> EMA 9 below EMA 21; Stochastic %K crosses below %D; MACD below its signal line; RSI below 50.</li></ul><p class="muted">The four indicators are calculated from completed 5-minute Gold candles already fetched by the trading bot. No extra market-data API request is added. If the feed is stale, candles are insufficient, or any indicator disagrees, Auto-Trader must WAIT.</p></section>
 </section>
 
 <section id="autoTraderPage" class="history-page hidden">
@@ -282,7 +290,7 @@
     <div>
       <span class="eyebrow">KETS AUTO TRADER</span>
       <h2>🤖 KETS AUTO TRADER</h2>
-      <p class="muted">V16 only: Gold/DXY M5 confirmation for entries and exits. M15 provides structure context; M1 supplies the incoming price feed. Previous Order Flow, SMC and other strategies are no longer Auto-Trader decision sources.</p>
+      <p class="muted">Co-pilot only: all four Gold M5 indicators (MA Cross, Stochastic, MACD and RSI) must confirm the same direction before an entry. Gold/DXY feeds remain available on the V16 monitor; they do not authorize trades.</p>
     </div>
     <button class="ghost-btn page-back-btn" data-page="dashboard">← Dashboard</button>
   </div>
@@ -425,6 +433,6 @@
   <button class="install-close" id="installClose" aria-label="Close">×</button>
 </div>
 
-<script src="/app.js?v=20261024devicefix" defer></script>
+<script src="/app.js?v=20261106copilot" defer></script>
 <script src="/background-slideshow.js?v=20261028sixphotodisplayfix" defer></script>
 </body></html>

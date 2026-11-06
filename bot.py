@@ -19,9 +19,9 @@ SIGNAL_HISTORY = []
 SMC_SIGNAL_HISTORY = []
 SIGNAL_HISTORY_DAYS = 2
 MAX_IN_MEMORY_SIGNALS = 500
-# Auto-Trader consumes only the latest canonical SMC signal received directly
-# from the independent trading bot. SMC structure is evaluated in the bot; KETS
-# does not maintain a second candle/structure execution gate.
+# Legacy SMC signal storage is retained for historical display only.
+# Auto-Trader entry authorization is calculated from the Co-pilot indicators
+# using the authenticated Gold candle feed below.
 SMC_LIVE_SIGNAL = {}
 SMC_LIVE_LOCK = Lock()
 SMC_LIVE_TTL_SECONDS = 300
@@ -115,9 +115,9 @@ def api_health():
 def api_integration_status():
     """Fast health check for the actual production connection path.
 
-    Signal flow is intentionally one-way and local to this KETS service:
-    independent SMC bot -> POST /api/signals -> dedicated SMC Signal History -> Auto-Trade -> cTrader.
-    Signal History is display/audit only and is not an Auto-Trade entry source.
+    Auto-Trader entry authority is the Co-pilot four-indicator calculation
+    over Gold M5 candles delivered with the existing V16 market snapshot.
+    Legacy signal histories remain available for display/audit only.
     This endpoint never polls the bot or cTrader, so the dashboard cannot
     time out while checking connection status.
     """
@@ -127,7 +127,7 @@ def api_integration_status():
         "ok": True,
         "website": {"ok": True},
         "signal_feed": {
-            "mode": "dedicated-smc-history",
+            "mode": "copilot-four-indicator-confirmation",
             "configured": True,
             "history_count": len(history),
             "latest_signal_id": str((latest or {}).get("id") or ""),
@@ -2428,8 +2428,8 @@ def _queue_and_execute_ctrader(row, sig, automatic=True):
     if not entry: raise RuntimeError("The current KETS signal has no entry price.")
     sid=_signal_id(sig)
     lot=max(.01,min(_num(row.get("lot_size")) or .01,_num(row.get("max_lot")) or 10))
-    # V16 automatic entries deliberately carry no stop-loss or take-profit;
-    # automatic exits are governed only by the opposite Gold/DXY confirmation.
+    # Co-pilot automatic entries retain the existing Auto-Trader order package;
+    # this strategy supplies direction only and does not alter legacy protection settings.
     # Manual orders retain their existing SL/TP rules.
     order={"symbol":str(row.get("auto_symbol") or sig.get("symbol") or ("XAUUSD" if str(sig.get("asset")).upper() in ("GOLD","XAUUSD") else "BTCUSD")),"direction":direction,"volume":lot,"entry":entry}
     tp=_num(sig.get("take_profit") or sig.get("tp") or sig.get("target"))
@@ -2767,23 +2767,156 @@ def _autotrader_volume_profile_zigzag_entry(flow, trend_direction, asset=None):
     return trend_direction, f"Swing FRVP POC retest and {'bullish' if trend_direction == 'BUY' else 'bearish'} ZigZag confirmed; POC={poc:.5f}."
 
 
+def _ema_series(values, period):
+    if len(values) < period:
+        return []
+    alpha = 2.0 / (period + 1.0)
+    out = [None] * (period - 1)
+    ema = sum(values[:period]) / period
+    out.append(ema)
+    for value in values[period:]:
+        ema = alpha * value + (1.0 - alpha) * ema
+        out.append(ema)
+    return out
+
+
+def _rsi_series(values, period=14):
+    if len(values) <= period:
+        return []
+    gains, losses = [], []
+    for a, b in zip(values[:-1], values[1:]):
+        delta = b - a
+        gains.append(max(delta, 0.0)); losses.append(max(-delta, 0.0))
+    avg_gain = sum(gains[:period]) / period
+    avg_loss = sum(losses[:period]) / period
+    result = [None] * period
+    result.append(100.0 if avg_loss == 0 and avg_gain > 0 else 50.0 if avg_loss == 0 else 100.0 - 100.0 / (1.0 + avg_gain / avg_loss))
+    for i in range(period, len(gains)):
+        avg_gain = ((period - 1) * avg_gain + gains[i]) / period
+        avg_loss = ((period - 1) * avg_loss + losses[i]) / period
+        result.append(100.0 if avg_loss == 0 and avg_gain > 0 else 50.0 if avg_loss == 0 else 100.0 - 100.0 / (1.0 + avg_gain / avg_loss))
+    return result
+
+
+def _copilot_aggregate_m5(candles):
+    """Aggregate incoming one-minute candles into chronological M5 bars."""
+    buckets = {}
+    for candle in candles or []:
+        try:
+            stamp=datetime.datetime.fromisoformat(str(candle.get("datetime")).replace("Z", "+00:00"))
+            if stamp.tzinfo is None: stamp=stamp.replace(tzinfo=datetime.timezone.utc)
+            epoch=int(stamp.timestamp()); start=epoch-(epoch%(5*60))
+            buckets.setdefault(start, []).append(candle)
+        except Exception:
+            continue
+    bars=[]
+    for start in sorted(buckets):
+        group=sorted(buckets[start],key=lambda x:str(x.get("datetime") or ""))
+        if len(group)<5: continue
+        try:
+            bars.append({"datetime":datetime.datetime.fromtimestamp(start,datetime.timezone.utc).isoformat(),
+                         "open":float(group[0]["open"]),"high":max(float(x["high"]) for x in group),
+                         "low":min(float(x["low"]) for x in group),"close":float(group[-1]["close"])})
+        except (KeyError,TypeError,ValueError):
+            continue
+    return bars
+
+
+def _copilot_indicator_state(snapshot=None):
+    """Calculate the four entry indicators from completed Gold M5 candles only."""
+    snapshot = snapshot if isinstance(snapshot, dict) else {}
+    raw = snapshot.get("gold_candles") or []
+    # Convert incoming 1-minute candles into complete five-minute bars.
+    try:
+        bars = _copilot_aggregate_m5(raw)
+    except Exception:
+        bars = []
+    now_utc = datetime.datetime.now(datetime.timezone.utc)
+    completed = []
+    for bar in bars:
+        try:
+            stamp = datetime.datetime.fromisoformat(str(bar.get("datetime")).replace("Z", "+00:00"))
+            if stamp.tzinfo is None: stamp = stamp.replace(tzinfo=datetime.timezone.utc)
+            if stamp + datetime.timedelta(minutes=5) <= now_utc:
+                completed.append(bar)
+        except Exception:
+            continue
+    result = {
+        "ok": True, "timeframe": "M5", "settings": {"ema_fast": 9, "ema_slow": 21, "stochastic": "14,3,3", "macd": "12,26,9", "rsi": 14},
+        "candles_used": len(completed), "direction": None, "confirmed": False,
+        "indicators": {}, "reason": "Waiting for fresh completed Gold M5 candles.",
+        "timestamp_utc": snapshot.get("source_data_timestamp_utc") or snapshot.get("timestamp_utc"),
+    }
+    if len(completed) < 40:
+        result["reason"] = f"Need at least 40 completed M5 candles; received {len(completed)}."
+        return result
+    closes = [float(x["close"]) for x in completed]
+    highs = [float(x["high"]) for x in completed]
+    lows = [float(x["low"]) for x in completed]
+    ema9, ema21 = _ema_series(closes, 9), _ema_series(closes, 21)
+    macd_fast, macd_slow = _ema_series(closes, 12), _ema_series(closes, 26)
+    macd_line = [None if a is None or b is None else a-b for a,b in zip(macd_fast,macd_slow)]
+    macd_valid = [x for x in macd_line if x is not None]
+    macd_signal_valid = _ema_series(macd_valid, 9)
+    macd_signal = [None] * (len(macd_line)-len(macd_signal_valid)) + macd_signal_valid
+    rsi = _rsi_series(closes,14)
+    raw_stoch_k=[]
+    for i in range(len(closes)):
+        if i < 13: raw_stoch_k.append(None); continue
+        lo=min(lows[i-13:i+1]); hi=max(highs[i-13:i+1])
+        raw_stoch_k.append(50.0 if hi == lo else 100.0*(closes[i]-lo)/(hi-lo))
+    # Standard Stochastic 14,3,3: 14-bar raw %K, 3-bar slowing,
+    # then a 3-bar %D signal average.
+    stoch_k=[None]*len(raw_stoch_k)
+    for i in range(15,len(raw_stoch_k)):
+        window=raw_stoch_k[i-2:i+1]
+        if all(v is not None for v in window): stoch_k[i]=sum(window)/3.0
+    stoch_d=[None]*len(stoch_k)
+    for i in range(17,len(stoch_k)):
+        window=stoch_k[i-2:i+1]
+        if all(v is not None for v in window): stoch_d[i]=sum(window)/3.0
+    i=len(closes)-1; prev=i-1
+    vals = (ema9[i],ema21[i],macd_line[i],macd_signal[i],rsi[i],stoch_k[i],stoch_d[i],stoch_k[prev],stoch_d[prev])
+    if any(v is None for v in vals):
+        result["reason"]="Indicator history is not yet sufficient."
+        return result
+    ma_buy=ema9[i]>ema21[i]; ma_sell=ema9[i]<ema21[i]
+    macd_buy=macd_line[i]>macd_signal[i]; macd_sell=macd_line[i]<macd_signal[i]
+    rsi_buy=rsi[i]>50.0; rsi_sell=rsi[i]<50.0
+    stoch_buy=stoch_k[prev] <= stoch_d[prev] and stoch_k[i] > stoch_d[i]
+    stoch_sell=stoch_k[prev] >= stoch_d[prev] and stoch_k[i] < stoch_d[i]
+    buy_checks={"ma_cross":ma_buy,"stochastic":stoch_buy,"macd":macd_buy,"rsi":rsi_buy}
+    sell_checks={"ma_cross":ma_sell,"stochastic":stoch_sell,"macd":macd_sell,"rsi":rsi_sell}
+    indicators={
+        "ma_cross":{"value":"BULLISH" if ma_buy else "BEARISH" if ma_sell else "NEUTRAL","direction":"BUY" if ma_buy else "SELL" if ma_sell else None,"confirmed":ma_buy or ma_sell,"details":f"EMA 9 {ema9[i]:.5f} / EMA 21 {ema21[i]:.5f}"},
+        "stochastic":{"value":"BULLISH CROSS" if stoch_buy else "BEARISH CROSS" if stoch_sell else "NO FRESH CROSS","direction":"BUY" if stoch_buy else "SELL" if stoch_sell else None,"confirmed":stoch_buy or stoch_sell,"details":f"%K {stoch_k[i]:.2f} / %D {stoch_d[i]:.2f}"},
+        "macd":{"value":"BULLISH" if macd_buy else "BEARISH" if macd_sell else "NEUTRAL","direction":"BUY" if macd_buy else "SELL" if macd_sell else None,"confirmed":macd_buy or macd_sell,"details":f"MACD {macd_line[i]:.5f} / Signal {macd_signal[i]:.5f}"},
+        "rsi":{"value":f"{rsi[i]:.2f} ({'ABOVE 50' if rsi_buy else 'BELOW 50' if rsi_sell else 'AT 50'})","direction":"BUY" if rsi_buy else "SELL" if rsi_sell else None,"confirmed":rsi_buy or rsi_sell,"details":"RSI 14; bullish above 50, bearish below 50"},
+    }
+    buy_count=sum(buy_checks.values()); sell_count=sum(sell_checks.values())
+    direction="BUY" if buy_count==4 else "SELL" if sell_count==4 else None
+    result.update({"indicators":indicators,"buy_confirmations":buy_count,"sell_confirmations":sell_count,
+                   "direction":direction,"confirmed":direction is not None,
+                   "reason":f"All four indicators confirm {direction}." if direction else "WAIT: all four indicators must confirm the same direction.",
+                   "price":closes[i],"bar_timestamp":completed[-1].get("datetime"),
+                   "signal_id":f"COPILOT-XAUUSD-M5-{completed[-1].get('datetime')}"})
+    return result
+
+
 def _latest_autotrader_signal(requested_symbol, kets_strategy_enabled=True, selected_strategies=None):
-    """Auto-Trader uses only a fresh, unanimously confirmed order-flow record."""
-    flow = _latest_order_flow_for_asset(requested_symbol)
-    direction, ratio, reason = _order_flow_execution_decision(flow)
-    if not direction:
+    """Only the four unanimous Co-pilot indicators may authorize an entry."""
+    with V16_MARKET_LOCK:
+        market = dict(V16_MARKET_SNAPSHOT)
+    state = _copilot_indicator_state(market)
+    if not state.get("confirmed") or str(requested_symbol or "XAUUSD").upper().replace("/", "") not in {"XAUUSD", "XAU", "GOLD"}:
         return None
-    sig = dict(flow)
-    sig["direction"] = direction
-    sig["signal"] = direction
-    sig["id"] = str(flow.get("id") or flow.get("signal_id") or flow.get("timestamp_utc") or flow.get("timestamp") or "")
-    sig["_order_flow_ratio"] = ratio
-    sig["_signal_source"] = "ORDER_FLOW"
-    return sig
+    return {"id":state.get("signal_id"),"asset":"GOLD","symbol":"XAUUSD","direction":state["direction"],
+            "signal":state["direction"],"entry":state.get("price"),"price":state.get("price"),"market_price":state.get("price"),
+            "timestamp_utc":state.get("bar_timestamp"),"signal_source":"COPILOT_INDICATORS","_signal_source":"COPILOT_INDICATORS"}
 
 
 def _ctrader_autotrade_once():
-    """V16-only Auto-Trader: Gold/DXY opposite movement or paired S/R breaks."""
+    """Co-pilot-only Auto-Trader: entries require unanimous MA/Stoch/MACD/RSI."""
     session=trading_session()
     with V16_MARKET_LOCK:
         market=dict(V16_MARKET_SNAPSHOT)
@@ -2792,14 +2925,9 @@ def _ctrader_autotrade_once():
         age=(datetime.datetime.now(datetime.timezone.utc)-stamp).total_seconds()
     except Exception: age=999999
     fresh=bool(market) and 0 <= age <= 240
-    gold=market.get("gold",{}); dxy=market.get("dxy",{})
-    g5=gold.get("m5",{}); d5=dxy.get("m5",{})
-    gd=str(g5.get("direction") or "UNKNOWN").upper(); dd=str(d5.get("direction") or "UNKNOWN").upper()
-    opposite=(gd=="BULLISH" and dd=="BEARISH") or (gd=="BEARISH" and dd=="BULLISH")
-    buy_break=str(g5.get("break"))=="RESISTANCE" and str(d5.get("break"))=="SUPPORT"
-    sell_break=str(g5.get("break"))=="SUPPORT" and str(d5.get("break"))=="RESISTANCE"
-    direction="BUY" if ((opposite and gd=="BULLISH") or buy_break) else ("SELL" if ((opposite and gd=="BEARISH") or sell_break) else None)
-    signal_id=str(market.get("id") or market.get("timestamp_utc") or "")
+    copilot=_copilot_indicator_state(market) if fresh else {"confirmed":False,"reason":"Gold candle feed is stale or unavailable."}
+    direction=copilot.get("direction") if copilot.get("confirmed") else None
+    signal_id=str(copilot.get("signal_id") or "")
     with DB_LOCK:
         conn=db_conn(); rows=db_execute(conn,"SELECT * FROM ctrader_connections WHERE (auto_enabled=1 OR auto_direction IS NOT NULL OR auto_entry_signal_id IS NOT NULL) AND status IN ('AUTHORIZED','CONNECTED')").fetchall(); conn.close()
     if not rows: return
@@ -2807,12 +2935,12 @@ def _ctrader_autotrade_once():
         row=dict(rr)
         try:
             if not fresh or not session["active"]: continue
-            # V16 is a Gold-only system. Do not accidentally route its signals
-            # into a BTC or other selected instrument.
+            # Co-pilot is a Gold-only indicator strategy. Never route its
+            # confirmed signal into BTC or another selected instrument.
             if str(row.get("auto_symbol") or "XAUUSD").upper().replace("/", "") not in {"XAUUSD", "GOLD", "XAU"}: continue
             previous=str(row.get("auto_direction") or "").upper()
-            # The same V16 confirmation controls exits. Same-direction Gold/DXY
-            # movement alone is deliberately neutral and never forces an exit.
+            # Keep the existing opposite-confirmed-direction exit behavior;
+            # only the source of a confirmed direction has changed to Co-pilot.
             if previous and direction and direction != previous:
                 _ctrader_close_positions(row, auto_only=True)
                 with DB_LOCK:
@@ -2824,7 +2952,7 @@ def _ctrader_autotrade_once():
             if not signal_id or str(row.get("auto_entry_signal_id") or "")==signal_id: continue
             price=_num(market.get("gold_price"))
             if not price or price <= 0: continue
-            sig={"id":signal_id,"asset":"GOLD","symbol":"XAUUSD","direction":direction,"signal":direction,"entry":price,"price":price,"market_price":price,"timestamp_utc":market.get("timestamp_utc"),"signal_source":"V16_GOLD_DXY","_signal_source":"V16_GOLD_DXY"}
+            sig={"id":signal_id,"asset":"GOLD","symbol":"XAUUSD","direction":direction,"signal":direction,"entry":price,"price":price,"market_price":price,"timestamp_utc":copilot.get("bar_timestamp"),"signal_source":"COPILOT_INDICATORS","_signal_source":"COPILOT_INDICATORS"}
             row["auto_symbol"]="XAUUSD"
             if _num(row.get("auto_cycle_start_equity")) <= 0:
                 try:
@@ -2832,7 +2960,7 @@ def _ctrader_autotrade_once():
                     with DB_LOCK:
                         conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET auto_cycle_start_equity=?,equity=?,balance=?,free_margin=?,positions_json=?,auto_profit_total=?,updated_at=? WHERE id=?",(baseline,snap.get("equity",0),snap.get("balance",0),snap.get("free_margin",0),json.dumps(snap.get("positions",[])),0,_now_iso(),row["id"])); conn.commit(); conn.close()
                     row["auto_cycle_start_equity"]=baseline
-                except Exception as snap_exc: app.logger.warning("V16 cTrader baseline refresh failed: %s",snap_exc)
+                except Exception as snap_exc: app.logger.warning("Co-pilot cTrader baseline refresh failed: %s",snap_exc)
             claim="__EXECUTING__:"+signal_id
             with DB_LOCK:
                 conn=db_conn(); cur=db_execute(conn,"UPDATE ctrader_connections SET last_signal_id=? WHERE id=? AND (last_signal_id IS NULL OR last_signal_id<>?)",(claim,row["id"],claim)); claimed=getattr(cur,"rowcount",1)>0; conn.commit(); conn.close()
@@ -2841,10 +2969,10 @@ def _ctrader_autotrade_once():
                 _queue_and_execute_ctrader(row,sig,automatic=True)
             except Exception as exec_exc:
                 with DB_LOCK:
-                    conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET last_signal_id=NULL,last_error=?,updated_at=? WHERE id=? AND last_signal_id=?",("V16 execution failed: "+str(exec_exc)[:420],_now_iso(),row["id"],claim)); conn.commit(); conn.close()
+                    conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET last_signal_id=NULL,last_error=?,updated_at=? WHERE id=? AND last_signal_id=?",("Co-pilot execution failed: "+str(exec_exc)[:420],_now_iso(),row["id"],claim)); conn.commit(); conn.close()
                 raise
         except Exception as exc:
-            app.logger.warning("V16 Auto-Trader skipped: %s",exc)
+            app.logger.warning("Co-pilot Auto-Trader skipped: %s",exc)
             with DB_LOCK:
                 conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET last_error=?,updated_at=? WHERE id=?",(str(exc)[:500],_now_iso(),row["id"])); conn.commit(); conn.close()
 
@@ -3580,7 +3708,33 @@ def api_v16_market():
         except Exception: age=None
         snap["age_seconds"]=age
         snap["fresh"]=age is not None and age <= 240
+    snap.pop("gold_candles", None)
     return jsonify({"ok":True,"snapshot":snap})
+
+@app.route("/api/copilot", methods=["GET"])
+def api_copilot():
+    user, error = _require_active_access()
+    if error: return error
+    with V16_MARKET_LOCK:
+        market = dict(V16_MARKET_SNAPSHOT)
+    try:
+        stamp=datetime.datetime.fromisoformat(str(market.get("source_data_timestamp_utc") or market.get("timestamp_utc")).replace("Z","+00:00"))
+        age=max(0.0,(datetime.datetime.now(datetime.timezone.utc)-stamp).total_seconds())
+    except Exception: age=None
+    state=_copilot_indicator_state(market)
+    state["fresh"] = age is not None and age <= 240
+    state["age_seconds"] = age
+    state["price"] = state.get("price") or market.get("gold_price")
+    if not state["fresh"]:
+        state["confirmed"] = False
+        state["direction"] = None
+        state["reason"] = "Gold candle feed is stale or unavailable; entries are blocked."
+        for item in state.get("indicators", {}).values():
+            item["confirmed"] = False
+    state["entry_authorized"] = bool(state.get("fresh") and state.get("confirmed"))
+    state["autotrader_entry_rule"] = "ALL_FOUR_SAME_DIRECTION"
+    return jsonify(state)
+
 
 @app.route("/api/order-flow", methods=["GET", "POST"])
 def api_order_flow():
@@ -3778,7 +3932,7 @@ def api_history():
 
 @app.route("/api/smc-history", methods=["GET"])
 def api_smc_history():
-    """Dedicated SMC-only history used by Auto-Trader and the SMC dashboard."""
+    """Dedicated SMC-only historical feed; not an Auto-Trader entry source."""
     user, error = _require_active_access()
     if error:
         return error

@@ -1,10 +1,10 @@
 /* New cache version forces clients off the old three-photo slideshow assets. */
-const CACHE = "kets-display-v19-eric-investments-six-photo-20261028";
+const CACHE = "kets-display-v20-copilot-20261106";
 const APP_SHELL = [
   "/",
   "/index.html",
-  "/styles.css?v=20261028sixphotodisplayfix",
-  "/app.js?v=20261024devicefix",
+  "/styles.css?v=20261106copilot",
+  "/app.js?v=20261106copilot",
   "/manifest.json",
   "/icon-192.png",
   "/icon-512.png",

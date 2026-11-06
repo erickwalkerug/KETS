@@ -1,0 +1,22 @@
+KETS CO-PILOT FOUR-INDICATOR AUTOTRADER UPDATE — 2026-11-06
+
+This update supersedes earlier Auto-Trader entry-source notes that mention V16 Gold/DXY, SMC, Order Flow, FRVP, ZigZag, or strategy candidates as entry authorities.
+
+ENTRY AUTHORITY
+- The KETS website receives the already-fetched Gold 1-minute candles from the trading-bot ZIP through the existing authenticated /api/v16-market feed.
+- No additional Twelve Data request is introduced. The trading bot continues its existing Gold/DXY refresh cadence and sends the latest 400 Gold candles in the same feed payload.
+- KETS aggregates complete M5 bars and calculates EMA 9/21, Stochastic 14/3/3, MACD 12/26/9, and RSI 14.
+- BUY requires all four: EMA9 > EMA21; a fresh %K cross above %D; MACD above its signal; RSI > 50.
+- SELL requires all four inverse conditions: EMA9 < EMA21; a fresh %K cross below %D; MACD below its signal; RSI < 50.
+- If any indicator is neutral, disagrees, the candle history is insufficient, or the market feed is stale, the Co-pilot returns WAIT and Auto-Trader cannot open a new trade.
+- The signal is tied to the completed M5 bar ID to prevent repeated entries from the same confirmation.
+
+DASHBOARD
+- A new signed-in Co-pilot page shows each indicator's value and confirmed/unconfirmed status, aggregate BUY/SELL confirmation counts, feed freshness, and the final entry permission.
+- /api/copilot is protected by the same active-access check as other live dashboard data.
+- The public V16 market monitor does not expose the raw candle buffer.
+
+PRESERVED
+- Existing cTrader account isolation, connection flow, account selection, lot-size configuration, auto ON/OFF, order execution, opposite-confirmed-direction close behavior, stop-loss/take-profit and other existing position-protection mechanisms remain in place.
+- Gold/DXY data and its V16 page remain available as read-only market context; they do not authorize entries.
+- Legacy Order Flow, SMC, FRVP and other signal histories/pages remain available as historical or monitoring features only.

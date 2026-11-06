@@ -945,7 +945,7 @@ function renderManagedTrading(){
  el.innerHTML=`<div class="managed-trade-head"><div><span class="eyebrow">${esc(market)}</span><h3>${direction==='BUY'?'🟢 BUY / LONG':'🔴 SELL / SHORT'}</h3></div><span class="managed-quality">Signal strength ${esc(score)}%</span></div><div class="managed-level-grid"><div><span>ENTRY</span><b>${signalMoney(price)}</b></div><div><span>TAKE PROFIT</span><b>${signalMoney(tp)}</b></div><div><span>STOP LOSS</span><b>${signalMoney(sl)}</b></div><div><span>STATUS</span><b>READY</b></div></div><p class="managed-execution-note"><strong>${esc(targetText)}</strong><br>This is the current KETS manual-trading plan. Use these levels only when the status shows READY. Automatic trading uses its separate Signal History flow.</p>`;
 }
 
-const PAGE_IDS={dashboard:"dashboardHome",live:"liveMarketsPage",plans:"accessPlansPage",payments:"paymentHistoryPage",stop:"stopLossPage",history:"bullBearHistoryPage",managed:"managedTradingPage",autoTrader:"autoTraderPage",smcHistory:"smcHistoryPage",orderFlow:"orderFlowPage",frvp:"frvpPage",v16:"v16Page"};
+const PAGE_IDS={dashboard:"dashboardHome",live:"liveMarketsPage",plans:"accessPlansPage",payments:"paymentHistoryPage",stop:"stopLossPage",history:"bullBearHistoryPage",managed:"managedTradingPage",autoTrader:"autoTraderPage",smcHistory:"smcHistoryPage",orderFlow:"orderFlowPage",frvp:"frvpPage",v16:"v16Page",coPilot:"coPilotPage"};
 function showPage(name,updateHash=true){
  Object.values(PAGE_IDS).forEach(id=>$(id)?.classList.add("hidden"));
  const target=$(PAGE_IDS[name]||PAGE_IDS.dashboard);
@@ -957,8 +957,9 @@ function showPage(name,updateHash=true){
  if(name==="orderFlow"){refreshOrderFlowHistory();}
  if(name==="frvp"){refreshOrderFlowHistory().then(()=>renderFRVPPage());}
  if(name==="v16"){refreshV16Page();}
+ if(name==="coPilot"){refreshCoPilotPage();}
  if(updateHash){
-   const hash={live:"#live-markets",plans:"#access-plans",payments:"#payment-history",stop:"#stop-loss-management",history:"#bullish-bearish-history",managed:"#managed-trading",autoTrader:"#auto-trader",smcHistory:"#smc-history",orderFlow:"#order-flow",frvp:"#frvp",v16:"#v16",dashboard:""}[name]||"";
+   const hash={live:"#live-markets",plans:"#access-plans",payments:"#payment-history",stop:"#stop-loss-management",history:"#bullish-bearish-history",managed:"#managed-trading",autoTrader:"#auto-trader",smcHistory:"#smc-history",orderFlow:"#order-flow",frvp:"#frvp",v16:"#v16",coPilot:"#co-pilot",dashboard:""}[name]||"";
    try{history.replaceState({},document.title,location.pathname+location.search+hash);}catch(e){}
  }
  window.scrollTo({top:0,behavior:"smooth"});
@@ -978,6 +979,7 @@ function handleHistoryRoute(){
  else if(h==="#order-flow")showPage("orderFlow",false);
  else if(h==="#frvp")showPage("frvp",false);
  else if(h==="#v16")showPage("v16",false);
+ else if(h==="#co-pilot")showPage("coPilot",false);
  else showPage("dashboard",false);
 }
 
@@ -994,6 +996,8 @@ if($("smcHistoryBtn")) $("smcHistoryBtn").onclick=()=>showPage("smcHistory");
 if($("orderFlowBtn")) $("orderFlowBtn").onclick=()=>showPage("orderFlow");
 if($("frvpBtn")) $("frvpBtn").onclick=()=>showPage("frvp");
 if($("v16Btn")) $("v16Btn").onclick=()=>showPage("v16");
+if($("coPilotBtn")) $("coPilotBtn").onclick=()=>showPage("coPilot");
+if($("dashboardCoPilot")) $("dashboardCoPilot").onclick=()=>showPage("coPilot");
 if($("autoTradeSymbol")) $("autoTradeSymbol").onchange=()=>renderFRVPPage();
 if($("dashboardLiveMarkets")) $("dashboardLiveMarkets").onclick=()=>showPage("live");
  if($("dashboardOrderFlow")) $("dashboardOrderFlow").onclick=()=>showPage("orderFlow");
@@ -1838,3 +1842,25 @@ async function refreshV16Page(){
  }catch(e){if(status)status.textContent="FEED ERROR";if(updated)updated.textContent=e.message||"Could not load V16 data";}
 }
 setInterval(()=>{if(!$("v16Page")?.classList.contains("hidden"))refreshV16Page();},5000);
+async function refreshCoPilotPage(){
+ const status=$("copilotFeedStatus"),updated=$("copilotLastUpdated");
+ try{
+  const d=await api("/api/copilot");
+  const indicators=d.indicators||{};
+  const defs=[
+   ["ma_cross","MA Cross","EMA 9 / EMA 21"],
+   ["stochastic","Stochastic","14, 3, 3 · %K / %D crossover"],
+   ["macd","MACD","12, 26, 9 · MACD / signal"],
+   ["rsi","RSI","14 · midpoint 50"]
+  ];
+  if(status)status.textContent=d.fresh?"LIVE GOLD FEED":"STALE / WAITING";
+  if(updated)updated.textContent=`${d.timeframe||"M5"} · ${d.candles_used||0} completed candles · ${d.age_seconds==null?"age unknown":Math.round(d.age_seconds)+" sec old"} · ${d.bar_timestamp||"No completed bar"}`;
+  if($("copilotDecision")){$("copilotDecision").textContent=d.entry_authorized?`CONFIRMED ${d.direction}`:"WAIT — NOT CONFIRMED";$ ("copilotDecision").className=d.entry_authorized?"copilot-decision-buy":"copilot-decision-wait";}
+  if($("copilotReason"))$("copilotReason").textContent=d.reason||"Waiting for indicator confirmation.";
+  if($("copilotBuyCount"))$("copilotBuyCount").textContent=`BUY: ${d.buy_confirmations||0}/4`;
+  if($("copilotSellCount"))$("copilotSellCount").textContent=`SELL: ${d.sell_confirmations||0}/4`;
+  if($("copilotIndicators"))$("copilotIndicators").innerHTML=defs.map(([key,label,settings])=>{const x=indicators[key]||{};const pass=!!x.confirmed&&!!d.fresh;const side=pass?(x.direction||"CONFIRMED"):"UNCONFIRMED";const state=pass?`${side} CONFIRMED`:"UNCONFIRMED";return `<article class="history-card copilot-indicator-card ${pass?(side==="BUY"?"confirmed":"confirmed-sell"):"unconfirmed"}"><div class="copilot-indicator-top"><h3>${label}</h3><span class="copilot-pill ${pass?(side==="BUY"?"pass":"sell"):"fail"}">${state}</span></div><strong>${esc(x.value||"Waiting for data")}</strong><small>${esc(x.details||settings)}</small><span class="copilot-settings">${settings}</span></article>`;}).join("");
+ }catch(e){if(status)status.textContent="FEED ERROR";if(updated)updated.textContent=e.message||"Could not load Co-pilot readings.";if($("copilotDecision"))$("copilotDecision").textContent="WAIT — FEED ERROR";}
+}
+setInterval(()=>{if(!$("coPilotPage")?.classList.contains("hidden"))refreshCoPilotPage();},5000);
+
