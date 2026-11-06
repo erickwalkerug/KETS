@@ -278,11 +278,11 @@
 </section>
 
 <section id="coPilotPage" class="history-page hidden">
-  <div class="history-page-head"><div><span class="eyebrow">FOUR-INDICATOR CONFIRMATION CENTRE</span><h2>🧭 KETS CO-PILOT</h2><p class="muted">Gold XAU/USD · M5 · EMA 9/21 · Stochastic 14,3,3 · MACD 12,26,9 · RSI 14</p></div><button class="ghost-btn page-back-btn" data-page="dashboard">← Dashboard</button></div>
+  <div class="history-page-head"><div><span class="eyebrow">FOUR-INDICATOR CONFIRMATION CENTRE</span><h2>🧭 KETS CO-PILOT</h2><p class="muted">Gold XAU/USD · M1 · EMA 9/21 · Stochastic 14,3,3 · MACD 12,26,9 · RSI 14</p></div><button class="ghost-btn page-back-btn" data-page="dashboard">← Dashboard</button></div>
   <div class="live-page-status"><span class="live-dot" id="copilotFeedStatus">WAITING FOR FEED</span><small id="copilotLastUpdated">Waiting for completed Gold candles…</small></div>
   <section class="history-card copilot-decision-card"><span class="eyebrow">AUTOTRADER ENTRY PERMISSION</span><h2 id="copilotDecision">WAITING</h2><p id="copilotReason" class="muted">No trade is allowed until all four indicators confirm the same direction.</p><div class="copilot-counts"><span id="copilotBuyCount">BUY: 0/4</span><span id="copilotSellCount">SELL: 0/4</span></div></section>
   <section class="copilot-indicator-grid" id="copilotIndicators"><article class="history-card"><div class="empty">Loading indicator readings…</div></article></section>
-  <section class="history-card copilot-rules"><h3>Entry rules · all four must agree</h3><ul><li><strong>BUY:</strong> EMA 9 above EMA 21; Stochastic %K crosses above %D; MACD above its signal line; RSI above 50.</li><li><strong>SELL:</strong> EMA 9 below EMA 21; Stochastic %K crosses below %D; MACD below its signal line; RSI below 50.</li></ul><p class="muted">The four indicators are calculated from completed 5-minute Gold candles already fetched by the trading bot. No extra market-data API request is added. If the feed is stale, candles are insufficient, or any indicator disagrees, Auto-Trader must WAIT.</p></section>
+  <section class="history-card copilot-rules"><h3>Entry rules · all four must agree</h3><ul><li><strong>BUY:</strong> EMA 9 above EMA 21; Stochastic %K crosses above %D; MACD above its signal line; RSI above 50.</li><li><strong>SELL:</strong> EMA 9 below EMA 21; Stochastic %K crosses below %D; MACD below its signal line; RSI below 50.</li></ul><p class="muted">The four indicators are calculated from completed 1-minute Gold candles already fetched by the trading bot. No extra market-data API request is added. If the feed is stale, candles are insufficient, or any indicator disagrees, Auto-Trader must WAIT.</p></section>
 </section>
 
 <section id="autoTraderPage" class="history-page hidden">
@@ -290,7 +290,7 @@
     <div>
       <span class="eyebrow">KETS AUTO TRADER</span>
       <h2>🤖 KETS AUTO TRADER</h2>
-      <p class="muted">Co-pilot only: all four Gold M5 indicators (MA Cross, Stochastic, MACD and RSI) must confirm the same direction before an entry. Gold/DXY feeds remain available on the V16 monitor; they do not authorize trades.</p>
+      <p class="muted">Co-pilot only: all four Gold M1 indicators (MA Cross, Stochastic, MACD and RSI) must confirm the same direction before an entry. Gold/DXY feeds remain available on the V16 monitor; they do not authorize trades.</p>
     </div>
     <button class="ghost-btn page-back-btn" data-page="dashboard">← Dashboard</button>
   </div>

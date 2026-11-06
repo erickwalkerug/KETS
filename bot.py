@@ -116,7 +116,7 @@ def api_integration_status():
     """Fast health check for the actual production connection path.
 
     Auto-Trader entry authority is the Co-pilot four-indicator calculation
-    over Gold M5 candles delivered with the existing V16 market snapshot.
+    over Gold M1 candles delivered with the existing V16 market snapshot.
     Legacy signal histories remain available for display/audit only.
     This endpoint never polls the bot or cTrader, so the dashboard cannot
     time out while checking connection status.
@@ -2823,9 +2823,10 @@ def _copilot_extract_gold_candles(snapshot):
     return []
 
 
-def _copilot_aggregate_m5(candles):
-    """Aggregate five distinct, consecutive one-minute candles into completed M5 bars."""
-    buckets = {}
+def _copilot_completed_m1(candles):
+    """Normalize completed one-minute Gold candles; reject malformed/future/current bars."""
+    now = datetime.datetime.now(datetime.timezone.utc)
+    by_minute = {}
     for candle in candles or []:
         if not isinstance(candle, dict):
             continue
@@ -2833,61 +2834,36 @@ def _copilot_aggregate_m5(candles):
             stamp = _copilot_candle_timestamp(candle)
             epoch = int(stamp.timestamp())
             minute = epoch - (epoch % 60)
-            start = minute - (minute % 300)
-            # Normalize common broker/API OHLC aliases.
-            op = candle.get("open", candle.get("o"))
-            hi = candle.get("high", candle.get("h"))
-            lo = candle.get("low", candle.get("l"))
-            cl = candle.get("close", candle.get("c"))
-            values = {"minute": minute, "open": float(op), "high": float(hi), "low": float(lo), "close": float(cl)}
-            if not all(math.isfinite(values[k]) for k in ("open", "high", "low", "close")):
+            if datetime.datetime.fromtimestamp(minute, datetime.timezone.utc) + datetime.timedelta(minutes=1) > now:
                 continue
-            buckets.setdefault(start, {})[minute] = values
+            op = candle.get("open", candle.get("o")); hi = candle.get("high", candle.get("h"))
+            lo = candle.get("low", candle.get("l")); cl = candle.get("close", candle.get("c"))
+            row = {"datetime": datetime.datetime.fromtimestamp(minute, datetime.timezone.utc).isoformat(),
+                   "open": float(op), "high": float(hi), "low": float(lo), "close": float(cl)}
+            if not all(math.isfinite(row[k]) for k in ("open", "high", "low", "close")):
+                continue
+            if row["high"] < max(row["open"], row["close"], row["low"]) or row["low"] > min(row["open"], row["close"], row["high"]):
+                continue
+            by_minute[minute] = row
         except (TypeError, ValueError, OverflowError, OSError):
             continue
-    bars = []
-    for start in sorted(buckets):
-        group = buckets[start]
-        expected = [start + n * 60 for n in range(5)]
-        # Missing/duplicate minute data must not be mistaken for a complete candle.
-        if not all(minute in group for minute in expected):
-            continue
-        rows = [group[minute] for minute in expected]
-        bars.append({"datetime": datetime.datetime.fromtimestamp(start, datetime.timezone.utc).isoformat(),
-                     "open": rows[0]["open"], "high": max(x["high"] for x in rows),
-                     "low": min(x["low"] for x in rows), "close": rows[-1]["close"]})
-    return bars
+    return [by_minute[k] for k in sorted(by_minute)]
 
 
 def _copilot_indicator_state(snapshot=None):
-    """Calculate the four entry indicators from completed Gold M5 candles only."""
+    """Calculate the four entry indicators from completed Gold M1 candles."""
     snapshot = snapshot if isinstance(snapshot, dict) else {}
     raw = _copilot_extract_gold_candles(snapshot)
-    # Convert incoming 1-minute candles into complete five-minute bars.
-    try:
-        bars = _copilot_aggregate_m5(raw)
-    except Exception:
-        bars = []
-    now_utc = datetime.datetime.now(datetime.timezone.utc)
-    completed = []
-    for bar in bars:
-        try:
-            stamp = datetime.datetime.fromisoformat(str(bar.get("datetime")).replace("Z", "+00:00"))
-            if stamp.tzinfo is None: stamp = stamp.replace(tzinfo=datetime.timezone.utc)
-            if stamp + datetime.timedelta(minutes=5) <= now_utc:
-                completed.append(bar)
-        except Exception:
-            continue
+    completed = _copilot_completed_m1(raw)
     result = {
-        "ok": True, "timeframe": "M5", "settings": {"ema_fast": 9, "ema_slow": 21, "stochastic": "14,3,3", "macd": "12,26,9", "rsi": 14},
-        "candles_used": len(completed), "raw_candles_received": len(raw),
-        "aggregated_m5_bars": len(bars), "direction": None, "confirmed": False,
-        "indicators": {}, "reason": "Waiting for fresh completed Gold M5 candles.",
+        "ok": True, "timeframe": "M1", "settings": {"ema_fast": 9, "ema_slow": 21, "stochastic": "14,3,3", "macd": "12,26,9", "rsi": 14},
+        "candles_used": len(completed), "raw_candles_received": len(raw), "direction": None, "confirmed": False,
+        "indicators": {}, "reason": "Loading historical Gold M1 candles.",
         "timestamp_utc": snapshot.get("source_data_timestamp_utc") or snapshot.get("timestamp_utc"),
     }
     if len(completed) < 40:
-        result["reason"] = (f"Need at least 40 completed M5 candles; received {len(completed)} "
-                            f"from {len(raw)} received 1-minute candles. Check that the Gold feed includes OHLC candles.")
+        result["reason"] = (f"Need 40 completed Gold M1 candles; received {len(completed)}. "
+                            "The V16 feed must send its recent M1 OHLC history on the market snapshot.")
         return result
     closes = [float(x["close"]) for x in completed]
     highs = [float(x["high"]) for x in completed]
@@ -2904,8 +2880,6 @@ def _copilot_indicator_state(snapshot=None):
         if i < 13: raw_stoch_k.append(None); continue
         lo=min(lows[i-13:i+1]); hi=max(highs[i-13:i+1])
         raw_stoch_k.append(50.0 if hi == lo else 100.0*(closes[i]-lo)/(hi-lo))
-    # Standard Stochastic 14,3,3: 14-bar raw %K, 3-bar slowing,
-    # then a 3-bar %D signal average.
     stoch_k=[None]*len(raw_stoch_k)
     for i in range(15,len(raw_stoch_k)):
         window=raw_stoch_k[i-2:i+1]
@@ -2938,7 +2912,7 @@ def _copilot_indicator_state(snapshot=None):
                    "direction":direction,"confirmed":direction is not None,
                    "reason":f"All four indicators confirm {direction}." if direction else "WAIT: all four indicators must confirm the same direction.",
                    "price":closes[i],"bar_timestamp":completed[-1].get("datetime"),
-                   "signal_id":f"COPILOT-XAUUSD-M5-{completed[-1].get('datetime')}"})
+                   "signal_id":f"COPILOT-XAUUSD-M1-{completed[-1].get('datetime')}"})
     return result
 
 

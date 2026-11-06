@@ -1,0 +1,11 @@
+KETS CO-PILOT M1 HISTORICAL CANDLE UPDATE
+
+- Co-Pilot indicator timeframe is M1 (one-minute candles).
+- Uses 40 completed historical M1 OHLC candles for initial calculation.
+- Reads the recent history from the existing V16 market snapshot fields: gold_candles, candles, or nested gold.candles/history/ohlc/bars/data.
+- Ignores the still-forming current minute candle and malformed OHLC records.
+- Keeps EMA 9/21, Stochastic 14,3,3, MACD 12,26,9, RSI 14 and unanimous four-indicator entry confirmation.
+- Keeps the existing stale-feed and Auto-Trader safety gates.
+
+IMPORTANT FEED REQUIREMENT:
+The V16_GOLD_DXY sender must include a rolling array of recent Gold one-minute OHLC candles in each POST to /api/v16-market (preferably 100+ records, including timestamps and open/high/low/close). The website/backend cannot manufacture missing historical candles or independently retrieve them because no separate broker history endpoint/credentials are configured in this project. If the sender transmits only the latest quote or a single candle, Co-Pilot will correctly remain waiting until enough real candle history is supplied.
