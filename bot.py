@@ -2798,34 +2798,71 @@ def _rsi_series(values, period=14):
     return result
 
 
+def _copilot_candle_timestamp(candle):
+    """Parse common ISO-8601 or Unix candle timestamp fields into UTC."""
+    raw = next((candle.get(k) for k in ("datetime", "timestamp_utc", "timestamp", "time", "date", "t") if candle.get(k) is not None), None)
+    if raw is None:
+        raise ValueError("candle timestamp missing")
+    if isinstance(raw, (int, float)) or (isinstance(raw, str) and raw.strip().replace(".", "", 1).isdigit()):
+        value = float(raw)
+        if value > 100000000000: value /= 1000.0
+        return datetime.datetime.fromtimestamp(value, datetime.timezone.utc)
+    stamp = datetime.datetime.fromisoformat(str(raw).strip().replace("Z", "+00:00"))
+    if stamp.tzinfo is None: stamp = stamp.replace(tzinfo=datetime.timezone.utc)
+    return stamp.astimezone(datetime.timezone.utc)
+
+
+def _copilot_extract_gold_candles(snapshot):
+    """Accept the documented top-level field and common nested Gold feed shapes."""
+    candidates = [snapshot.get("gold_candles"), snapshot.get("candles")]
+    gold = snapshot.get("gold") if isinstance(snapshot.get("gold"), dict) else {}
+    candidates.extend(gold.get(k) for k in ("candles", "history", "ohlc", "bars", "data"))
+    for value in candidates:
+        if isinstance(value, list) and value:
+            return value
+    return []
+
+
 def _copilot_aggregate_m5(candles):
-    """Aggregate incoming one-minute candles into chronological M5 bars."""
+    """Aggregate five distinct, consecutive one-minute candles into completed M5 bars."""
     buckets = {}
     for candle in candles or []:
-        try:
-            stamp=datetime.datetime.fromisoformat(str(candle.get("datetime")).replace("Z", "+00:00"))
-            if stamp.tzinfo is None: stamp=stamp.replace(tzinfo=datetime.timezone.utc)
-            epoch=int(stamp.timestamp()); start=epoch-(epoch%(5*60))
-            buckets.setdefault(start, []).append(candle)
-        except Exception:
+        if not isinstance(candle, dict):
             continue
-    bars=[]
+        try:
+            stamp = _copilot_candle_timestamp(candle)
+            epoch = int(stamp.timestamp())
+            minute = epoch - (epoch % 60)
+            start = minute - (minute % 300)
+            # Normalize common broker/API OHLC aliases.
+            op = candle.get("open", candle.get("o"))
+            hi = candle.get("high", candle.get("h"))
+            lo = candle.get("low", candle.get("l"))
+            cl = candle.get("close", candle.get("c"))
+            values = {"minute": minute, "open": float(op), "high": float(hi), "low": float(lo), "close": float(cl)}
+            if not all(math.isfinite(values[k]) for k in ("open", "high", "low", "close")):
+                continue
+            buckets.setdefault(start, {})[minute] = values
+        except (TypeError, ValueError, OverflowError, OSError):
+            continue
+    bars = []
     for start in sorted(buckets):
-        group=sorted(buckets[start],key=lambda x:str(x.get("datetime") or ""))
-        if len(group)<5: continue
-        try:
-            bars.append({"datetime":datetime.datetime.fromtimestamp(start,datetime.timezone.utc).isoformat(),
-                         "open":float(group[0]["open"]),"high":max(float(x["high"]) for x in group),
-                         "low":min(float(x["low"]) for x in group),"close":float(group[-1]["close"])})
-        except (KeyError,TypeError,ValueError):
+        group = buckets[start]
+        expected = [start + n * 60 for n in range(5)]
+        # Missing/duplicate minute data must not be mistaken for a complete candle.
+        if not all(minute in group for minute in expected):
             continue
+        rows = [group[minute] for minute in expected]
+        bars.append({"datetime": datetime.datetime.fromtimestamp(start, datetime.timezone.utc).isoformat(),
+                     "open": rows[0]["open"], "high": max(x["high"] for x in rows),
+                     "low": min(x["low"] for x in rows), "close": rows[-1]["close"]})
     return bars
 
 
 def _copilot_indicator_state(snapshot=None):
     """Calculate the four entry indicators from completed Gold M5 candles only."""
     snapshot = snapshot if isinstance(snapshot, dict) else {}
-    raw = snapshot.get("gold_candles") or []
+    raw = _copilot_extract_gold_candles(snapshot)
     # Convert incoming 1-minute candles into complete five-minute bars.
     try:
         bars = _copilot_aggregate_m5(raw)
@@ -2843,12 +2880,14 @@ def _copilot_indicator_state(snapshot=None):
             continue
     result = {
         "ok": True, "timeframe": "M5", "settings": {"ema_fast": 9, "ema_slow": 21, "stochastic": "14,3,3", "macd": "12,26,9", "rsi": 14},
-        "candles_used": len(completed), "direction": None, "confirmed": False,
+        "candles_used": len(completed), "raw_candles_received": len(raw),
+        "aggregated_m5_bars": len(bars), "direction": None, "confirmed": False,
         "indicators": {}, "reason": "Waiting for fresh completed Gold M5 candles.",
         "timestamp_utc": snapshot.get("source_data_timestamp_utc") or snapshot.get("timestamp_utc"),
     }
     if len(completed) < 40:
-        result["reason"] = f"Need at least 40 completed M5 candles; received {len(completed)}."
+        result["reason"] = (f"Need at least 40 completed M5 candles; received {len(completed)} "
+                            f"from {len(raw)} received 1-minute candles. Check that the Gold feed includes OHLC candles.")
         return result
     closes = [float(x["close"]) for x in completed]
     highs = [float(x["high"]) for x in completed]

@@ -1,0 +1,19 @@
+CO-PILOT FOUR INDICATOR DATA REPAIR — 2026-11-06
+
+REPAIRED
+- Candle ingestion now accepts gold_candles at the top level and common nested Gold candle arrays (gold.candles, gold.history, gold.ohlc, gold.bars, gold.data), plus a top-level candles array.
+- Candle timestamps accept ISO-8601 strings and Unix seconds/milliseconds across datetime, timestamp_utc, timestamp, time, date and t fields.
+- OHLC values accept full field names and common one-letter aliases.
+- M5 aggregation now requires five distinct consecutive one-minute candles. Duplicate minutes cannot falsely complete a bar and missing minutes are not silently filled.
+- The Co-pilot API reports received one-minute candle count, aggregated M5 count and completed M5 count so a missing/short feed is diagnosable.
+- The page displays the actual candle/bar counts while the four indicators wait for the minimum 40 completed M5 bars.
+
+INDICATOR CALCULATIONS
+- EMA 9 / EMA 21, Stochastic 14/3/3, MACD 12/26/9 and RSI 14 are calculated from completed Gold M5 candles.
+- A valid calculated value is shown as calculated even if it does not meet the directional confirmation rule.
+- Stochastic confirmation requires a fresh %K/%D crossover on the latest completed bar.
+- BUY or SELL entry authorization still requires all four indicators to confirm the same direction and a fresh feed.
+- Charging animation is visual feedback only. It cannot confirm an indicator or authorize an entry.
+
+FEED REQUIREMENT
+- The authenticated POST /api/v16-market sender must include the latest Gold one-minute OHLC history in one of the accepted candle fields. If the sender supplies only a latest Gold price or summary, no indicator can be calculated; the API will report the candle counts and WAIT instead of inventing data.

@@ -1854,12 +1854,28 @@ async function refreshCoPilotPage(){
    ["rsi","RSI","14 · midpoint 50"]
   ];
   if(status)status.textContent=d.fresh?"LIVE GOLD FEED":"STALE / WAITING";
-  if(updated)updated.textContent=`${d.timeframe||"M5"} · ${d.candles_used||0} completed candles · ${d.age_seconds==null?"age unknown":Math.round(d.age_seconds)+" sec old"} · ${d.bar_timestamp||"No completed bar"}`;
+  if(updated)updated.textContent=`${d.timeframe||"M5"} · ${d.candles_used||0} completed bars from ${d.raw_candles_received||0} Gold candles · ${d.age_seconds==null?"age unknown":Math.round(d.age_seconds)+" sec old"} · ${d.bar_timestamp||"No completed bar"}`;
   if($("copilotDecision")){$("copilotDecision").textContent=d.entry_authorized?`CONFIRMED ${d.direction}`:"WAIT — NOT CONFIRMED";$ ("copilotDecision").className=d.entry_authorized?"copilot-decision-buy":"copilot-decision-wait";}
   if($("copilotReason"))$("copilotReason").textContent=d.reason||"Waiting for indicator confirmation.";
   if($("copilotBuyCount"))$("copilotBuyCount").textContent=`BUY: ${d.buy_confirmations||0}/4`;
   if($("copilotSellCount"))$("copilotSellCount").textContent=`SELL: ${d.sell_confirmations||0}/4`;
-  if($("copilotIndicators"))$("copilotIndicators").innerHTML=defs.map(([key,label,settings])=>{const x=indicators[key]||{};const pass=!!x.confirmed&&!!d.fresh;const side=pass?(x.direction||"CONFIRMED"):"UNCONFIRMED";const state=pass?`${side} CONFIRMED`:"UNCONFIRMED";return `<article class="history-card copilot-indicator-card ${pass?(side==="BUY"?"confirmed":"confirmed-sell"):"unconfirmed"}"><div class="copilot-indicator-top"><h3>${label}</h3><span class="copilot-pill ${pass?(side==="BUY"?"pass":"sell"):"fail"}">${state}</span></div><strong>${esc(x.value||"Waiting for data")}</strong><small>${esc(x.details||settings)}</small><span class="copilot-settings">${settings}</span></article>`;}).join("");
+  if($("copilotIndicators"))$("copilotIndicators").innerHTML=defs.map(([key,label,settings])=>{
+   const x=indicators[key]||{};
+   const pass=!!x.confirmed&&!!d.fresh;
+   const hasValue=!!(x.value&&x.value!=="Waiting for data");
+   const side=pass?(x.direction||"CONFIRMED"):"UNCONFIRMED";
+   const state=pass?`${side} CONFIRMED`:(!d.fresh?"DATA UNAVAILABLE":(hasValue?"CALCULATED · NOT CONFIRMED":"WAITING FOR DATA"));
+   const rawProgress=x.progress_percent??x.progress;
+   const progress=Number.isFinite(Number(rawProgress))&&rawProgress!==null&&rawProgress!==""?Math.max(0,Math.min(100,Number(rawProgress))):null;
+   const calculating=!pass&&!hasValue&&!!d.fresh;
+   const progressMarkup=calculating?`<div class="copilot-charge" role="status" aria-label="${label} waiting for enough valid candle data"><span class="copilot-charge-track"><i></i></span><small>${progress===null?`Preparing calculation · ${d.candles_used||0}/40 completed M5 bars`: `Calculation progress ${Math.round(progress)}%`}</small></div>`:"";
+   return `<article class="history-card copilot-indicator-card ${pass?(side==="BUY"?"confirmed":"confirmed-sell"):"unconfirmed"}">
+    <div class="copilot-indicator-top"><h3>${label}</h3><span class="copilot-pill ${pass?(side==="BUY"?"pass":"sell"):"fail"}">${state}</span></div>
+    ${progressMarkup}
+    <strong>${esc(x.value||(d.fresh?"Waiting for data":"Gold data unavailable"))}</strong>
+    <small>${esc(x.details||settings)}</small><span class="copilot-settings">${settings}</span>
+   </article>`;
+  }).join("");
  }catch(e){if(status)status.textContent="FEED ERROR";if(updated)updated.textContent=e.message||"Could not load Co-pilot readings.";if($("copilotDecision"))$("copilotDecision").textContent="WAIT — FEED ERROR";}
 }
 setInterval(()=>{if(!$("coPilotPage")?.classList.contains("hidden"))refreshCoPilotPage();},5000);
