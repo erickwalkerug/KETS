@@ -945,7 +945,7 @@ function renderManagedTrading(){
  el.innerHTML=`<div class="managed-trade-head"><div><span class="eyebrow">${esc(market)}</span><h3>${direction==='BUY'?'🟢 BUY / LONG':'🔴 SELL / SHORT'}</h3></div><span class="managed-quality">Signal strength ${esc(score)}%</span></div><div class="managed-level-grid"><div><span>ENTRY</span><b>${signalMoney(price)}</b></div><div><span>TAKE PROFIT</span><b>${signalMoney(tp)}</b></div><div><span>STOP LOSS</span><b>${signalMoney(sl)}</b></div><div><span>STATUS</span><b>READY</b></div></div><p class="managed-execution-note"><strong>${esc(targetText)}</strong><br>This is the current KETS manual-trading plan. Use these levels only when the status shows READY. Automatic trading uses its separate Signal History flow.</p>`;
 }
 
-const PAGE_IDS={dashboard:"dashboardHome",live:"liveMarketsPage",plans:"accessPlansPage",payments:"paymentHistoryPage",stop:"stopLossPage",history:"bullBearHistoryPage",managed:"managedTradingPage",autoTrader:"autoTraderPage",smcHistory:"smcHistoryPage",orderFlow:"orderFlowPage",frvp:"frvpPage",v16:"v16Page",coPilot:"coPilotPage"};
+const PAGE_IDS={dashboard:"dashboardHome",live:"liveMarketsPage",plans:"accessPlansPage",payments:"paymentHistoryPage",stop:"stopLossPage",history:"bullBearHistoryPage",managed:"managedTradingPage",autoTrader:"autoTraderPage",smcHistory:"smcHistoryPage",orderFlow:"orderFlowPage",frvp:"frvpPage",v16:"v16Page",coPilot:"coPilotPage",coPilot2:"coPilot2Page"};
 function showPage(name,updateHash=true){
  Object.values(PAGE_IDS).forEach(id=>$(id)?.classList.add("hidden"));
  const target=$(PAGE_IDS[name]||PAGE_IDS.dashboard);
@@ -957,9 +957,9 @@ function showPage(name,updateHash=true){
  if(name==="orderFlow"){refreshOrderFlowHistory();}
  if(name==="frvp"){refreshOrderFlowHistory().then(()=>renderFRVPPage());}
  if(name==="v16"){refreshV16Page();}
- if(name==="coPilot"){refreshCoPilotPage();}
+ if(name==="coPilot"){refreshCoPilotPage();} if(name==="coPilot2"){refreshCoPilot2Page();}
  if(updateHash){
-   const hash={live:"#live-markets",plans:"#access-plans",payments:"#payment-history",stop:"#stop-loss-management",history:"#bullish-bearish-history",managed:"#managed-trading",autoTrader:"#auto-trader",smcHistory:"#smc-history",orderFlow:"#order-flow",frvp:"#frvp",v16:"#v16",coPilot:"#co-pilot",dashboard:""}[name]||"";
+   const hash={live:"#live-markets",plans:"#access-plans",payments:"#payment-history",stop:"#stop-loss-management",history:"#bullish-bearish-history",managed:"#managed-trading",autoTrader:"#auto-trader",smcHistory:"#smc-history",orderFlow:"#order-flow",frvp:"#frvp",v16:"#v16",coPilot:"#co-pilot",coPilot2:"#co-pilot-2",dashboard:""}[name]||"";
    try{history.replaceState({},document.title,location.pathname+location.search+hash);}catch(e){}
  }
  window.scrollTo({top:0,behavior:"smooth"});
@@ -979,7 +979,7 @@ function handleHistoryRoute(){
  else if(h==="#order-flow")showPage("orderFlow",false);
  else if(h==="#frvp")showPage("frvp",false);
  else if(h==="#v16")showPage("v16",false);
- else if(h==="#co-pilot")showPage("coPilot",false);
+ else if(h==="#co-pilot")showPage("coPilot",false); else if(h==="#co-pilot-2")showPage("coPilot2",false);
  else showPage("dashboard",false);
 }
 
@@ -996,8 +996,8 @@ if($("smcHistoryBtn")) $("smcHistoryBtn").onclick=()=>showPage("smcHistory");
 if($("orderFlowBtn")) $("orderFlowBtn").onclick=()=>showPage("orderFlow");
 if($("frvpBtn")) $("frvpBtn").onclick=()=>showPage("frvp");
 if($("v16Btn")) $("v16Btn").onclick=()=>showPage("v16");
-if($("coPilotBtn")) $("coPilotBtn").onclick=()=>showPage("coPilot");
-if($("dashboardCoPilot")) $("dashboardCoPilot").onclick=()=>showPage("coPilot");
+if($("coPilotBtn")) $("coPilotBtn").onclick=()=>showPage("coPilot"); if($("coPilot2Btn")) $("coPilot2Btn").onclick=()=>showPage("coPilot2");
+if($("dashboardCoPilot")) $("dashboardCoPilot").onclick=()=>showPage("coPilot"); if($("dashboardCoPilot2")) $("dashboardCoPilot2").onclick=()=>showPage("coPilot2");
 if($("autoTradeSymbol")) $("autoTradeSymbol").onchange=()=>renderFRVPPage();
 if($("dashboardLiveMarkets")) $("dashboardLiveMarkets").onclick=()=>showPage("live");
  if($("dashboardOrderFlow")) $("dashboardOrderFlow").onclick=()=>showPage("orderFlow");
@@ -1879,4 +1879,27 @@ async function refreshCoPilotPage(){
  }catch(e){if(status)status.textContent="FEED ERROR";if(updated)updated.textContent=e.message||"Could not load Co-pilot readings.";if($("copilotDecision"))$("copilotDecision").textContent="WAIT — FEED ERROR";}
 }
 setInterval(()=>{if(!$("coPilotPage")?.classList.contains("hidden"))refreshCoPilotPage();},5000);
+async function refreshCoPilot2Page(){
+ const status=$("copilot2FeedStatus"),updated=$("copilot2LastUpdated");
+ try{
+  const d=await api("/api/copilot2"), defs=[["bollinger_bands","Bollinger Bands","Period 20 · 2 standard deviations"],["supertrend","Supertrend","ATR 10 · multiplier 3"]];
+  if(status)status.textContent=d.fresh?"LIVE TWELVE DATA BOT FEED":"STALE / WAITING FOR BOT";
+  if(updated)updated.textContent=`${d.candles_used||0}/20 latest completed M1 candles · ${d.bar_timestamp||"No completed candle"} · feed age ${Math.round(d.age_seconds||0)}s`;
+  if($("copilot2Decision")){
+   const action=d.entry_authorized?`ENTRY ${d.direction}`:d.supertrend_flip?"SUPERTREND FLIPPED — NO ENTRY":"WAIT — NO NEW COLOUR CHANGE";
+   $("copilot2Decision").textContent=action;
+   $("copilot2Decision").className=d.entry_authorized?(d.direction==="BUY"?"copilot-decision-buy":"copilot-decision-sell"):"";
+  }
+  if($("copilot2Reason"))$("copilot2Reason").textContent=d.reason||"Waiting for indicator update.";
+  if($("copilot2BuyCount"))$("copilot2BuyCount").textContent=`BUY: ${d.buy_confirmations||0}/2`;
+  if($("copilot2SellCount"))$("copilot2SellCount").textContent=`SELL: ${d.sell_confirmations||0}/2`;
+  if($("copilot2Window"))$("copilot2Window").textContent=`WINDOW: ${d.candles_used||0}/20`;
+  if($("copilot2Indicators"))$("copilot2Indicators").innerHTML=defs.map(([key,label,settings])=>{
+   const x=(d.indicators||{})[key]||{}, good=!!x.confirmed, side=x.direction||"NEUTRAL";
+   return `<article class="history-card copilot-indicator-card ${good?(side==="BUY"?"confirmed":"confirmed-sell"):"unconfirmed"}"><div class="eyebrow">${esc(settings)}</div><h3>${esc(label)}</h3><strong>${esc(x.value||"WAITING")}</strong><p>${esc(x.details||"Waiting for enough completed candles.")}</p><small>${good?`Direction: ${esc(side)}`:"Not confirmed"}</small></article>`;
+  }).join("");
+ }catch(e){if(status)status.textContent="FEED ERROR";if(updated)updated.textContent=e.message||"Could not load Co-Pilot 2 readings.";if($("copilot2Decision"))$("copilot2Decision").textContent="WAIT — FEED ERROR";}
+}
+setInterval(()=>{if(!$("coPilot2Page")?.classList.contains("hidden"))refreshCoPilot2Page();},3000);
+
 

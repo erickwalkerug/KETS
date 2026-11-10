@@ -2850,88 +2850,101 @@ def _copilot_completed_m1(candles):
     return [by_minute[k] for k in sorted(by_minute)]
 
 
-def _copilot_indicator_state(snapshot=None):
-    """Calculate the four entry indicators from completed Gold M1 candles."""
+def _copilot2_indicator_state(snapshot=None):
+    """Bollinger Bands + Supertrend from the latest 20 completed Twelve Data M1 candles."""
     snapshot = snapshot if isinstance(snapshot, dict) else {}
     raw = _copilot_extract_gold_candles(snapshot)
-    completed = _copilot_completed_m1(raw)
+    completed = _copilot_completed_m1(raw)[-20:]
     result = {
-        "ok": True, "timeframe": "M1", "settings": {"ema_fast": 9, "ema_slow": 21, "stochastic": "14,3,3", "macd": "12,26,9", "rsi": 14},
-        "candles_used": len(completed), "raw_candles_received": len(raw), "direction": None, "confirmed": False,
-        "indicators": {}, "reason": "Loading historical Gold M1 candles.",
+        "ok": True, "timeframe": "M1", "window": 20,
+        "settings": {"bollinger_period": 20, "bollinger_stddev": 2, "supertrend_atr_period": 10, "supertrend_multiplier": 3},
+        "candles_used": len(completed), "raw_candles_received": len(raw),
+        "direction": None, "confirmed": False, "entry_trigger": False,
+        "indicators": {}, "reason": "Waiting for 20 completed Gold M1 candles.",
         "timestamp_utc": snapshot.get("source_data_timestamp_utc") or snapshot.get("timestamp_utc"),
-        "bot_signal_id": snapshot.get("signal_id"),
-        "source": snapshot.get("source") or "KETS_BOT_SIGNAL",
+        "bot_signal_id": snapshot.get("signal_id"), "source": snapshot.get("source") or "KETS_BOT_SIGNAL",
+        "bar_timestamp": completed[-1].get("datetime") if completed else None,
     }
-    if len(completed) < 40:
-        result["reason"] = (f"Need 40 completed Gold M1 candles; received {len(completed)}. "
-                            "The V16 feed must send its recent M1 OHLC history on the market snapshot.")
+    if len(completed) < 20:
+        result["reason"] = f"Need 20 completed Gold M1 candles; received {len(completed)}."
         return result
-    closes = [float(x["close"]) for x in completed]
-    highs = [float(x["high"]) for x in completed]
-    lows = [float(x["low"]) for x in completed]
-    ema9, ema21 = _ema_series(closes, 9), _ema_series(closes, 21)
-    macd_fast, macd_slow = _ema_series(closes, 12), _ema_series(closes, 26)
-    macd_line = [None if a is None or b is None else a-b for a,b in zip(macd_fast,macd_slow)]
-    macd_valid = [x for x in macd_line if x is not None]
-    macd_signal_valid = _ema_series(macd_valid, 9)
-    macd_signal = [None] * (len(macd_line)-len(macd_signal_valid)) + macd_signal_valid
-    rsi = _rsi_series(closes,14)
-    raw_stoch_k=[]
-    for i in range(len(closes)):
-        if i < 13: raw_stoch_k.append(None); continue
-        lo=min(lows[i-13:i+1]); hi=max(highs[i-13:i+1])
-        raw_stoch_k.append(50.0 if hi == lo else 100.0*(closes[i]-lo)/(hi-lo))
-    stoch_k=[None]*len(raw_stoch_k)
-    for i in range(15,len(raw_stoch_k)):
-        window=raw_stoch_k[i-2:i+1]
-        if all(v is not None for v in window): stoch_k[i]=sum(window)/3.0
-    stoch_d=[None]*len(stoch_k)
-    for i in range(17,len(stoch_k)):
-        window=stoch_k[i-2:i+1]
-        if all(v is not None for v in window): stoch_d[i]=sum(window)/3.0
-    i=len(closes)-1; prev=i-1
-    vals = (ema9[i],ema21[i],macd_line[i],macd_signal[i],rsi[i],stoch_k[i],stoch_d[i],stoch_k[prev],stoch_d[prev])
-    if any(v is None for v in vals):
-        result["reason"]="Indicator history is not yet sufficient."
-        return result
-    ma_buy=ema9[i]>ema21[i]; ma_sell=ema9[i]<ema21[i]
-    macd_buy=macd_line[i]>macd_signal[i]; macd_sell=macd_line[i]<macd_signal[i]
-    rsi_buy=rsi[i]>50.0; rsi_sell=rsi[i]<50.0
-    stoch_buy=stoch_k[prev] <= stoch_d[prev] and stoch_k[i] > stoch_d[i]
-    stoch_sell=stoch_k[prev] >= stoch_d[prev] and stoch_k[i] < stoch_d[i]
-    buy_checks={"ma_cross":ma_buy,"stochastic":stoch_buy,"macd":macd_buy,"rsi":rsi_buy}
-    sell_checks={"ma_cross":ma_sell,"stochastic":stoch_sell,"macd":macd_sell,"rsi":rsi_sell}
-    indicators={
-        "ma_cross":{"value":"BULLISH" if ma_buy else "BEARISH" if ma_sell else "NEUTRAL","direction":"BUY" if ma_buy else "SELL" if ma_sell else None,"confirmed":ma_buy or ma_sell,"details":f"EMA 9 {ema9[i]:.5f} / EMA 21 {ema21[i]:.5f}"},
-        "stochastic":{"value":"BULLISH CROSS" if stoch_buy else "BEARISH CROSS" if stoch_sell else "NO FRESH CROSS","direction":"BUY" if stoch_buy else "SELL" if stoch_sell else None,"confirmed":stoch_buy or stoch_sell,"details":f"%K {stoch_k[i]:.2f} / %D {stoch_d[i]:.2f}"},
-        "macd":{"value":"BULLISH" if macd_buy else "BEARISH" if macd_sell else "NEUTRAL","direction":"BUY" if macd_buy else "SELL" if macd_sell else None,"confirmed":macd_buy or macd_sell,"details":f"MACD {macd_line[i]:.5f} / Signal {macd_signal[i]:.5f}"},
-        "rsi":{"value":f"{rsi[i]:.2f} ({'ABOVE 50' if rsi_buy else 'BELOW 50' if rsi_sell else 'AT 50'})","direction":"BUY" if rsi_buy else "SELL" if rsi_sell else None,"confirmed":rsi_buy or rsi_sell,"details":"RSI 14; bullish above 50, bearish below 50"},
-    }
-    buy_count=sum(buy_checks.values()); sell_count=sum(sell_checks.values())
-    direction="BUY" if buy_count==4 else "SELL" if sell_count==4 else None
-    result.update({"indicators":indicators,"buy_confirmations":buy_count,"sell_confirmations":sell_count,
-                   "direction":direction,"confirmed":direction is not None,
-                   "reason":f"All four indicators confirm {direction}." if direction else "WAIT: all four indicators must confirm the same direction.",
-                   "price":closes[i],"bar_timestamp":completed[-1].get("datetime"),
-                   "signal_id":f"COPILOT-XAUUSD-M1-{completed[-1].get('datetime')}"})
+    closes=[float(x["close"]) for x in completed]
+    highs=[float(x["high"]) for x in completed]
+    lows=[float(x["low"]) for x in completed]
+    n=len(closes)
+    basis=sum(closes[-20:])/20.0
+    variance=sum((x-basis)**2 for x in closes[-20:])/20.0
+    sd=math.sqrt(max(0.0,variance))
+    upper=basis+2.0*sd
+    lower=basis-2.0*sd
+    tr=[]
+    for i in range(n):
+        prev=closes[i-1] if i else closes[i]
+        tr.append(max(highs[i]-lows[i],abs(highs[i]-prev),abs(lows[i]-prev)))
+    atr=[None]*n
+    if n >= 10:
+        atr[9]=sum(tr[:10])/10.0
+        for i in range(10,n):
+            atr[i]=(atr[i-1]*9.0+tr[i])/10.0
+    final_upper=[None]*n; final_lower=[None]*n; trend=[None]*n
+    for i in range(n):
+        if atr[i] is None: continue
+        mid=(highs[i]+lows[i])/2.0
+        bu=mid+3.0*atr[i]; bl=mid-3.0*atr[i]
+        if i==0 or atr[i-1] is None:
+            final_upper[i]=bu; final_lower[i]=bl; trend[i]="DOWN" if closes[i] < mid else "UP"
+            continue
+        final_upper[i]=bu if bu<final_upper[i-1] or closes[i-1]>final_upper[i-1] else final_upper[i-1]
+        final_lower[i]=bl if bl>final_lower[i-1] or closes[i-1]<final_lower[i-1] else final_lower[i-1]
+        if trend[i-1]=="DOWN":
+            trend[i]="UP" if closes[i]>final_upper[i] else "DOWN"
+        else:
+            trend[i]="DOWN" if closes[i]<final_lower[i] else "UP"
+    # Latest two Supertrend states are required to detect a genuine colour flip.
+    current=trend[-1]; previous=trend[-2]
+    flip=(current is not None and previous is not None and current!=previous)
+    bb_side="BUY" if closes[-1]>basis else "SELL" if closes[-1]<basis else None
+    direction="BUY" if current=="UP" else "SELL" if current=="DOWN" else None
+    bb_confirms=bool(direction and bb_side==direction)
+    result.update({
+        "indicators":{
+            "bollinger_bands":{"value":"UPPER / MIDDLE / LOWER","direction":bb_side,"confirmed":bb_confirms,
+                "details":f"Upper {upper:.5f} · Middle {basis:.5f} · Lower {lower:.5f} · Close {closes[-1]:.5f}",
+                "upper":upper,"middle":basis,"lower":lower,"close":closes[-1]},
+            "supertrend":{"value":current or "CALCULATING","direction":direction,"confirmed":current is not None,
+                "details":f"Colour {current or '—'} · Previous {previous or '—'} · ATR(10) {atr[-1]:.5f}" if atr[-1] is not None else "ATR(10) calculating",
+                "color":current,"previous_color":previous,"flipped":flip,"atr":atr[-1]},
+        },
+        "direction":direction if flip and bb_confirms else None,
+        "trend_direction":direction,
+        "confirmed":bool(flip and bb_confirms),
+        "entry_trigger":bool(flip and bb_confirms),
+        "supertrend_flip":flip,
+        "buy_confirmations":int(current=="UP")+int(bb_confirms and direction=="BUY"),
+        "sell_confirmations":int(current=="DOWN")+int(bb_confirms and direction=="SELL"),
+        "price":closes[-1],"bar_timestamp":completed[-1].get("datetime"),
+        "signal_id":f"COPILOT2-XAUUSD-M1-{completed[-1].get('datetime')}",
+        "reason":("Supertrend changed to "+str(current)+" and Bollinger Bands confirm "+str(direction)+".") if flip and bb_confirms
+                 else ("Supertrend colour changed, but Bollinger Bands do not confirm; no entry.") if flip
+                 else "Waiting for a new Supertrend colour change. Existing positions exit on an opposite Supertrend colour change."
+    })
     return result
 
 
 def _latest_autotrader_signal(requested_symbol, kets_strategy_enabled=True, selected_strategies=None):
-    """Only the four unanimous Co-pilot indicators may authorize an entry."""
+    """Only a fresh Co-Pilot 2 Supertrend flip with Bollinger confirmation may authorize an entry."""
     with V16_MARKET_LOCK:
         market = dict(COPILOT_SIGNAL_SNAPSHOT)
-    state = _copilot_indicator_state(market)
+    state = _copilot2_indicator_state(market)
     if not state.get("confirmed") or str(requested_symbol or "XAUUSD").upper().replace("/", "") not in {"XAUUSD", "XAU", "GOLD"}:
         return None
     return {"id":state.get("signal_id"),"asset":"GOLD","symbol":"XAUUSD","direction":state["direction"],
             "signal":state["direction"],"entry":state.get("price"),"price":state.get("price"),"market_price":state.get("price"),
-            "timestamp_utc":state.get("bar_timestamp"),"signal_source":"COPILOT_INDICATORS","_signal_source":"COPILOT_INDICATORS"}
+            "timestamp_utc":state.get("bar_timestamp"),"signal_source":"COPILOT2_BOLLINGER_SUPERTREND","_signal_source":"COPILOT2_BOLLINGER_SUPERTREND"}
 
 
 def _ctrader_autotrade_once():
-    """Co-pilot-only Auto-Trader: entries require unanimous MA/Stoch/MACD/RSI."""
+    """Co-Pilot 2 Auto-Trader: Bollinger confirmation plus a fresh Supertrend colour change."""
     session=trading_session()
     with V16_MARKET_LOCK:
         market=dict(COPILOT_SIGNAL_SNAPSHOT)
@@ -2940,7 +2953,7 @@ def _ctrader_autotrade_once():
         age=(datetime.datetime.now(datetime.timezone.utc)-stamp).total_seconds()
     except Exception: age=999999
     fresh=bool(market) and 0 <= age <= 240
-    copilot=_copilot_indicator_state(market) if fresh else {"confirmed":False,"reason":"Gold candle feed is stale or unavailable."}
+    copilot=_copilot2_indicator_state(market) if fresh else {"confirmed":False,"reason":"Gold candle feed is stale or unavailable."}
     direction=copilot.get("direction") if copilot.get("confirmed") else None
     signal_id=str(copilot.get("signal_id") or "")
     with DB_LOCK:
@@ -2954,16 +2967,18 @@ def _ctrader_autotrade_once():
             # confirmed signal into BTC or another selected instrument.
             if str(row.get("auto_symbol") or "XAUUSD").upper().replace("/", "") not in {"XAUUSD", "GOLD", "XAU"}: continue
             previous=str(row.get("auto_direction") or "").upper()
-            # Keep the existing opposite-confirmed-direction exit behavior;
-            # only the source of a confirmed direction has changed to Co-pilot.
-            if previous and direction and direction != previous:
+            # New exit rule: close KETS automatic positions immediately when
+            # Supertrend flips to the opposite colour. No legacy exit-difference rule.
+            trend_direction=copilot.get("trend_direction")
+            flipped=bool(copilot.get("supertrend_flip"))
+            if previous and flipped and trend_direction and trend_direction != previous:
                 _ctrader_close_positions(row, auto_only=True)
                 with DB_LOCK:
                     conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET auto_direction=NULL,auto_entry_signal_id=NULL,pending_auto_direction=NULL,pending_auto_signal_id=NULL,last_signal_id=NULL,last_error=NULL,updated_at=? WHERE id=?",(_now_iso(),row["id"])); conn.commit(); conn.close()
                 previous=""
                 row["auto_direction"]=""
             # Auto-Trader OFF never authorizes a fresh entry.
-            if not bool(row.get("auto_enabled")) or not direction or previous==direction: continue
+            if not bool(row.get("auto_enabled")) or not direction or not flipped or previous==direction: continue
             if not signal_id or str(row.get("auto_entry_signal_id") or "")==signal_id: continue
             price=_num(market.get("gold_price"))
             if not price or price <= 0: continue
@@ -3749,6 +3764,31 @@ def api_v16_market():
         snap["fresh"]=age is not None and age <= 240
     snap.pop("gold_candles", None)
     return jsonify({"ok":True,"snapshot":snap})
+
+@app.route("/api/copilot2", methods=["GET"])
+def api_copilot2():
+    user, error = _require_active_access()
+    if error: return error
+    with V16_MARKET_LOCK:
+        market = dict(COPILOT_SIGNAL_SNAPSHOT)
+    try:
+        stamp=datetime.datetime.fromisoformat(str(market.get("source_data_timestamp_utc") or market.get("timestamp_utc")).replace("Z","+00:00"))
+        age=max(0.0,(datetime.datetime.now(datetime.timezone.utc)-stamp).total_seconds())
+    except Exception: age=None
+    state=_copilot2_indicator_state(market)
+    state["fresh"] = age is not None and age <= 240
+    state["age_seconds"] = age
+    state["price"] = state.get("price") or market.get("gold_price")
+    if not state["fresh"]:
+        state["confirmed"] = False
+        state["entry_trigger"] = False
+        state["direction"] = None
+        state["reason"] = "Latest KETS Gold bot signal is stale or unavailable; entries are blocked."
+    state["entry_authorized"] = bool(state.get("fresh") and state.get("entry_trigger"))
+    state["autotrader_entry_rule"] = "BOLLINGER_CONFIRMATION_AND_SUPERTREND_COLOR_CHANGE"
+    state["autotrader_exit_rule"] = "EXIT_ON_OPPOSITE_SUPERTREND_COLOR_CHANGE"
+    return jsonify(state)
+
 
 @app.route("/api/copilot", methods=["GET"])
 def api_copilot():
