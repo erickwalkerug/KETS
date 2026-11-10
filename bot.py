@@ -2906,6 +2906,28 @@ def _copilot2_indicator_state(snapshot=None):
     bb_side="BUY" if closes[-1]>basis else "SELL" if closes[-1]<basis else None
     direction="BUY" if current=="UP" else "SELL" if current=="DOWN" else None
     bb_confirms=bool(direction and bb_side==direction)
+    # Expose every one of the 20 completed candles so the page can audit
+    # the actual data used by both indicators. No synthetic records are created.
+    history_records=[]
+    for i, candle in enumerate(completed):
+        row_trend=trend[i] if i < len(trend) else None
+        row_direction="BUY" if row_trend=="UP" else "SELL" if row_trend=="DOWN" else None
+        row_bb=None
+        if i >= 19:
+            window_closes=closes[i-19:i+1]
+            row_mid=sum(window_closes)/20.0
+            row_bb="BUY" if closes[i]>row_mid else "SELL" if closes[i]<row_mid else None
+        history_records.append({
+            "time": candle.get("datetime") or candle.get("timestamp") or "—",
+            "open": round(float(candle["open"]), 5),
+            "high": round(float(candle["high"]), 5),
+            "low": round(float(candle["low"]), 5),
+            "close": round(float(candle["close"]), 5),
+            "bollinger": row_bb or "—",
+            "supertrend": row_direction or "CALCULATING",
+            "decision": row_direction if row_direction and row_bb==row_direction else "WAIT"
+        })
+    result["records"] = history_records
     result.update({
         "indicators":{
             "bollinger_bands":{"value":"UPPER / MIDDLE / LOWER","direction":bb_side,"confirmed":bb_confirms,
@@ -2915,24 +2937,23 @@ def _copilot2_indicator_state(snapshot=None):
                 "details":f"Colour {current or '—'} · Previous {previous or '—'} · ATR(10) {atr[-1]:.5f}" if atr[-1] is not None else "ATR(10) calculating",
                 "color":current,"previous_color":previous,"flipped":flip,"atr":atr[-1]},
         },
-        "direction":direction if flip and bb_confirms else None,
+        "direction":direction if bb_confirms else None,
         "trend_direction":direction,
-        "confirmed":bool(flip and bb_confirms),
-        "entry_trigger":bool(flip and bb_confirms),
+        "confirmed":bool(direction and bb_confirms),
+        "entry_trigger":bool(direction and bb_confirms),
         "supertrend_flip":flip,
         "buy_confirmations":int(current=="UP")+int(bb_confirms and direction=="BUY"),
         "sell_confirmations":int(current=="DOWN")+int(bb_confirms and direction=="SELL"),
         "price":closes[-1],"bar_timestamp":completed[-1].get("datetime"),
         "signal_id":f"COPILOT2-XAUUSD-M1-{completed[-1].get('datetime')}",
-        "reason":("Supertrend changed to "+str(current)+" and Bollinger Bands confirm "+str(direction)+".") if flip and bb_confirms
-                 else ("Supertrend colour changed, but Bollinger Bands do not confirm; no entry.") if flip
-                 else "Waiting for a new Supertrend colour change. Existing positions exit on an opposite Supertrend colour change."
+        "reason":("Bollinger Bands and Supertrend both confirm "+str(direction)+"; entry conditions are aligned.") if bb_confirms
+                 else ("Supertrend and Bollinger Bands are not aligned; no entry.")
     })
     return result
 
 
 def _latest_autotrader_signal(requested_symbol, kets_strategy_enabled=True, selected_strategies=None):
-    """Only a fresh Co-Pilot 2 Supertrend flip with Bollinger confirmation may authorize an entry."""
+    """Aligned Co-Pilot 2 Bollinger and Supertrend directions authorize an entry; opposite Supertrend flips exit."""
     with V16_MARKET_LOCK:
         market = dict(COPILOT_SIGNAL_SNAPSHOT)
     state = _copilot2_indicator_state(market)
@@ -2944,7 +2965,7 @@ def _latest_autotrader_signal(requested_symbol, kets_strategy_enabled=True, sele
 
 
 def _ctrader_autotrade_once():
-    """Co-Pilot 2 Auto-Trader: Bollinger confirmation plus a fresh Supertrend colour change."""
+    """Co-Pilot 2 Auto-Trader: enter on aligned Bollinger and Supertrend directions; exit on opposite Supertrend flip."""
     session=trading_session()
     with V16_MARKET_LOCK:
         market=dict(COPILOT_SIGNAL_SNAPSHOT)
@@ -2978,7 +2999,7 @@ def _ctrader_autotrade_once():
                 previous=""
                 row["auto_direction"]=""
             # Auto-Trader OFF never authorizes a fresh entry.
-            if not bool(row.get("auto_enabled")) or not direction or not flipped or previous==direction: continue
+            if not bool(row.get("auto_enabled")) or not direction or previous==direction: continue
             if not signal_id or str(row.get("auto_entry_signal_id") or "")==signal_id: continue
             price=_num(market.get("gold_price"))
             if not price or price <= 0: continue
@@ -3785,7 +3806,7 @@ def api_copilot2():
         state["direction"] = None
         state["reason"] = "Latest KETS Gold bot signal is stale or unavailable; entries are blocked."
     state["entry_authorized"] = bool(state.get("fresh") and state.get("entry_trigger"))
-    state["autotrader_entry_rule"] = "BOLLINGER_CONFIRMATION_AND_SUPERTREND_COLOR_CHANGE"
+    state["autotrader_entry_rule"] = "BOLLINGER_AND_SUPERTREND_SAME_DIRECTION"
     state["autotrader_exit_rule"] = "EXIT_ON_OPPOSITE_SUPERTREND_COLOR_CHANGE"
     return jsonify(state)
 

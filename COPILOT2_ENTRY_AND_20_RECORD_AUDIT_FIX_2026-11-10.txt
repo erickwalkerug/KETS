@@ -1,0 +1,9 @@
+KETS CO-PILOT 2 ENTRY + 20-RECORD AUDIT FIX — 2026-11-10
+
+- Entry now triggers when Bollinger Bands and Supertrend confirm the same BUY or SELL direction.
+- A fresh Supertrend colour flip is no longer required for entry.
+- The existing exit rule is retained: close KETS automatic positions on an opposite Supertrend colour change.
+- Existing session, Auto-Trader enablement, symbol, sizing, broker authorization, and duplicate-position protections are retained.
+- Co-Pilot 2 now returns and displays the latest 20 completed M1 OHLC records with timestamps, Bollinger direction where calculable, Supertrend direction, and combined decision.
+- The first 19 Bollinger cells may show — because the visible 20-candle window is the full period required for the Bollinger 20 middle band.
+- The app still requires an authorized cTrader broker connection with trading permission. The dashboard warning "Broker connection is not configured yet" means this build alone cannot place live orders until that connection is configured.

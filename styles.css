@@ -1056,3 +1056,9 @@ body::before {
 .copilot-charge-track i{position:absolute;left:-42%;top:0;width:42%;height:100%;border-radius:99px;background:linear-gradient(90deg,rgba(251,191,36,.25),#fbbf24,#fff0a6);box-shadow:0 0 10px rgba(251,191,36,.55);animation:copilotCharge 1.35s ease-in-out infinite}
 @keyframes copilotCharge{0%{left:-42%}100%{left:100%}}
 @media(prefers-reduced-motion:reduce){.copilot-charge-track i{animation:none;left:0;width:100%;opacity:.55}}
+
+/* Co-Pilot 2 candle audit table */
+.table-scroll{width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch}
+.copilot2-record-table{width:100%;min-width:760px;border-collapse:collapse;font-size:12px}
+.copilot2-record-table th,.copilot2-record-table td{padding:9px 10px;text-align:left;border-bottom:1px solid rgba(148,163,184,.22);white-space:nowrap}
+.copilot2-record-table th{color:var(--muted,#94a3b8);font-weight:700}

@@ -1886,7 +1886,7 @@ async function refreshCoPilot2Page(){
   if(status)status.textContent=d.fresh?"LIVE TWELVE DATA BOT FEED":"STALE / WAITING FOR BOT";
   if(updated)updated.textContent=`${d.candles_used||0}/20 latest completed M1 candles · ${d.bar_timestamp||"No completed candle"} · feed age ${Math.round(d.age_seconds||0)}s`;
   if($("copilot2Decision")){
-   const action=d.entry_authorized?`ENTRY ${d.direction}`:d.supertrend_flip?"SUPERTREND FLIPPED — NO ENTRY":"WAIT — NO NEW COLOUR CHANGE";
+   const action=d.entry_authorized?`ENTRY ${d.direction}`:"WAIT — INDICATORS NOT ALIGNED";
    $("copilot2Decision").textContent=action;
    $("copilot2Decision").className=d.entry_authorized?(d.direction==="BUY"?"copilot-decision-buy":"copilot-decision-sell"):"";
   }
@@ -1898,6 +1898,11 @@ async function refreshCoPilot2Page(){
    const x=(d.indicators||{})[key]||{}, good=!!x.confirmed, side=x.direction||"NEUTRAL";
    return `<article class="history-card copilot-indicator-card ${good?(side==="BUY"?"confirmed":"confirmed-sell"):"unconfirmed"}"><div class="eyebrow">${esc(settings)}</div><h3>${esc(label)}</h3><strong>${esc(x.value||"WAITING")}</strong><p>${esc(x.details||"Waiting for enough completed candles.")}</p><small>${good?`Direction: ${esc(side)}`:"Not confirmed"}</small></article>`;
   }).join("");
+  const records=$("copilot2Records");
+  if(records){
+   const rows=Array.isArray(d.records)?d.records:[];
+   records.innerHTML=rows.length?rows.map(r=>`<tr><td>${esc(r.time||"—")}</td><td>${esc(r.open)}</td><td>${esc(r.high)}</td><td>${esc(r.low)}</td><td>${esc(r.close)}</td><td>${esc(r.bollinger||"—")}</td><td>${esc(r.supertrend||"—")}</td><td>${esc(r.decision||"WAIT")}</td></tr>`).join(""):'<tr><td colspan="8">No completed candle records received.</td></tr>';
+  }
  }catch(e){if(status)status.textContent="FEED ERROR";if(updated)updated.textContent=e.message||"Could not load Co-Pilot 2 readings.";if($("copilot2Decision"))$("copilot2Decision").textContent="WAIT — FEED ERROR";}
 }
 setInterval(()=>{if(!$("coPilot2Page")?.classList.contains("hidden"))refreshCoPilot2Page();},3000);
