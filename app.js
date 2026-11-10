@@ -1172,9 +1172,12 @@ async function refreshManagedStatus(){
   renderManagedMoney("managedUnrealizedPnl",convertManagedValue(d.unrealized_pnl,sourceCurrency,currency),currency);
   renderManagedMoney("managedRealizedPnl",convertManagedValue(d.realized_pnl,sourceCurrency,currency),currency);
   const runTarget=Number(d.settings?.target_profit_total??d.settings?.profit_target??25);
+  const targetCurrency=String(d.settings?.target_profit_currency||"USD").toUpperCase()==="UGX"?"UGX":"USD";
+  const targetCurrencySelect=$("managedProfitTargetCurrency"); if(targetCurrencySelect&&document.activeElement!==targetCurrencySelect)targetCurrencySelect.value=targetCurrency;
   const visibleTarget=$("managedProfitTargetVisible"); if(visibleTarget&&document.activeElement!==visibleTarget)visibleTarget.value=runTarget.toFixed(2);
-  if($("managedRunRealizedProfit"))$("managedRunRealizedProfit").textContent=convertManagedValue(d.settings?.auto_profit_total??0,sourceCurrency,currency);
-  if($("managedProfitTargetStatus"))$("managedProfitTargetStatus").textContent=Number(d.settings?.auto_profit_total||0)>=runTarget&&runTarget>0?"Target reached — stopping":"Target not yet reached";
+  const runProfitInTargetCurrency=convertManagedValue(d.settings?.auto_profit_total??0,sourceCurrency,targetCurrency);
+  if($("managedRunRealizedProfit"))$("managedRunRealizedProfit").textContent=runProfitInTargetCurrency===null?"Rate unavailable":`${targetCurrency} ${Number(runProfitInTargetCurrency).toLocaleString(undefined,{maximumFractionDigits:2})}`;
+  if($("managedProfitTargetStatus"))$("managedProfitTargetStatus").textContent=runProfitInTargetCurrency!==null&&runProfitInTargetCurrency>=runTarget&&runTarget>0?"Target reached — stopping":"Target not yet reached";
   renderManagedMoney("managedFreeMargin",convertManagedValue(d.free_margin,sourceCurrency,currency),currency);
   if($("managedOpenTrades"))$("managedOpenTrades").textContent=String((d.positions||[]).length);
   if($("managedConnectionNote")){
@@ -1959,12 +1962,13 @@ setInterval(()=>{if(!$("coPilot2Page")?.classList.contains("hidden"))refreshCoPi
 
 async function saveRealizedProfitTarget(){
   const input=$("managedProfitTargetVisible"); const value=Number(input?.value);
-  if(!Number.isFinite(value)||value<=0||value>100000){setManagedActionMessage("Enter a realized-profit target greater than 0 and no more than 100,000.","error");return;}
+  const selectedTargetCurrency=String($("managedProfitTargetCurrency")?.value||"USD").toUpperCase()==="UGX"?"UGX":"USD";
+  if(!Number.isFinite(value)||value<=0||value>1000000000){setManagedActionMessage("Enter a target greater than zero.","error");return;}
   try{
     if(input)input.disabled=true;
-    await api("/api/managed/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({target_profit_total:value,lot_size:Number($("managedLotSize")?.value||0.01),pressure_ratio_threshold:Number($("managedPressureRatio")?.value||2),auto_symbol:String($("autoTradeSymbol")?.value||"XAUUSD")})});
+    await api("/api/managed/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({target_profit_total:value,target_profit_currency:selectedTargetCurrency,lot_size:Number($("managedLotSize")?.value||0.01),pressure_ratio_threshold:Number($("managedPressureRatio")?.value||2),auto_symbol:String($("autoTradeSymbol")?.value||"XAUUSD")})});
     if($("managedProfitTarget"))$("managedProfitTarget").value=String(value);
-    setManagedActionMessage("Realized-profit stop target saved. Auto-Trader will stop and close all selected-account positions when realized profit reaches this amount.","ok");
+    setManagedActionMessage(`Saved profit auto-stop target: ${selectedTargetCurrency} ${value.toLocaleString()}.`,"ok");
     await refreshManagedStatus();
   }catch(e){setManagedActionMessage(e.message||"Could not save realized-profit target.","error");}
   finally{if(input)input.disabled=false;}
