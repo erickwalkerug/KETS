@@ -945,7 +945,7 @@ function renderManagedTrading(){
  el.innerHTML=`<div class="managed-trade-head"><div><span class="eyebrow">${esc(market)}</span><h3>${direction==='BUY'?'🟢 BUY / LONG':'🔴 SELL / SHORT'}</h3></div><span class="managed-quality">Signal strength ${esc(score)}%</span></div><div class="managed-level-grid"><div><span>ENTRY</span><b>${signalMoney(price)}</b></div><div><span>TAKE PROFIT</span><b>${signalMoney(tp)}</b></div><div><span>STOP LOSS</span><b>${signalMoney(sl)}</b></div><div><span>STATUS</span><b>READY</b></div></div><p class="managed-execution-note"><strong>${esc(targetText)}</strong><br>This is the current KETS manual-trading plan. Use these levels only when the status shows READY. Automatic trading uses its separate Signal History flow.</p>`;
 }
 
-const PAGE_IDS={dashboard:"dashboardHome",live:"liveMarketsPage",plans:"accessPlansPage",payments:"paymentHistoryPage",stop:"stopLossPage",history:"bullBearHistoryPage",managed:"managedTradingPage",autoTrader:"autoTraderPage",smcHistory:"smcHistoryPage",orderFlow:"orderFlowPage",frvp:"frvpPage",v16:"v16Page",coPilot:"coPilotPage",coPilot2:"coPilot2Page"};
+const PAGE_IDS={dashboard:"dashboardHome",live:"liveMarketsPage",plans:"accessPlansPage",payments:"paymentHistoryPage",stop:"stopLossPage",history:"bullBearHistoryPage",managed:"managedTradingPage",autoTrader:"autoTraderPage",smcHistory:"smcHistoryPage",orderFlow:"orderFlowPage",frvp:"frvpPage",v16:"v16Page",coPilot:"coPilotPage",coPilot2:"coPilot2Page",gmma:"gmmaPage"};
 function showPage(name,updateHash=true){
  Object.values(PAGE_IDS).forEach(id=>$(id)?.classList.add("hidden"));
  const target=$(PAGE_IDS[name]||PAGE_IDS.dashboard);
@@ -957,9 +957,9 @@ function showPage(name,updateHash=true){
  if(name==="orderFlow"){refreshOrderFlowHistory();}
  if(name==="frvp"){refreshOrderFlowHistory().then(()=>renderFRVPPage());}
  if(name==="v16"){refreshV16Page();}
- if(name==="coPilot"){refreshCoPilotPage();} if(name==="coPilot2"){refreshCoPilot2Page();}
+ if(name==="coPilot"){refreshCoPilotPage();} if(name==="coPilot2"){refreshCoPilot2Page();} if(name==="gmma"){refreshGMMAPage();}
  if(updateHash){
-   const hash={live:"#live-markets",plans:"#access-plans",payments:"#payment-history",stop:"#stop-loss-management",history:"#bullish-bearish-history",managed:"#managed-trading",autoTrader:"#auto-trader",smcHistory:"#smc-history",orderFlow:"#order-flow",frvp:"#frvp",v16:"#v16",coPilot:"#co-pilot",coPilot2:"#co-pilot-2",dashboard:""}[name]||"";
+   const hash={live:"#live-markets",plans:"#access-plans",payments:"#payment-history",stop:"#stop-loss-management",history:"#bullish-bearish-history",managed:"#managed-trading",autoTrader:"#auto-trader",smcHistory:"#smc-history",orderFlow:"#order-flow",frvp:"#frvp",v16:"#v16",coPilot:"#co-pilot",coPilot2:"#co-pilot-2",gmma:"#gmma",dashboard:""}[name]||"";
    try{history.replaceState({},document.title,location.pathname+location.search+hash);}catch(e){}
  }
  window.scrollTo({top:0,behavior:"smooth"});
@@ -979,7 +979,7 @@ function handleHistoryRoute(){
  else if(h==="#order-flow")showPage("orderFlow",false);
  else if(h==="#frvp")showPage("frvp",false);
  else if(h==="#v16")showPage("v16",false);
- else if(h==="#co-pilot")showPage("coPilot",false); else if(h==="#co-pilot-2")showPage("coPilot2",false);
+ else if(h==="#co-pilot")showPage("coPilot",false); else if(h==="#co-pilot-2")showPage("coPilot2",false); else if(h==="#gmma")showPage("gmma",false);
  else showPage("dashboard",false);
 }
 
@@ -996,7 +996,7 @@ if($("smcHistoryBtn")) $("smcHistoryBtn").onclick=()=>showPage("smcHistory");
 if($("orderFlowBtn")) $("orderFlowBtn").onclick=()=>showPage("orderFlow");
 if($("frvpBtn")) $("frvpBtn").onclick=()=>showPage("frvp");
 if($("v16Btn")) $("v16Btn").onclick=()=>showPage("v16");
-if($("coPilotBtn")) $("coPilotBtn").onclick=()=>showPage("coPilot"); if($("coPilot2Btn")) $("coPilot2Btn").onclick=()=>showPage("coPilot2");
+if($("coPilotBtn")) $("coPilotBtn").onclick=()=>showPage("coPilot"); if($("coPilot2Btn")) $("coPilot2Btn").onclick=()=>showPage("coPilot2"); if($("gmmaBtn")) $("gmmaBtn").onclick=()=>showPage("gmma");
 if($("dashboardCoPilot")) $("dashboardCoPilot").onclick=()=>showPage("coPilot"); if($("dashboardCoPilot2")) $("dashboardCoPilot2").onclick=()=>showPage("coPilot2");
 if($("autoTradeSymbol")) $("autoTradeSymbol").onchange=()=>renderFRVPPage();
 if($("dashboardLiveMarkets")) $("dashboardLiveMarkets").onclick=()=>showPage("live");
@@ -1610,6 +1610,27 @@ function initAutoTraderControls(){
 }
 initAutoTraderControls();
 
+// The GMMA page exposes a separate, clearly labelled account-wide cTrader
+// close action. It always asks for confirmation and targets the selected
+// cTrader account through the authenticated server endpoint.
+if($("gmmaCloseAllCtraderBtn"))$("gmmaCloseAllCtraderBtn").onclick=async()=>{
+ const btn=$("gmmaCloseAllCtraderBtn"), status=$("gmmaCloseAllStatus");
+ if(!confirm("EMERGENCY ACTION: Close EVERY open position on your selected cTrader account, including manual trades and positions from other strategies? This cannot be undone."))return;
+ try{
+  btn.disabled=true; btn.dataset.oldText=btn.textContent; btn.textContent="Closing cTrader positions…";
+  if(status){status.textContent="Sending close requests to cTrader…";status.className="form-message";}
+  const d=await api("/api/managed/close-all",{method:"POST"});
+  const count=Number(d.closed_requests||0);
+  if(status){status.textContent=count?`cTrader accepted ${count} close request(s). Check your account positions to confirm they are flat.`:"No open positions were found on the selected cTrader account.";status.className="form-message ok";}
+  setManagedActionMessage(count?`cTrader close requests sent for ${count} position(s).` : "No open cTrader positions were found.","ok");
+  await refreshManagedStatus();
+ }catch(e){
+  const message=e.message||"Could not close cTrader positions.";
+  if(status){status.textContent=message;status.className="form-message error";}
+  setManagedActionMessage(message,"error");
+ }finally{btn.disabled=false;btn.textContent=btn.dataset.oldText||"🚨 CLOSE ALL OPEN cTRADER TRADES";}
+};
+
 async function manualTrade(direction){
  const btn=direction==="BUY"?$("manualBuyBtn"):$("manualSellBtn");
  try{
@@ -1879,6 +1900,29 @@ async function refreshCoPilotPage(){
  }catch(e){if(status)status.textContent="FEED ERROR";if(updated)updated.textContent=e.message||"Could not load Co-pilot readings.";if($("copilotDecision"))$("copilotDecision").textContent="WAIT — FEED ERROR";}
 }
 setInterval(()=>{if(!$("coPilotPage")?.classList.contains("hidden"))refreshCoPilotPage();},5000);
+async function refreshGMMAPage(){
+ const status=$("gmmaFeedStatus"), updated=$("gmmaLastUpdated");
+ try{
+  const d=await api("/api/gmma");
+  if(status)status.textContent=d.fresh?"LIVE GMMA FEED":"STALE / WAITING";
+  if(updated)updated.textContent=`${d.timeframe||"M1"} · ${d.candles_used||0} completed candles · feed age ${d.age_seconds==null?"--":Math.round(d.age_seconds)+"s"} · ${d.bar_timestamp||"—"}`;
+  const decision=d.entry_authorized?`${d.direction} REVERSAL — ENTRY SIGNAL`:d.confirmed?`${d.direction} TREND — NO NEW ENTRY`:"WAITING / NO TRADE";
+  if($("gmmaDecision"))$("gmmaDecision").textContent=decision;
+  if($("gmmaReason"))$("gmmaReason").textContent=d.reason||"Waiting for GMMA data.";
+  if($("gmmaDirection"))$("gmmaDirection").textContent=`TREND: ${d.direction||"MIXED"}`;
+  if($("gmmaWindow"))$("gmmaWindow").textContent=`CANDLES: ${d.candles_used||0}/120`;
+  if($("gmmaPrice"))$("gmmaPrice").textContent=`PRICE: ${d.price==null?"--":Number(d.price).toFixed(3)}`;
+  const cards=[];
+  for(const [key,label] of [["short_group","SHORT-TERM GROUP"],["long_group","LONG-TERM GROUP"]]){
+   const vals=d.indicators?.[key]||{};
+   cards.push(`<article class="history-card"><h3>${label}</h3><div class="v16-metrics">${Object.entries(vals).map(([p,v])=>`<span>EMA ${esc(p)}: <b>${Number(v).toFixed(5)}</b></span>`).join(" · ")||"Calculating…"}</div></article>`);
+  }
+  if($("gmmaGroups"))$("gmmaGroups").innerHTML=cards.join("");
+  if($("gmmaRecords"))$("gmmaRecords").innerHTML=(d.records||[]).map(r=>`<tr><td>${esc(r.time||"—")}</td><td>${Number(r.close).toFixed(5)}</td><td>${Number(r.short_mean).toFixed(5)}</td><td>${Number(r.long_mean).toFixed(5)}</td><td>${esc(r.direction)}</td></tr>`).join("")||'<tr><td colspan="5">Waiting for at least 120 completed candles…</td></tr>';
+ }catch(e){if(status)status.textContent="FEED ERROR";if(updated)updated.textContent=e.message||"Could not load GMMA readings.";if($("gmmaDecision"))$("gmmaDecision").textContent="WAIT — FEED ERROR";}
+}
+setInterval(()=>{if(!$("gmmaPage")?.classList.contains("hidden"))refreshGMMAPage();},3000);
+
 async function refreshCoPilot2Page(){
  const status=$("copilot2FeedStatus"),updated=$("copilot2LastUpdated");
  try{

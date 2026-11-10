@@ -65,7 +65,7 @@
 <div id="app" class="hidden">
 <header class="topbar">
   <div class="brand"><div class="investment-brand"><strong>ERIC INVESTMENTS</strong><span>INSTANT INVESTING</span><span>INSTANT WITHDRAWS</span><div class="investment-info-inline">Capital guide: $100 → 0.05 lot · $500 → 0.10 lot · $1,000 → 0.50 lot · $5,000 → 1.00 lot<br>Profitability depends on current market pressure. Caution: investments can go positive or negative. Choose a 30-day service plan to start investing.</div></div></div>
-  <div class="header-actions"><span class="header-status"><i></i><span id="engineStatus">Connecting...</span></span><div class="page-nav" aria-label="KETS pages"><button class="ghost-btn page-nav-btn" id="liveMarketsBtn">Live Markets</button><button class="ghost-btn page-nav-btn" id="accessPlansBtn">Rent Costs</button><button class="ghost-btn page-nav-btn" id="paymentHistoryBtn">Payment History</button><button class="ghost-btn page-nav-btn" id="stopLossBtn">Stop Loss</button><button class="ghost-btn page-nav-btn" id="bullBearHistoryBtn">Bullish / Bearish History</button><button class="ghost-btn page-nav-btn" id="managedTradingBtn">Invest Shares</button><button class="ghost-btn page-nav-btn" id="autoTraderBtn">🤖 Auto Trader</button><button class="ghost-btn page-nav-btn" id="smcHistoryBtn">SMC History</button><button class="ghost-btn page-nav-btn" id="orderFlowBtn">Order Flow</button><button class="ghost-btn page-nav-btn" id="frvpBtn">FRVP</button><button class="ghost-btn page-nav-btn" id="v16Btn">V16</button><button class="ghost-btn page-nav-btn" id="coPilotBtn">Co-pilot</button><button class="ghost-btn page-nav-btn" id="coPilot2Btn">Co-Pilot 2</button><button class="ghost-btn page-nav-btn" id="adminPaymentsBtn" type="button">Admin Payments</button></div><button class="profile-mini" id="profileBtn"><span id="miniName">Profile</span></button></div>
+  <div class="header-actions"><span class="header-status"><i></i><span id="engineStatus">Connecting...</span></span><div class="page-nav" aria-label="KETS pages"><button class="ghost-btn page-nav-btn" id="liveMarketsBtn">Live Markets</button><button class="ghost-btn page-nav-btn" id="accessPlansBtn">Rent Costs</button><button class="ghost-btn page-nav-btn" id="paymentHistoryBtn">Payment History</button><button class="ghost-btn page-nav-btn" id="stopLossBtn">Stop Loss</button><button class="ghost-btn page-nav-btn" id="bullBearHistoryBtn">Bullish / Bearish History</button><button class="ghost-btn page-nav-btn" id="managedTradingBtn">Invest Shares</button><button class="ghost-btn page-nav-btn" id="autoTraderBtn">🤖 Auto Trader</button><button class="ghost-btn page-nav-btn" id="smcHistoryBtn">SMC History</button><button class="ghost-btn page-nav-btn" id="orderFlowBtn">Order Flow</button><button class="ghost-btn page-nav-btn" id="frvpBtn">FRVP</button><button class="ghost-btn page-nav-btn" id="v16Btn">V16</button><button class="ghost-btn page-nav-btn" id="coPilotBtn">Co-pilot</button><button class="ghost-btn page-nav-btn" id="coPilot2Btn">Co-Pilot 2</button><button class="ghost-btn page-nav-btn" id="gmmaBtn">GMMA</button><button class="ghost-btn page-nav-btn" id="adminPaymentsBtn" type="button">Admin Payments</button></div><button class="profile-mini" id="profileBtn"><span id="miniName">Profile</span></button></div>
 </header>
 
 <main>
@@ -291,7 +291,23 @@
   <section class="history-card copilot-decision-card"><span class="eyebrow">AUTOTRADER SIGNAL / POSITION RULE</span><h2 id="copilot2Decision">WAITING</h2><p id="copilot2Reason" class="muted">Waiting for 20 completed candles and aligned indicator directions.</p><div class="copilot-counts"><span id="copilot2BuyCount">BUY: 0</span><span id="copilot2SellCount">SELL: 0</span><span id="copilot2Window">WINDOW: 0/20</span></div></section>
   <section class="copilot-indicator-grid" id="copilot2Indicators"><article class="history-card"><div class="empty">Loading Bollinger Bands and Supertrend…</div></article></section>
   <section class="history-card"><h3>Latest 20 completed M1 records</h3><p class="muted">The table below shows the actual candle records used by Co-Pilot 2. The first 19 Bollinger cells show — because the displayed 20-candle window is needed to calculate a full 20-period middle band.</p><div class="table-scroll"><table class="copilot2-record-table"><thead><tr><th>Time (UTC)</th><th>Open</th><th>High</th><th>Low</th><th>Close</th><th>BB</th><th>Supertrend</th><th>Decision</th></tr></thead><tbody id="copilot2Records"><tr><td colspan="8">Waiting for candle records…</td></tr></tbody></table></div></section>
-  <section class="history-card copilot-rules"><h3>Co-Pilot 2 Auto-Trader rules</h3><ul><li><strong>Entry:</strong> Bollinger Bands and Supertrend must confirm the same direction (close above the middle band for BUY; below for SELL). A fresh Supertrend colour change is not required.</li><li><strong>Exit:</strong> close the KETS automatic position when Supertrend changes to the opposite colour. The previous exit-difference rule is removed.</li><li><strong>Data:</strong> both indicators use the same latest 20 completed M1 candles forwarded by the trading bot from its existing Twelve Data request.</li></ul><p class="muted">This page displays the same calculations used by Auto-Trader. A stale feed or incomplete 20-candle window blocks new entries.</p></section>
+  <section class="history-card copilot-rules"><h3>Co-Pilot 2 monitor rules · read-only</h3><ul><li><strong>Monitor:</strong> Bollinger Bands (20,2) and Supertrend (10,3) are calculated from the completed Gold M1 candle feed.</li><li><strong>Execution:</strong> Co-Pilot 2 no longer authorizes Auto-Trader entries or exits. The GMMA page and GMMA reversal engine now control automatic entries and opposite-reversal exits.</li></ul><p class="muted">This page remains available for indicator observation only. Open GMMA to review the active Auto-Trader signal logic.</p></section>
+</section>
+
+
+<section id="gmmaPage" class="history-page hidden">
+  <div class="history-page-head"><div><span class="eyebrow">GUPPY MULTIPLE MOVING AVERAGES · AUTOTRADER</span><h2>📈 GMMA</h2><p class="muted">Gold XAU/USD · M1 · Short EMAs 3, 5, 8, 10, 12, 15 · Long EMAs 30, 35, 40, 45, 50, 60</p></div><button class="ghost-btn page-back-btn" data-page="dashboard">← Dashboard</button></div>
+  <div class="live-page-status"><span class="live-dot" id="gmmaFeedStatus">WAITING FOR FEED</span><small id="gmmaLastUpdated">Waiting for completed Gold candles…</small></div>
+  <section class="history-card copilot-decision-card"><span class="eyebrow">GMMA REVERSAL / AUTOTRADER SIGNAL</span><h2 id="gmmaDecision">WAITING</h2><p id="gmmaReason" class="muted">Waiting for 120 completed M1 candles and a confirmed Guppy group crossover.</p><div class="copilot-counts"><span id="gmmaDirection">TREND: --</span><span id="gmmaWindow">CANDLES: 0/120</span><span id="gmmaPrice">PRICE: --</span></div></section>
+  <section class="history-card gmma-emergency-close">
+    <div class="panel-title"><h3>💼 cTrader position control</h3><span class="eyebrow">SELECTED ACCOUNT</span></div>
+    <p class="muted">Close every currently open position on your selected cTrader account, including manual trades and trades opened by other strategies. This does not close pending orders.</p>
+    <button class="danger-btn full" id="gmmaCloseAllCtraderBtn" type="button">🚨 CLOSE ALL OPEN cTRADER TRADES</button>
+    <p class="form-message" id="gmmaCloseAllStatus" role="status" aria-live="polite"></p>
+  </section>
+  <section class="copilot-indicator-grid" id="gmmaGroups"><article class="history-card"><div class="empty">Loading GMMA readings…</div></article></section>
+  <section class="history-card"><h3>Latest 20 completed M1 candles</h3><p class="muted">The table audits the short-group and long-group average values used to confirm the current trend.</p><div class="table-scroll"><table class="copilot2-record-table"><thead><tr><th>Time (UTC)</th><th>Close</th><th>Short group mean</th><th>Long group mean</th><th>Trend</th></tr></thead><tbody id="gmmaRecords"><tr><td colspan="5">Waiting for candle records…</td></tr></tbody></table></div></section>
+  <section class="history-card copilot-rules"><h3>GMMA Auto-Trader rules</h3><ul><li><strong>BUY entry:</strong> the short-group average crosses above the long-group average on a completed candle.</li><li><strong>SELL entry:</strong> the short-group average crosses below the long-group average on a completed candle.</li><li><strong>Exit:</strong> close the existing KETS automatic position when a confirmed opposite GMMA group crossover occurs.</li><li><strong>Safety:</strong> only completed candles are used; at least 120 candles and a fresh feed (maximum age 4 minutes) are required. No entry is sent on a continuing trend without a new reversal.</li></ul><p class="muted">GMMA is a trend-following indicator and can lag or whipsaw in sideways markets. Test on demo before enabling live Auto-Trader.</p></section>
 </section>
 
 <section id="autoTraderPage" class="history-page hidden">
@@ -299,7 +315,7 @@
     <div>
       <span class="eyebrow">KETS AUTO TRADER</span>
       <h2>🤖 KETS AUTO TRADER</h2>
-      <p class="muted">Co-Pilot 2 only: Bollinger Bands and Supertrend must confirm the same direction for entries. Automatic positions exit when Supertrend changes to the opposite colour.</p>
+      <p class="muted">GMMA only: confirmed Guppy short/long EMA group reversals trigger entries and opposite reversals close automatic positions.</p>
     </div>
     <button class="ghost-btn page-back-btn" data-page="dashboard">← Dashboard</button>
   </div>
@@ -442,6 +458,6 @@
   <button class="install-close" id="installClose" aria-label="Close">×</button>
 </div>
 
-<script src="/app.js?v=20261110copilot2" defer></script>
+<script src="/app.js?v=20261110gmma" defer></script>
 <script src="/background-slideshow.js?v=20261028sixphotodisplayfix" defer></script>
 </body></html>

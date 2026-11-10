@@ -1,0 +1,8 @@
+KETS CO-PILOT 2 — SUPERTREND HISTORY ALIGNMENT FIX — 2026-11-10
+
+- Preserves the existing Co-Pilot 2 page, Bollinger Bands (20, 2), Supertrend settings (ATR 10, multiplier 3), entry alignment, opposite-Supertrend-flip exit, latest 20 completed M1 audit records, and all other app/trading settings.
+- Supertrend now calculates Wilder ATR and its trailing bands using up to 400 completed M1 candles from the already-attached authenticated KETS signal payload. This avoids restarting ATR and Supertrend band history at the beginning of each 20-candle display window.
+- The page still displays/audits only the latest 20 completed M1 records. Bollinger calculations remain based on the 20-candle window.
+- Supertrend initialization and direction transitions now follow the TradingView ta.supertrend convention (DOWN/+1 initial direction; UP when close crosses above the final upper band; DOWN when close crosses below the final lower band).
+- No additional market-data API request is introduced. No changes to broker connection, order sizing, session gates, manual trading, or other strategies.
+- Important: Twelve Data remains the candle source in this build. If the broker uses a different XAUUSD feed or candle construction, small differences from its chart can still occur; exact tick-for-tick matching requires using that broker's own candle feed.

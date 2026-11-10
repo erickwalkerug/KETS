@@ -1,6 +1,6 @@
 KETS CO-PILOT 2 — 2026-11-10
 - Adds a separate Co-Pilot 2 page for Bollinger Bands (20,2) and Supertrend (ATR 10, multiplier 3).
-- Both indicators use the latest rolling 20 completed Gold M1 OHLC candles delivered in the authenticated trading-bot signal payload.
+- Bollinger Bands use the latest 20 completed Gold M1 OHLC candles. Supertrend uses up to 400 completed candles from the same authenticated trading-bot payload for ATR and trailing-band continuity; the page still displays the latest 20 records.
 - The bot sender reuses its existing Twelve Data candle fetch; no extra Twelve Data request is introduced. Its payload carries recent candles and KETS selects the latest 20 completed records.
 - Auto-Trader entry: a fresh Supertrend colour change plus Bollinger confirmation (close above the middle band for BUY; below for SELL).
 - Auto-Trader exit: close KETS automatic positions on an opposite Supertrend colour change. The previous exit-difference / opposite-confirmed-signal exit rule is removed.

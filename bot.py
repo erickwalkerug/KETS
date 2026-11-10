@@ -2428,7 +2428,7 @@ def _queue_and_execute_ctrader(row, sig, automatic=True):
     if not entry: raise RuntimeError("The current KETS signal has no entry price.")
     sid=_signal_id(sig)
     lot=max(.01,min(_num(row.get("lot_size")) or .01,_num(row.get("max_lot")) or 10))
-    # Co-pilot automatic entries retain the existing Auto-Trader order package;
+    # GMMA automatic entries retain the existing Auto-Trader order package;
     # this strategy supplies direction only and does not alter legacy protection settings.
     # Manual orders retain their existing SL/TP rules.
     order={"symbol":str(row.get("auto_symbol") or sig.get("symbol") or ("XAUUSD" if str(sig.get("asset")).upper() in ("GOLD","XAUUSD") else "BTCUSD")),"direction":direction,"volume":lot,"entry":entry}
@@ -2851,13 +2851,16 @@ def _copilot_completed_m1(candles):
 
 
 def _copilot2_indicator_state(snapshot=None):
-    """Bollinger Bands + Supertrend from the latest 20 completed Twelve Data M1 candles."""
+    """Bollinger Bands use 20 completed M1 bars; Supertrend keeps up to 400 bars of ATR/band history."""
     snapshot = snapshot if isinstance(snapshot, dict) else {}
     raw = _copilot_extract_gold_candles(snapshot)
-    completed = _copilot_completed_m1(raw)[-20:]
+    # Keep historical bars for Wilder ATR and Supertrend trailing-band continuity.
+    # Only the visible/audited Bollinger window remains the latest 20 completed bars.
+    completed_all = _copilot_completed_m1(raw)[-400:]
+    completed = completed_all[-20:]
     result = {
         "ok": True, "timeframe": "M1", "window": 20,
-        "settings": {"bollinger_period": 20, "bollinger_stddev": 2, "supertrend_atr_period": 10, "supertrend_multiplier": 3},
+        "settings": {"bollinger_period": 20, "bollinger_stddev": 2, "supertrend_atr_period": 10, "supertrend_multiplier": 3, "supertrend_history_max": 400},
         "candles_used": len(completed), "raw_candles_received": len(raw),
         "direction": None, "confirmed": False, "entry_trigger": False,
         "indicators": {}, "reason": "Waiting for 20 completed Gold M1 candles.",
@@ -2868,19 +2871,22 @@ def _copilot2_indicator_state(snapshot=None):
     if len(completed) < 20:
         result["reason"] = f"Need 20 completed Gold M1 candles; received {len(completed)}."
         return result
-    closes=[float(x["close"]) for x in completed]
-    highs=[float(x["high"]) for x in completed]
-    lows=[float(x["low"]) for x in completed]
-    n=len(closes)
-    basis=sum(closes[-20:])/20.0
-    variance=sum((x-basis)**2 for x in closes[-20:])/20.0
+    closes_all=[float(x["close"]) for x in completed_all]
+    highs_all=[float(x["high"]) for x in completed_all]
+    lows_all=[float(x["low"]) for x in completed_all]
+    closes=closes_all[-20:]
+    highs=highs_all[-20:]
+    lows=lows_all[-20:]
+    n=len(closes_all)
+    basis=sum(closes)/20.0
+    variance=sum((x-basis)**2 for x in closes)/20.0
     sd=math.sqrt(max(0.0,variance))
     upper=basis+2.0*sd
     lower=basis-2.0*sd
     tr=[]
     for i in range(n):
-        prev=closes[i-1] if i else closes[i]
-        tr.append(max(highs[i]-lows[i],abs(highs[i]-prev),abs(lows[i]-prev)))
+        prev=closes_all[i-1] if i else closes_all[i]
+        tr.append(max(highs_all[i]-lows_all[i],abs(highs_all[i]-prev),abs(lows_all[i]-prev)))
     atr=[None]*n
     if n >= 10:
         atr[9]=sum(tr[:10])/10.0
@@ -2889,17 +2895,20 @@ def _copilot2_indicator_state(snapshot=None):
     final_upper=[None]*n; final_lower=[None]*n; trend=[None]*n
     for i in range(n):
         if atr[i] is None: continue
-        mid=(highs[i]+lows[i])/2.0
+        mid=(highs_all[i]+lows_all[i])/2.0
         bu=mid+3.0*atr[i]; bl=mid-3.0*atr[i]
         if i==0 or atr[i-1] is None:
-            final_upper[i]=bu; final_lower[i]=bl; trend[i]="DOWN" if closes[i] < mid else "UP"
+            final_upper[i]=bu; final_lower[i]=bl
+            # TradingView ta.supertrend initializes direction as down (+1).
+            trend[i]="DOWN"
             continue
-        final_upper[i]=bu if bu<final_upper[i-1] or closes[i-1]>final_upper[i-1] else final_upper[i-1]
-        final_lower[i]=bl if bl>final_lower[i-1] or closes[i-1]<final_lower[i-1] else final_lower[i-1]
+        prev_close=closes_all[i-1]
+        final_upper[i]=bu if bu<final_upper[i-1] or prev_close>final_upper[i-1] else final_upper[i-1]
+        final_lower[i]=bl if bl>final_lower[i-1] or prev_close<final_lower[i-1] else final_lower[i-1]
         if trend[i-1]=="DOWN":
-            trend[i]="UP" if closes[i]>final_upper[i] else "DOWN"
+            trend[i]="UP" if closes_all[i]>final_upper[i] else "DOWN"
         else:
-            trend[i]="DOWN" if closes[i]<final_lower[i] else "UP"
+            trend[i]="DOWN" if closes_all[i]<final_lower[i] else "UP"
     # Latest two Supertrend states are required to detect a genuine colour flip.
     current=trend[-1]; previous=trend[-2]
     flip=(current is not None and previous is not None and current!=previous)
@@ -2909,14 +2918,16 @@ def _copilot2_indicator_state(snapshot=None):
     # Expose every one of the 20 completed candles so the page can audit
     # the actual data used by both indicators. No synthetic records are created.
     history_records=[]
+    display_offset=len(completed_all)-len(completed)
     for i, candle in enumerate(completed):
-        row_trend=trend[i] if i < len(trend) else None
+        source_index=display_offset+i
+        row_trend=trend[source_index] if source_index < len(trend) else None
         row_direction="BUY" if row_trend=="UP" else "SELL" if row_trend=="DOWN" else None
         row_bb=None
-        if i >= 19:
-            window_closes=closes[i-19:i+1]
+        if source_index >= 19:
+            window_closes=closes_all[source_index-19:source_index+1]
             row_mid=sum(window_closes)/20.0
-            row_bb="BUY" if closes[i]>row_mid else "SELL" if closes[i]<row_mid else None
+            row_bb="BUY" if closes_all[source_index]>row_mid else "SELL" if closes_all[source_index]<row_mid else None
         history_records.append({
             "time": candle.get("datetime") or candle.get("timestamp") or "—",
             "open": round(float(candle["open"]), 5),
@@ -2934,7 +2945,7 @@ def _copilot2_indicator_state(snapshot=None):
                 "details":f"Upper {upper:.5f} · Middle {basis:.5f} · Lower {lower:.5f} · Close {closes[-1]:.5f}",
                 "upper":upper,"middle":basis,"lower":lower,"close":closes[-1]},
             "supertrend":{"value":current or "CALCULATING","direction":direction,"confirmed":current is not None,
-                "details":f"Colour {current or '—'} · Previous {previous or '—'} · ATR(10) {atr[-1]:.5f}" if atr[-1] is not None else "ATR(10) calculating",
+                "details":f"Colour {current or '—'} · Previous {previous or '—'} · ATR(10) {atr[-1]:.5f} · History {n} bars" if atr[-1] is not None else "ATR(10) calculating",
                 "color":current,"previous_color":previous,"flipped":flip,"atr":atr[-1]},
         },
         "direction":direction if bb_confirms else None,
@@ -2952,20 +2963,93 @@ def _copilot2_indicator_state(snapshot=None):
     return result
 
 
+def _gmma_indicator_state(snapshot=None):
+    """Guppy Multiple Moving Average using completed Gold M1 candles only.
+
+    Short group: EMA 3,5,8,10,12,15. Long group: EMA 30,35,40,45,50,60.
+    A reversal is a cross of the short/long group means. The signal is
+    evaluated on completed candles so an unfinished bar cannot trigger an order.
+    """
+    snapshot = snapshot if isinstance(snapshot, dict) else {}
+    candles = _copilot_completed_m1(_copilot_extract_gold_candles(snapshot))[-400:]
+    short_periods = (3, 5, 8, 10, 12, 15)
+    long_periods = (30, 35, 40, 45, 50, 60)
+    result = {
+        "ok": True, "timeframe": "M1", "settings": {"short_emas": list(short_periods), "long_emas": list(long_periods)},
+        "candles_used": len(candles), "direction": None, "previous_direction": None,
+        "reversal": False, "entry_trigger": False, "confirmed": False,
+        "indicators": {}, "records": [], "reason": "Waiting for at least 120 completed Gold M1 candles.",
+        "timestamp_utc": snapshot.get("source_data_timestamp_utc") or snapshot.get("timestamp_utc"),
+        "bar_timestamp": candles[-1].get("datetime") if candles else None,
+    }
+    if len(candles) < 120:
+        result["reason"] = f"Need 120 completed Gold M1 candles for stable GMMA readings; received {len(candles)}."
+        return result
+    closes = [float(c["close"]) for c in candles]
+    series = {}
+    for period in short_periods + long_periods:
+        alpha = 2.0 / (period + 1.0)
+        # SMA seed reduces the initialization bias of the longer EMAs.
+        ema = sum(closes[:period]) / period
+        values = [None] * (period - 1) + [ema]
+        for price in closes[period:]:
+            ema = alpha * price + (1.0 - alpha) * ema
+            values.append(ema)
+        series[period] = values
+    def group_mean(index, periods):
+        return sum(series[x][index] for x in periods) / len(periods)
+    last = len(closes) - 1
+    prev = last - 1
+    fast_now, slow_now = group_mean(last, short_periods), group_mean(last, long_periods)
+    fast_prev, slow_prev = group_mean(prev, short_periods), group_mean(prev, long_periods)
+    # A fresh crossover of the two GMMA group means is the reversal trigger.
+    # The individual EMA values remain visible so traders can judge compression
+    # and separation; requiring every fast EMA to clear every slow EMA would
+    # delay the crossover until after the actual reversal had already occurred.
+    bullish = fast_now > slow_now
+    bearish = fast_now < slow_now
+    prev_bull = fast_prev > slow_prev
+    prev_bear = fast_prev < slow_prev
+    direction = "BUY" if bullish else "SELL" if bearish else None
+    reversal = bool((direction == "BUY" and fast_prev <= slow_prev) or (direction == "SELL" and fast_prev >= slow_prev))
+    result.update({
+        "direction": direction, "trend_direction": direction,
+        "previous_direction": "BUY" if prev_bull else "SELL" if prev_bear else ("BUY" if fast_prev > slow_prev else "SELL" if fast_prev < slow_prev else None),
+        "confirmed": bool(direction), "reversal": reversal, "entry_trigger": reversal,
+        "signal_id": f"GMMA-XAUUSD-M1-{candles[-1]['datetime']}",
+        "price": closes[-1], "bar_timestamp": candles[-1]["datetime"],
+        "fast_group_mean": fast_now, "slow_group_mean": slow_now,
+        "separation": abs(fast_now - slow_now),
+        "indicators": {
+            "short_group": {str(x): series[x][last] for x in short_periods},
+            "long_group": {str(x): series[x][last] for x in long_periods},
+            "fast_mean": fast_now, "slow_mean": slow_now,
+            "direction": direction or "MIXED", "reversal": reversal,
+        },
+        "records": [{"time": candles[i]["datetime"], "close": closes[i],
+                     "short_mean": group_mean(i, short_periods), "long_mean": group_mean(i, long_periods),
+                     "direction": "BUY" if group_mean(i, short_periods) > group_mean(i, long_periods) else "SELL"}
+                    for i in range(max(0, last - 19), last + 1)],
+        "reason": (f"Confirmed {direction} GMMA reversal: the short-group average crossed {'above' if direction == 'BUY' else 'below'} the long-group average.")
+                  if reversal else (f"GMMA trend is {direction}; waiting for a fresh group reversal." if direction else "GMMA groups are overlapping or mixed; no trade."),
+    })
+    return result
+
+
 def _latest_autotrader_signal(requested_symbol, kets_strategy_enabled=True, selected_strategies=None):
-    """Aligned Co-Pilot 2 Bollinger and Supertrend directions authorize an entry; opposite Supertrend flips exit."""
+    """Return only a fresh GMMA group-crossover reversal for Gold."""
     with V16_MARKET_LOCK:
         market = dict(COPILOT_SIGNAL_SNAPSHOT)
-    state = _copilot2_indicator_state(market)
-    if not state.get("confirmed") or str(requested_symbol or "XAUUSD").upper().replace("/", "") not in {"XAUUSD", "XAU", "GOLD"}:
+    state = _gmma_indicator_state(market)
+    if not state.get("reversal") or str(requested_symbol or "XAUUSD").upper().replace("/", "") not in {"XAUUSD", "XAU", "GOLD"}:
         return None
     return {"id":state.get("signal_id"),"asset":"GOLD","symbol":"XAUUSD","direction":state["direction"],
             "signal":state["direction"],"entry":state.get("price"),"price":state.get("price"),"market_price":state.get("price"),
-            "timestamp_utc":state.get("bar_timestamp"),"signal_source":"COPILOT2_BOLLINGER_SUPERTREND","_signal_source":"COPILOT2_BOLLINGER_SUPERTREND"}
+            "timestamp_utc":state.get("bar_timestamp"),"signal_source":"GMMA_REVERSAL","_signal_source":"GMMA_REVERSAL"}
 
 
 def _ctrader_autotrade_once():
-    """Co-Pilot 2 Auto-Trader: enter on aligned Bollinger and Supertrend directions; exit on opposite Supertrend flip."""
+    """GMMA Auto-Trader: enter and reverse/exit on confirmed Guppy group crossovers."""
     session=trading_session()
     with V16_MARKET_LOCK:
         market=dict(COPILOT_SIGNAL_SNAPSHOT)
@@ -2974,9 +3058,9 @@ def _ctrader_autotrade_once():
         age=(datetime.datetime.now(datetime.timezone.utc)-stamp).total_seconds()
     except Exception: age=999999
     fresh=bool(market) and 0 <= age <= 240
-    copilot=_copilot2_indicator_state(market) if fresh else {"confirmed":False,"reason":"Gold candle feed is stale or unavailable."}
-    direction=copilot.get("direction") if copilot.get("confirmed") else None
-    signal_id=str(copilot.get("signal_id") or "")
+    gmma=_gmma_indicator_state(market) if fresh else {"confirmed":False,"reversal":False,"reason":"Gold candle feed is stale or unavailable."}
+    direction=gmma.get("direction") if gmma.get("confirmed") and gmma.get("reversal") else None
+    signal_id=str(gmma.get("signal_id") or "")
     with DB_LOCK:
         conn=db_conn(); rows=db_execute(conn,"SELECT * FROM ctrader_connections WHERE (auto_enabled=1 OR auto_direction IS NOT NULL OR auto_entry_signal_id IS NOT NULL) AND status IN ('AUTHORIZED','CONNECTED')").fetchall(); conn.close()
     if not rows: return
@@ -2984,14 +3068,13 @@ def _ctrader_autotrade_once():
         row=dict(rr)
         try:
             if not fresh or not session["active"]: continue
-            # Co-pilot is a Gold-only indicator strategy. Never route its
+            # GMMA is a Gold-only indicator strategy. Never route its
             # confirmed signal into BTC or another selected instrument.
             if str(row.get("auto_symbol") or "XAUUSD").upper().replace("/", "") not in {"XAUUSD", "GOLD", "XAU"}: continue
             previous=str(row.get("auto_direction") or "").upper()
-            # New exit rule: close KETS automatic positions immediately when
-            # Supertrend flips to the opposite colour. No legacy exit-difference rule.
-            trend_direction=copilot.get("trend_direction")
-            flipped=bool(copilot.get("supertrend_flip"))
+            # Close the current KETS automatic position on a confirmed opposite GMMA crossover.
+            trend_direction=gmma.get("trend_direction")
+            flipped=bool(gmma.get("reversal"))
             if previous and flipped and trend_direction and trend_direction != previous:
                 _ctrader_close_positions(row, auto_only=True)
                 with DB_LOCK:
@@ -3001,9 +3084,9 @@ def _ctrader_autotrade_once():
             # Auto-Trader OFF never authorizes a fresh entry.
             if not bool(row.get("auto_enabled")) or not direction or previous==direction: continue
             if not signal_id or str(row.get("auto_entry_signal_id") or "")==signal_id: continue
-            price=_num(market.get("gold_price"))
+            price=_num(market.get("gold_price")) or _num(gmma.get("price"))
             if not price or price <= 0: continue
-            sig={"id":signal_id,"asset":"GOLD","symbol":"XAUUSD","direction":direction,"signal":direction,"entry":price,"price":price,"market_price":price,"timestamp_utc":copilot.get("bar_timestamp"),"signal_source":"COPILOT_INDICATORS","_signal_source":"COPILOT_INDICATORS"}
+            sig={"id":signal_id,"asset":"GOLD","symbol":"XAUUSD","direction":direction,"signal":direction,"entry":price,"price":price,"market_price":price,"timestamp_utc":gmma.get("bar_timestamp"),"signal_source":"GMMA_REVERSAL","_signal_source":"GMMA_REVERSAL"}
             row["auto_symbol"]="XAUUSD"
             if _num(row.get("auto_cycle_start_equity")) <= 0:
                 try:
@@ -3011,7 +3094,7 @@ def _ctrader_autotrade_once():
                     with DB_LOCK:
                         conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET auto_cycle_start_equity=?,equity=?,balance=?,free_margin=?,positions_json=?,auto_profit_total=?,updated_at=? WHERE id=?",(baseline,snap.get("equity",0),snap.get("balance",0),snap.get("free_margin",0),json.dumps(snap.get("positions",[])),0,_now_iso(),row["id"])); conn.commit(); conn.close()
                     row["auto_cycle_start_equity"]=baseline
-                except Exception as snap_exc: app.logger.warning("Co-pilot cTrader baseline refresh failed: %s",snap_exc)
+                except Exception as snap_exc: app.logger.warning("GMMA cTrader baseline refresh failed: %s",snap_exc)
             claim="__EXECUTING__:"+signal_id
             with DB_LOCK:
                 conn=db_conn(); cur=db_execute(conn,"UPDATE ctrader_connections SET last_signal_id=? WHERE id=? AND (last_signal_id IS NULL OR last_signal_id<>?)",(claim,row["id"],claim)); claimed=getattr(cur,"rowcount",1)>0; conn.commit(); conn.close()
@@ -3023,7 +3106,7 @@ def _ctrader_autotrade_once():
                     conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET last_signal_id=NULL,last_error=?,updated_at=? WHERE id=? AND last_signal_id=?",("Co-pilot execution failed: "+str(exec_exc)[:420],_now_iso(),row["id"],claim)); conn.commit(); conn.close()
                 raise
         except Exception as exc:
-            app.logger.warning("Co-pilot Auto-Trader skipped: %s",exc)
+            app.logger.warning("GMMA Auto-Trader skipped: %s",exc)
             with DB_LOCK:
                 conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET last_error=?,updated_at=? WHERE id=?",(str(exc)[:500],_now_iso(),row["id"])); conn.commit(); conn.close()
 
@@ -3054,15 +3137,18 @@ def _ctrader_close_positions(row, auto_only=False):
     is_live=bool(account.get("is_live"))
     try: positions=json.loads(row.get("positions_json") or "[]")
     except Exception: positions=[]
-    # For an automatic signal reversal, refresh the broker positions first so
-    # an entry opened only moments ago cannot be missed by a stale dashboard cache.
+    # Refresh from the broker before either kind of close. In particular,
+    # account-wide close must never rely on a potentially stale dashboard cache.
+    try:
+        _ctrader_invalidate_snapshot(row)
+        fresh=_ctrader_account_snapshot(row)
+        positions=fresh.get("positions",[])
+    except Exception as exc:
+        raise RuntimeError(f"Could not refresh open cTrader positions; no close request was sent: {exc}")
     if auto_only:
-        try:
-            fresh=_ctrader_account_snapshot(row)
-            positions=fresh.get("positions",[])
-        except Exception:
-            pass
         positions=[p for p in positions if str(p.get("label") or "").upper()=="KETS_AUTO" or str(p.get("comment") or "").upper().startswith("KETS AUTOMATIC") ]
+    target_ids={str(p.get("positionId") or p.get("id") or "") for p in positions}
+    target_ids.discard("")
     async def run():
         import websockets
         async with websockets.connect(_ctrader_host(is_live),open_timeout=15,close_timeout=5,ping_interval=20,ping_timeout=20) as ws:
@@ -3095,28 +3181,30 @@ def _ctrader_close_positions(row, auto_only=False):
                 results.append(await send(2111,{"ctidTraderAccountId":int(selected),"positionId":int(pid),"volume":volume}))
             return results
     results = asyncio.run(run())
+    # A close acknowledgement is not proof that the broker has flattened the
+    # account. Verify targeted positions against a fresh broker snapshot.
+    _ctrader_invalidate_snapshot(row)
+    time.sleep(0.5)
+    fresh = _ctrader_account_snapshot(row)
     if auto_only:
-        # A close request/acknowledgement is not enough: verify against a fresh
-        # cTrader snapshot that each targeted automatic position has disappeared.
-        target_ids = {str(p.get("positionId") or p.get("id") or "") for p in positions}
-        target_ids.discard("")
         if target_ids:
-            time.sleep(0.5)
-            fresh = _ctrader_account_snapshot(row)
             remaining = [p for p in (fresh.get("positions") or [])
                          if str(p.get("positionId") or p.get("id") or "") in target_ids]
             if remaining:
                 ids = ", ".join(str(p.get("positionId") or p.get("id")) for p in remaining)
                 raise RuntimeError(f"cTrader has not confirmed closure of automatic position(s): {ids}")
         else:
-            # No automatic positions were visible to close. Require a fresh
-            # snapshot to succeed before allowing Auto-Trader to turn OFF.
-            fresh = _ctrader_account_snapshot(row)
             remaining_auto = [p for p in (fresh.get("positions") or [])
                               if str(p.get("label") or "").upper() == "KETS_AUTO"
                               or str(p.get("comment") or "").upper().startswith("KETS AUTOMATIC")]
             if remaining_auto:
                 raise RuntimeError("cTrader still reports an automatic position open; exit is not confirmed.")
+    elif target_ids:
+        remaining = [p for p in (fresh.get("positions") or [])
+                     if str(p.get("positionId") or p.get("id") or "") in target_ids]
+        if remaining:
+            ids = ", ".join(str(p.get("positionId") or p.get("id")) for p in remaining)
+            raise RuntimeError(f"cTrader has not confirmed closure of all positions. Still open: {ids}")
     return results
 
 def _ctrader_close_all_positions(row):
@@ -3785,6 +3873,32 @@ def api_v16_market():
         snap["fresh"]=age is not None and age <= 240
     snap.pop("gold_candles", None)
     return jsonify({"ok":True,"snapshot":snap})
+
+@app.route("/api/gmma", methods=["GET"])
+def api_gmma():
+    user, error = _require_active_access()
+    if error: return error
+    with V16_MARKET_LOCK:
+        market = dict(COPILOT_SIGNAL_SNAPSHOT)
+    try:
+        stamp=datetime.datetime.fromisoformat(str(market.get("source_data_timestamp_utc") or market.get("timestamp_utc")).replace("Z","+00:00"))
+        age=max(0.0,(datetime.datetime.now(datetime.timezone.utc)-stamp).total_seconds())
+    except Exception: age=None
+    state=_gmma_indicator_state(market)
+    state["fresh"] = age is not None and age <= 240
+    state["age_seconds"] = age
+    state["price"] = state.get("price") or market.get("gold_price")
+    if not state["fresh"]:
+        state["confirmed"] = False
+        state["entry_trigger"] = False
+        state["reversal"] = False
+        state["direction"] = None
+        state["reason"] = "Latest KETS Gold candle feed is stale or unavailable; entries and reversal exits are blocked."
+    state["entry_authorized"] = bool(state.get("fresh") and state.get("entry_trigger"))
+    state["autotrader_entry_rule"] = "CONFIRMED_GMMA_GROUP_REVERSAL"
+    state["autotrader_exit_rule"] = "EXIT_ON_OPPOSITE_GMMA_GROUP_REVERSAL"
+    return jsonify(state)
+
 
 @app.route("/api/copilot2", methods=["GET"])
 def api_copilot2():

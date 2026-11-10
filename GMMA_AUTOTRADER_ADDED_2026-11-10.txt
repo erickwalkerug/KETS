@@ -1,0 +1,12 @@
+GMMA PAGE + AUTOTRADER REVERSAL EXECUTION — 2026-11-10
+
+- Added a dedicated GMMA page and navigation route (#gmma).
+- GMMA is calculated from the existing KETS Gold candle payload; no additional market-data API request was added.
+- Uses completed Gold M1 candles only, with a 120-candle minimum and a 4-minute feed freshness gate.
+- Short EMAs: 3, 5, 8, 10, 12, 15. Long EMAs: 30, 35, 40, 45, 50, 60.
+- BUY entry: short-group average crosses above long-group average.
+- SELL entry: short-group average crosses below long-group average.
+- Exit: close KETS automatic positions on a confirmed opposite GMMA crossover; when Auto-Trader is ON, the opposite reversal can then open the new direction.
+- Co-Pilot 2 remains available as a read-only monitor; it no longer authorizes Auto-Trader trades.
+- Existing cTrader execution, account selection, lot sizing, session gating and risk/protection settings remain in place.
+- Test with a demo account before enabling live trading. GMMA crossover systems can whipsaw in ranging markets.
