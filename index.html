@@ -173,6 +173,16 @@
         <div><span>Open P/L</span><b id="managedUnrealizedPnl">--</b></div>
         <div><span>Open trades</span><b id="managedOpenTrades">0</b></div>
         <div><span>Realized P/L (today)</span><b id="managedRealizedPnl">--</b></div>
+        <div class="managed-profit-target-table" style="grid-column:1/-1;border:1px solid rgba(255,255,255,.22);border-radius:12px;padding:12px;margin-top:8px">
+          <strong style="display:block;margin-bottom:8px">REALIZED PROFIT AUTO-STOP TARGET</strong>
+          <table style="width:100%;border-collapse:collapse"><tbody>
+            <tr><td style="padding:6px 4px">Target amount</td><td style="padding:6px 4px;text-align:right"><input id="managedProfitTargetVisible" type="number" min="0" max="100000" step="0.01" value="25" style="width:110px;max-width:45%" inputmode="decimal"></td></tr>
+            <tr><td style="padding:6px 4px">Realized profit this run</td><td id="managedRunRealizedProfit" style="padding:6px 4px;text-align:right">--</td></tr>
+            <tr><td style="padding:6px 4px">Auto-Trader action</td><td id="managedProfitTargetStatus" style="padding:6px 4px;text-align:right">Waiting for target</td></tr>
+          </tbody></table>
+          <button class="ghost-btn" id="saveRealizedProfitTarget" type="button" style="margin-top:8px">Save profit target</button>
+          <p class="tiny">When realized profit reaches this amount, KETS switches Auto-Trader OFF and requests closure of every open position on the selected cTrader account. Unrealized/open profit does not count.</p>
+        </div>
         <div><span>Free margin</span><b id="managedFreeMargin">--</b></div>
       </div>
       <p class="tiny managed-note" id="managedConnectionNote">These figures are read from the selected cTrader account. Connect cTrader and select an account to load the live balance, equity, P/L and margin data.</p>
@@ -298,7 +308,7 @@
 <section id="gmmaPage" class="history-page hidden">
   <div class="history-page-head"><div><span class="eyebrow">GUPPY MULTIPLE MOVING AVERAGES · AUTOTRADER</span><h2>📈 GMMA</h2><p class="muted">Gold XAU/USD · M1 · Short EMAs 3, 5, 8, 10, 12, 15 · Long EMAs 30, 35, 40, 45, 50, 60</p></div><button class="ghost-btn page-back-btn" data-page="dashboard">← Dashboard</button></div>
   <div class="live-page-status"><span class="live-dot" id="gmmaFeedStatus">WAITING FOR FEED</span><small id="gmmaLastUpdated">Waiting for completed Gold candles…</small></div>
-  <section class="history-card copilot-decision-card"><span class="eyebrow">GMMA REVERSAL / AUTOTRADER SIGNAL</span><h2 id="gmmaDecision">WAITING</h2><p id="gmmaReason" class="muted">Waiting for 120 completed M1 candles and a confirmed Guppy group crossover.</p><div class="copilot-counts"><span id="gmmaDirection">TREND: --</span><span id="gmmaWindow">CANDLES: 0/120</span><span id="gmmaPrice">PRICE: --</span></div></section>
+  <section class="history-card copilot-decision-card"><span class="eyebrow">GMMA REVERSAL / AUTOTRADER SIGNAL</span><h2 id="gmmaDecision">WAITING</h2><p id="gmmaReason" class="muted">Waiting for 61 completed M1 candles and a confirmed Guppy trend direction.</p><div class="copilot-counts"><span id="gmmaDirection">TREND: --</span><span id="gmmaWindow">CANDLES: 0/120</span><span id="gmmaPrice">PRICE: --</span></div></section>
   <section class="history-card gmma-emergency-close">
     <div class="panel-title"><h3>💼 cTrader position control</h3><span class="eyebrow">SELECTED ACCOUNT</span></div>
     <p class="muted">Close every currently open position on your selected cTrader account, including manual trades and trades opened by other strategies. This does not close pending orders.</p>
@@ -307,7 +317,7 @@
   </section>
   <section class="copilot-indicator-grid" id="gmmaGroups"><article class="history-card"><div class="empty">Loading GMMA readings…</div></article></section>
   <section class="history-card"><h3>Latest 20 completed M1 candles</h3><p class="muted">The table audits the short-group and long-group average values used to confirm the current trend.</p><div class="table-scroll"><table class="copilot2-record-table"><thead><tr><th>Time (UTC)</th><th>Close</th><th>Short group mean</th><th>Long group mean</th><th>Trend</th></tr></thead><tbody id="gmmaRecords"><tr><td colspan="5">Waiting for candle records…</td></tr></tbody></table></div></section>
-  <section class="history-card copilot-rules"><h3>GMMA Auto-Trader rules</h3><ul><li><strong>BUY entry:</strong> the short-group average crosses above the long-group average on a completed candle.</li><li><strong>SELL entry:</strong> the short-group average crosses below the long-group average on a completed candle.</li><li><strong>Exit:</strong> close the existing KETS automatic position when a confirmed opposite GMMA group crossover occurs.</li><li><strong>Safety:</strong> only completed candles are used; at least 120 candles and a fresh feed (maximum age 4 minutes) are required. No entry is sent on a continuing trend without a new reversal.</li></ul><p class="muted">GMMA is a trend-following indicator and can lag or whipsaw in sideways markets. Test on demo before enabling live Auto-Trader.</p></section>
+  <section class="history-card copilot-rules"><h3>GMMA Auto-Trader rules</h3><ul><li><strong>BUY entry:</strong> the short-group average crosses above the long-group average on a completed candle.</li><li><strong>SELL entry:</strong> the short-group average crosses below the long-group average on a completed candle.</li><li><strong>Exit:</strong> close the existing KETS automatic position when a confirmed opposite GMMA group crossover occurs.</li><li><strong>Safety:</strong> only completed candles are used; 61 candles are required to calculate the 60-period EMA and the feed must be fresh (maximum age 4 minutes). A confirmed BUY/SELL trend can trigger an entry without waiting for another crossover. On an opposite confirmed trend, the existing KETS automatic position is closed and the new direction is entered.</li></ul><p class="muted">GMMA is a trend-following indicator and can lag or whipsaw in sideways markets. Test on demo before enabling live Auto-Trader.</p></section>
 </section>
 
 <section id="autoTraderPage" class="history-page hidden">

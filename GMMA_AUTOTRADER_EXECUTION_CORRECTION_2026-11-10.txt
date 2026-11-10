@@ -1,0 +1,7 @@
+GMMA AUTOTRADER EXECUTION CORRECTION — 2026-11-10
+
+- Reduced the GMMA candle minimum from 120 to 61 completed M1 candles. This is the minimum mathematical window needed to calculate the 60-period EMA on both the latest and previous completed candles.
+- Auto-Trader now enters when the current completed-candle GMMA group direction is confirmed (short-group mean above/below long-group mean). It no longer requires the crossover to occur on the latest candle.
+- If a KETS automatic position is active and the confirmed GMMA direction is opposite, Auto-Trader closes that automatic position and can then open in the newly confirmed direction.
+- Existing freshness gate (4 minutes), active trading session, Auto-Trader enablement, Gold-only symbol restriction, cTrader authorization, account selection, lot sizing, duplicate protection, and execution/protection pipeline remain in place.
+- This does not guarantee profitable trades. Test on a cTrader demo account first; a confirmed trend can persist after the best entry price has passed.
