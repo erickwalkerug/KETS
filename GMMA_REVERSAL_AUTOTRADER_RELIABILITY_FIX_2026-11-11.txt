@@ -1,0 +1,12 @@
+GMMA REVERSAL AUTOTRADER RELIABILITY FIX — 2026-11-11
+
+Scope: only the GMMA Auto-Trader reversal handling in bot.py was changed. Existing pages, strategy calculations, cTrader account selection, lot size, session/freshness rules, order package, stop/profit controls, and realized-profit auto-stop behaviour are preserved.
+
+Changes:
+- Normalize cTrader position direction from common BUY/SELL and LONG/SHORT fields.
+- When GMMA confirms the opposite direction, close all KETS_AUTO positions even if the cTrader adapter omits its direction field and the saved prior direction is the only reliable reversal evidence.
+- Verify the selected cTrader account is flat of KETS_AUTO positions after closing, before submitting the replacement order.
+- If cTrader does not confirm closure, pause the reversal and record the error rather than opening the new direction on top of an old automatic position.
+- Keep duplicate protection and the existing confirmed GMMA trend entry behaviour.
+
+Validation: bot.py passes Python bytecode compilation (py_compile). Live order execution must be verified on a cTrader demo account before enabling real funds; this source-only check cannot confirm broker connectivity or live fills.
