@@ -1143,6 +1143,9 @@ def _ctrader_account_snapshot(row, retry=True):
         "unrealized_pnl":unrealized,
         "used_margin":used_margin,
         "positions":positions,
+        # An empty list is meaningful only when ProtoOAReconcileRes succeeded.
+        # Never let a failed/omitted positions response masquerade as a flat account.
+        "positions_verified":isinstance(recon_res,dict) and recon_res.get("payload") is not None,
         "server_time":_now_iso(),
         "data_warning":warning,
     }
@@ -3148,7 +3151,9 @@ def _ctrader_autotrade_once():
                     # A direction saved in the database is not proof a position still exists.
                     auto_positions=[p for p in (account_snap.get("positions") or []) if str(p.get("label") or "").upper()=="KETS_AUTO" or str(p.get("comment") or "").upper().startswith("KETS AUTOMATIC")]
                     stored_direction=str(row.get("auto_direction") or "").upper()
-                    if stored_direction and not auto_positions:
+                    # Do not erase the remembered trend when cTrader's optional
+                    # reconcile response failed: [] is not proof the account is flat.
+                    if account_snap.get("positions_verified") and stored_direction and not auto_positions:
                         with DB_LOCK:
                             conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET auto_direction=NULL,auto_entry_signal_id=NULL,last_signal_id=NULL,updated_at=? WHERE id=?",(_now_iso(),row["id"])); conn.commit(); conn.close()
                         row["auto_direction"]=""; row["auto_entry_signal_id"]=""
@@ -3170,6 +3175,8 @@ def _ctrader_autotrade_once():
             # This also repairs the case where a position exists but auto_direction
             # was cleared/stale after a restart or a previous execution error.
             live_snap=_ctrader_account_snapshot(row)
+            if not live_snap.get("positions_verified"):
+                raise RuntimeError(live_snap.get("data_warning") or "cTrader open positions could not be verified; GMMA reversal is paused to prevent duplicate/opposite trades.")
             auto_positions=[p for p in (live_snap.get("positions") or [])
                             if str(p.get("label") or "").upper()=="KETS_AUTO"
                             or str(p.get("comment") or "").upper().startswith("KETS AUTOMATIC")]
@@ -3190,10 +3197,11 @@ def _ctrader_autotrade_once():
             # the persisted previous direction is the fallback reversal evidence.
             opposite_live=bool(direction and any(side != direction for side in live_directions))
             stale_db_direction=bool(previous and direction and previous != direction)
-            reversal_needs_close=bool(direction and auto_positions and (
-                opposite_live or (stale_db_direction and (not live_directions or live_directions != {direction}))
-            ))
-            if previous and not auto_positions:
+            # A confirmed change from the previously executed GMMA direction
+            # always requires closing the old KETS_AUTO position(s), even when
+            # cTrader's side metadata is missing or inconsistent.
+            reversal_needs_close=bool(direction and auto_positions and (opposite_live or stale_db_direction))
+            if previous and not auto_positions and live_snap.get("positions_verified"):
                 # A remembered direction without a broker position must not block
                 # the next valid GMMA entry.
                 with DB_LOCK:
@@ -3290,6 +3298,8 @@ def _ctrader_close_positions(row, auto_only=False):
     try:
         _ctrader_invalidate_snapshot(row)
         fresh=_ctrader_account_snapshot(row)
+        if not fresh.get("positions_verified"):
+            raise RuntimeError(fresh.get("data_warning") or "cTrader did not verify the open-position list.")
         positions=fresh.get("positions",[])
     except Exception as exc:
         raise RuntimeError(f"Could not refresh open cTrader positions; no close request was sent: {exc}")
@@ -3345,6 +3355,8 @@ def _ctrader_close_positions(row, auto_only=False):
         if attempt:
             time.sleep(1.0)
         fresh = _ctrader_account_snapshot(row)
+        if not fresh.get("positions_verified"):
+            raise RuntimeError(fresh.get("data_warning") or "cTrader did not verify the open-position list after the close request.")
         if auto_only:
             if target_ids:
                 remaining = [p for p in (fresh.get("positions") or [])
