@@ -308,7 +308,7 @@
 <section id="gmmaPage" class="history-page hidden">
   <div class="history-page-head"><div><span class="eyebrow">GUPPY MULTIPLE MOVING AVERAGES · AUTOTRADER</span><h2>📈 GMMA</h2><p class="muted">Gold XAU/USD · M1 · Short EMAs 3, 5, 8, 10, 12, 15 · Long EMAs 30, 35, 40, 45, 50, 60</p></div><button class="ghost-btn page-back-btn" data-page="dashboard">← Dashboard</button></div>
   <div class="live-page-status"><span class="live-dot" id="gmmaFeedStatus">WAITING FOR FEED</span><small id="gmmaLastUpdated">Waiting for completed Gold candles…</small></div>
-  <section class="history-card copilot-decision-card"><span class="eyebrow">GMMA REVERSAL / AUTOTRADER SIGNAL</span><h2 id="gmmaDecision">WAITING</h2><p id="gmmaReason" class="muted">Waiting for 61 completed M1 candles and a confirmed Guppy trend direction.</p><div class="copilot-counts"><span id="gmmaDirection">TREND: --</span><span id="gmmaWindow">CANDLES: 0/120</span><span id="gmmaPrice">PRICE: --</span></div></section>
+  <section class="history-card copilot-decision-card"><span class="eyebrow">GMMA TREND DETECTION · SINGLE SOURCE OF TRUTH</span><h2 id="gmmaDecision">WAITING</h2><p id="gmmaReason" class="muted">Waiting for 61 completed M1 candles and a confirmed Guppy trend direction.</p><div class="copilot-counts"><span id="gmmaDirection">TREND: --</span><span id="gmmaWindow">CANDLES: 0/61</span><span id="gmmaPrice">PRICE: --</span></div><div class="gmma-execution-status"><h3>Auto-Trader execution</h3><strong id="gmmaExecutionStatus">CHECKING</strong><p id="gmmaExecutionReason" class="muted" aria-live="polite">Checking cTrader connection, Auto-Trader state and entry gates…</p></div></section>
   <section class="history-card gmma-emergency-close">
     <div class="panel-title"><h3>💼 cTrader position control</h3><span class="eyebrow">SELECTED ACCOUNT</span></div>
     <p class="muted">Close every currently open position on your selected cTrader account, including manual trades and trades opened by other strategies. This does not close pending orders.</p>
@@ -468,6 +468,6 @@
   <button class="install-close" id="installClose" aria-label="Close">×</button>
 </div>
 
-<script src="/app.js?v=20261110gmma" defer></script>
+<script src="/app.js?v=20261111gmma-execution-status" defer></script>
 <script src="/background-slideshow.js?v=20261028sixphotodisplayfix" defer></script>
 </body></html>

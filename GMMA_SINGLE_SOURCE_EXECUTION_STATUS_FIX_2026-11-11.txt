@@ -1,0 +1,16 @@
+GMMA SINGLE-SOURCE TREND + EXECUTION STATUS FIX — 2026-11-11
+
+Scope: GMMA trend/execution alignment only. Existing EMA periods, Gold M1 feed, trading schedule, selected cTrader account, lot-size controls, order package, profit target, and other KETS strategies remain unchanged.
+
+Changes:
+- Added a shared GMMA feed timestamp/freshness calculation used by both the GMMA API/dashboard and Auto-Trader worker. Future-dated feed timestamps are rejected consistently.
+- The GMMA dashboard now preserves and displays the calculated BUY/SELL side even when the feed is stale, while clearly marking it as not executable.
+- Added account-specific execution status and a human-readable reason: not connected, blocked, switched off, waiting for trend, position open/duplicate suppressed, or entry eligible.
+- Moved the trading-session gate to the new-entry stage. A fresh, confirmed opposite GMMA trend can therefore close an existing KETS_AUTO position outside entry hours; new entries remain subject to the original trading schedule.
+- After a reversal close, KETS now requires an explicitly verified cTrader positions snapshot before submitting the replacement order. An unverified snapshot fails closed.
+- The dashboard shows the detected trend separately from the Auto-Trader execution status and blocking reason.
+
+Validation:
+- bot.py passes Python bytecode compilation.
+- app.js passes Node syntax validation.
+- This source validation does not establish cTrader connectivity, broker acceptance, or live fills. Verify on a cTrader demo account before using real funds.

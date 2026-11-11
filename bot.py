@@ -3109,6 +3109,24 @@ def _gmma_indicator_state(snapshot=None):
     return result
 
 
+def _gmma_feed_age_seconds(snapshot=None):
+    """Use one timestamp/freshness calculation for the GMMA UI and executor."""
+    snapshot = snapshot if isinstance(snapshot, dict) else {}
+    raw_stamp = snapshot.get("source_data_timestamp_utc") or snapshot.get("timestamp_utc")
+    try:
+        stamp = datetime.datetime.fromisoformat(str(raw_stamp).replace("Z", "+00:00"))
+        if stamp.tzinfo is None:
+            stamp = stamp.replace(tzinfo=datetime.timezone.utc)
+        return (datetime.datetime.now(datetime.timezone.utc) - stamp.astimezone(datetime.timezone.utc)).total_seconds()
+    except Exception:
+        return None
+
+
+def _gmma_is_fresh(snapshot=None):
+    age = _gmma_feed_age_seconds(snapshot)
+    return age is not None and 0 <= age <= 240
+
+
 def _latest_autotrader_signal(requested_symbol, kets_strategy_enabled=True, selected_strategies=None):
     """Return the currently confirmed GMMA direction for Gold, including an established trend."""
     with V16_MARKET_LOCK:
@@ -3126,11 +3144,8 @@ def _ctrader_autotrade_once():
     session=trading_session()
     with V16_MARKET_LOCK:
         market=dict(COPILOT_SIGNAL_SNAPSHOT)
-    try:
-        stamp=datetime.datetime.fromisoformat(str(market.get("source_data_timestamp_utc") or market.get("timestamp_utc")).replace("Z","+00:00"))
-        age=(datetime.datetime.now(datetime.timezone.utc)-stamp).total_seconds()
-    except Exception: age=999999
-    fresh=bool(market) and 0 <= age <= 240
+    age=_gmma_feed_age_seconds(market)
+    fresh=bool(market) and age is not None and 0 <= age <= 240
     gmma=_gmma_indicator_state(market) if fresh else {"confirmed":False,"reversal":False,"reason":"Gold candle feed is stale or unavailable."}
     direction=gmma.get("direction") if gmma.get("confirmed") else None
     signal_id=str(gmma.get("signal_id") or "")
@@ -3200,7 +3215,7 @@ def _ctrader_autotrade_once():
                     row["auto_enabled"]=0
                     app.logger.exception("GMMA profit-target check failed; Auto-Trader disabled to prevent unchecked entries")
                     continue
-            if not fresh or not session["active"]: continue
+            if not fresh: continue
             # GMMA is a Gold-only indicator strategy. Never route its
             # confirmed signal into BTC or another selected instrument.
             if str(row.get("auto_symbol") or "XAUUSD").upper().replace("/", "") not in {"XAUUSD", "GOLD", "XAU"}: continue
@@ -3251,6 +3266,8 @@ def _ctrader_autotrade_once():
                     # position is still visible on the selected account.
                     _ctrader_invalidate_snapshot(row)
                     verify_snap=_ctrader_account_snapshot(row)
+                    if not verify_snap.get("positions_verified"):
+                        raise RuntimeError(verify_snap.get("data_warning") or "GMMA reversal paused: cTrader could not verify the selected account after closing the old position; replacement entry was not sent.")
                     remaining_auto=[p for p in (verify_snap.get("positions") or [])
                                     if str(p.get("label") or "").upper()=="KETS_AUTO"
                                     or str(p.get("comment") or "").upper().startswith("KETS AUTOMATIC")]
@@ -3270,8 +3287,11 @@ def _ctrader_autotrade_once():
                     with DB_LOCK:
                         conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET auto_direction=?,updated_at=? WHERE id=?",(direction,_now_iso(),row["id"])); conn.commit(); conn.close()
                 continue
-            # Auto-Trader OFF never authorizes a fresh entry.
+            # Auto-Trader OFF never authorizes a fresh entry. Existing automatic
+            # positions can still be closed on an opposite confirmed trend above.
             if not bool(row.get("auto_enabled")) or not direction: continue
+            if not session.get("active"):
+                raise RuntimeError(session.get("reason") or f"New GMMA entries are blocked during {session.get('mode') or 'the current session'}; existing opposite positions have already been handled.")
             if previous==direction and not opposite_live: continue
             if not signal_id or str(row.get("auto_entry_signal_id") or "")==signal_id: continue
             price=_num(market.get("gold_price")) or _num(gmma.get("price"))
@@ -3293,7 +3313,7 @@ def _ctrader_autotrade_once():
                 _queue_and_execute_ctrader(row,sig,automatic=True)
             except Exception as exec_exc:
                 with DB_LOCK:
-                    conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET last_signal_id=NULL,last_error=?,updated_at=? WHERE id=? AND last_signal_id=?",("Co-pilot execution failed: "+str(exec_exc)[:420],_now_iso(),row["id"],claim)); conn.commit(); conn.close()
+                    conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET last_signal_id=NULL,last_error=?,updated_at=? WHERE id=? AND last_signal_id=?",("GMMA Auto-Trader execution failed: "+str(exec_exc)[:420],_now_iso(),row["id"],claim)); conn.commit(); conn.close()
                 raise
         except Exception as exc:
             app.logger.warning("GMMA Auto-Trader skipped: %s",exc)
@@ -4105,14 +4125,14 @@ def api_gmma():
     if error: return error
     with V16_MARKET_LOCK:
         market = dict(COPILOT_SIGNAL_SNAPSHOT)
-    try:
-        stamp=datetime.datetime.fromisoformat(str(market.get("source_data_timestamp_utc") or market.get("timestamp_utc")).replace("Z","+00:00"))
-        age=max(0.0,(datetime.datetime.now(datetime.timezone.utc)-stamp).total_seconds())
-    except Exception: age=None
+    age=_gmma_feed_age_seconds(market)
     state=_gmma_indicator_state(market)
-    state["fresh"] = age is not None and age <= 240
+    state["fresh"] = age is not None and 0 <= age <= 240
     state["age_seconds"] = age
     state["price"] = state.get("price") or market.get("gold_price")
+    # Preserve the last calculated side for transparent display even when the
+    # feed is stale; stale data never authorizes an order or reversal.
+    state["detected_direction"] = state.get("direction")
     if not state["fresh"]:
         state["confirmed"] = False
         state["entry_trigger"] = False
@@ -4120,6 +4140,39 @@ def api_gmma():
         state["direction"] = None
         state["reason"] = "Latest KETS Gold candle feed is stale or unavailable; entries and reversal exits are blocked."
     state["entry_authorized"] = bool(state.get("fresh") and state.get("confirmed") and state.get("direction"))
+    # Execution status is account-specific and deliberately separate from the
+    # indicator result: the trend remains visible even when execution is blocked.
+    execution={"status":"NOT_CONNECTED","reason":"No cTrader account is connected for this user.","enabled":False,"position_direction":None}
+    ctrader_row=_ctrader_row_for_user(user["id"]) if isinstance(user,dict) and user.get("id") else None
+    if ctrader_row:
+        cr=dict(ctrader_row)
+        enabled=bool(cr.get("auto_enabled"))
+        execution.update({"enabled":enabled,"position_direction":str(cr.get("auto_direction") or "").upper() or None})
+        if cr.get("last_error"):
+            execution.update({"status":"BLOCKED","reason":str(cr.get("last_error"))})
+        elif cr.get("status") not in ("AUTHORIZED","CONNECTED"):
+            execution.update({"status":"BLOCKED","reason":"cTrader is not authorized. Reconnect the selected cTrader account."})
+        elif not cr.get("selected_account_id"):
+            execution.update({"status":"BLOCKED","reason":"No cTrader account is selected for KETS execution."})
+        elif not enabled:
+            execution.update({"status":"OFF","reason":"GMMA Auto-Trader is switched OFF. The detected trend is monitor-only."})
+        elif not state.get("fresh"):
+            execution.update({"status":"BLOCKED","reason":state.get("reason") or "Gold candle feed is stale or unavailable."})
+        elif not state.get("direction"):
+            execution.update({"status":"WAITING_FOR_TREND","reason":state.get("reason") or "GMMA has not confirmed a BUY or SELL trend."})
+        elif str(cr.get("auto_symbol") or "XAUUSD").upper().replace("/","") not in {"XAUUSD","XAU","GOLD"}:
+            execution.update({"status":"BLOCKED","reason":"GMMA execution is restricted to Gold (XAUUSD). Select Gold in Auto-Trader."})
+        elif cr.get("auto_direction") and str(cr.get("auto_direction")).upper()==state.get("direction"):
+            execution.update({"status":"POSITION_OPEN","reason":f"A KETS automatic {state['direction']} position is already recorded; duplicate entry is suppressed."})
+        elif cr.get("auto_direction") and str(cr.get("auto_direction")).upper() in {"BUY","SELL"} and str(cr.get("auto_direction")).upper()!=state.get("direction"):
+            execution.update({"status":"REVERSAL_PENDING","reason":f"GMMA now confirms {state['direction']} against the recorded automatic {str(cr.get('auto_direction')).upper()}; KETS must verify the old position is closed before opening the reversal."})
+        elif not trading_session().get("active"):
+            execution.update({"status":"BLOCKED","reason":trading_session().get("reason") or f"New entries are blocked during {trading_session().get('mode') or 'the current session'}."})
+        else:
+            execution.update({"status":"ENTRY_ELIGIBLE","reason":f"Confirmed GMMA {state['direction']} trend. Auto-Trader is enabled and entry gates are currently clear; waiting for broker execution/verification."})
+    state["execution"] = execution
+    state["execution_status"] = execution["status"]
+    state["execution_reason"] = execution["reason"]
     state["autotrader_entry_rule"] = "CONFIRMED_GMMA_GROUP_DIRECTION"
     state["autotrader_exit_rule"] = "EXIT_ON_OPPOSITE_CONFIRMED_GMMA_GROUP_DIRECTION"
     return jsonify(state)

@@ -1913,10 +1913,14 @@ async function refreshGMMAPage(){
   const d=await api("/api/gmma");
   if(status)status.textContent=d.fresh?"LIVE GMMA FEED":"STALE / WAITING";
   if(updated)updated.textContent=`${d.timeframe||"M1"} · ${d.candles_used||0} completed candles · feed age ${d.age_seconds==null?"--":Math.round(d.age_seconds)+"s"} · ${d.bar_timestamp||"—"}`;
-  const decision=d.entry_authorized?`${d.direction} TREND — ENTRY AUTHORIZED`:d.confirmed?`${d.direction} TREND — CONFIRMED`:"WAITING / NO TRADE";
+  const detected=d.detected_direction||d.direction;
+  const decision=detected?`${detected} TREND — ${d.fresh&&d.confirmed?"CONFIRMED":"STALE / NOT EXECUTABLE"}`:"WAITING / NO CONFIRMED TREND";
   if($("gmmaDecision"))$("gmmaDecision").textContent=decision;
   if($("gmmaReason"))$("gmmaReason").textContent=d.reason||"Waiting for GMMA data.";
-  if($("gmmaDirection"))$("gmmaDirection").textContent=`TREND: ${d.direction||"MIXED"}`;
+  const execution=d.execution||{};
+  if($("gmmaExecutionStatus"))$("gmmaExecutionStatus").textContent=String(execution.status||d.execution_status||"UNKNOWN").replaceAll("_"," ");
+  if($("gmmaExecutionReason"))$("gmmaExecutionReason").textContent=execution.reason||d.execution_reason||"Execution status is not available.";
+  if($("gmmaDirection"))$("gmmaDirection").textContent=`TREND: ${detected||"MIXED"}`;
   if($("gmmaWindow"))$("gmmaWindow").textContent=`CANDLES: ${d.candles_used||0}/61`;
   if($("gmmaPrice"))$("gmmaPrice").textContent=`PRICE: ${d.price==null?"--":Number(d.price).toFixed(3)}`;
   const cards=[];
