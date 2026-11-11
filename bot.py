@@ -2477,6 +2477,40 @@ def _queue_and_execute_ctrader(row, sig, automatic=True):
         if not tp or not sl: raise RuntimeError("The current signal has no complete entry, target and stop-loss plan.")
         order["take_profit"]=tp; order["stop_loss"]=sl
     result,selected=_ctrader_execute_order(row,order,auto_label=automatic)
+    # A cTrader execution acknowledgement is not sufficient evidence that the
+    # position is visible on the selected account. Verify automatic fills before
+    # persisting the GMMA direction/entry marker, so a rejected or unfilled order
+    # cannot make the dashboard look as though an entry is active.
+    if automatic:
+        expected_side=direction
+        expected_symbol_id=str((result or {}).get("symbol_id") or "")
+        verified_position=None
+        last_verify_error=None
+        for attempt in range(7):
+            try:
+                _ctrader_invalidate_snapshot(row)
+                snap=_ctrader_account_snapshot(row)
+                if not snap.get("positions_verified"):
+                    raise RuntimeError(snap.get("data_warning") or "cTrader did not verify positions after the entry request.")
+                for pos in (snap.get("positions") or []):
+                    label=str(pos.get("label") or "").upper()
+                    comment=str(pos.get("comment") or "").upper()
+                    side=str(pos.get("side") or pos.get("direction") or "").upper()
+                    symbol_ok=(not expected_symbol_id or str(pos.get("symbolId") or "")==expected_symbol_id)
+                    if label=="KETS_AUTO" and side==expected_side and symbol_ok:
+                        verified_position=pos
+                        break
+                if verified_position:
+                    break
+            except Exception as verify_exc:
+                last_verify_error=verify_exc
+            if attempt < 6:
+                time.sleep(1.0)
+        if not verified_position:
+            detail=(f" Last broker check: {last_verify_error}" if last_verify_error else "")
+            raise RuntimeError("cTrader acknowledged the GMMA market order but KETS could not verify the matching KETS_AUTO position. The entry state was not recorded; check cTrader Positions before retrying."+detail)
+        result["broker_position_verified"]=True
+        result["verified_position_id"]=verified_position.get("positionId")
     # No broker-side SL/TP amendment or verification for automatic trades.
     # Manual orders keep the original broker-protection verification behaviour.
     if not automatic:
@@ -3307,6 +3341,9 @@ def _ctrader_close_positions(row, auto_only=False):
         positions=[p for p in positions if str(p.get("label") or "").upper()=="KETS_AUTO" or str(p.get("comment") or "").upper().startswith("KETS AUTOMATIC") ]
     target_ids={str(p.get("positionId") or p.get("id") or "") for p in positions}
     target_ids.discard("")
+    # A verified empty broker snapshot is already a successful close-all state.
+    if not positions:
+        return []
     async def run():
         import websockets
         async with websockets.connect(_ctrader_host(is_live),open_timeout=15,close_timeout=5,ping_interval=20,ping_timeout=20) as ws:
@@ -3339,7 +3376,8 @@ def _ctrader_close_positions(row, auto_only=False):
                 if not pid:
                     raise RuntimeError("cTrader returned an open position without an ID; refusing to claim all positions were closed.")
                 volume=int(round(float(vol or 0)))
-                if volume<=0: volume=int(round(float(pos.get("volume",0))*100))
+                if volume<=0:
+                    raise RuntimeError(f"cTrader position {pid} has no valid broker volume; refusing an unsafe close request.")
                 results.append(await send(2111,{"ctidTraderAccountId":int(selected),"positionId":int(pid),"volume":volume}))
             return results
     results = asyncio.run(run())
@@ -3433,7 +3471,8 @@ def managed_close_all():
         result=_ctrader_close_all_positions(row)
         return jsonify({"ok":True,"broker":"cTrader","closed_requests":len(result)})
     except Exception as exc:
-        return jsonify({"error":str(exc)}),400
+        app.logger.exception("cTrader close-all failed for user %s", user.get("id"))
+        return jsonify({"error":str(exc)[:700],"stage":"ctrader_close_all","ok":False}),400
 
 @app.route("/api/managed/queue-current", methods=["POST"])
 def managed_queue_current():

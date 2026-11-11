@@ -1,0 +1,15 @@
+GMMA AUTOTRADER ENTRY + CTRADER CLOSE RELIABILITY UPDATE — 2026-11-11
+
+Maintains the existing KETS pages, strategies, signal calculations, schedule/session gates, selected-account isolation, lot sizing, and manual-trade behaviour.
+
+Changes in bot.py:
+- Automatic GMMA entries now require a broker-side position verification after cTrader acknowledges the market order. KETS checks the selected account for the matching KETS_AUTO label, BUY/SELL side, and broker symbol ID before recording the executed GMMA direction.
+- If the order acknowledgement is not followed by a verifiable position, KETS records an explicit execution-verification error instead of treating the entry as completed. Check cTrader Positions before manually retrying to avoid duplicate exposure.
+- Close-all now returns immediately when a fresh, verified cTrader snapshot confirms there are no open positions.
+- Close requests reject missing/invalid broker volume rather than sending a potentially unsafe close request.
+- Close-all failures are logged server-side and the API returns a structured stage/error message for diagnosis instead of a generic response.
+
+Important:
+- The screenshot proves the close-all request returned HTTP 400, but it does not expose the broker/backend error body. The exact rejection reason must be read from the returned error or Render logs after deployment.
+- The screenshot's BUY position cannot be identified as KETS_AUTO versus a manual/other-strategy position from the visible cTrader screen. KETS deliberately does not silently close manual or other-strategy positions during a GMMA reversal.
+- Test first on a cTrader demo account. Never assume an entry/close succeeded until the broker Positions tab confirms it.
