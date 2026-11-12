@@ -1683,6 +1683,8 @@ if($("saveManagedSettings"))$("saveManagedSettings").onclick=async()=>{
   await api("/api/managed/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
    lot_size:Number($("managedLotSize")?.value||0.01),
    target_profit_total:Number($("managedProfitTarget")?.value||25),
+   gmma_position_profit_target:Math.max(0,Number($("gmmaPositionProfitTarget")?.value||0)),
+   target_profit_currency:String($("managedProfitTargetCurrency")?.value||"USD").toUpperCase()==="UGX"?"UGX":"USD",
    min_quality:Number($("managedMinQuality")?.value||85),
    strong_only:!!$("managedStrongOnly")?.checked,
    low_stability_entry:!!$("managedLowStability")?.checked,

@@ -70,3 +70,10 @@ DEPLOYMENT FIX — 2026-09-07
 - No KETS-side BOS/CHOCH/order-block/candle gate was added.
 - Existing cTrader execution, reversal, lot-size and broker TP/SL protection
   rules remain unchanged.
+
+
+2026-11-12 — GMMA REVERSAL / CTRADER CLOSE / INVEST SHARES SAVE
+- GMMA reversal now recovers a uniquely identifiable single XAUUSD automatic position when broker reconcile omits its KETS label/comment, using the recorded automatic direction and matching side; it closes only that position and verifies closure before replacement entry.
+- cTrader close-volume extraction accepts both normalized position snapshots and raw nested tradeData.volume values.
+- Invest Shares trading-settings Save now persists the GMMA individual-position profit target and target currency together with the other settings.
+- Frontend asset cache version bumped so deployed clients load the updated JavaScript.

@@ -3230,9 +3230,21 @@ def _ctrader_autotrade_once():
             live_snap=_ctrader_account_snapshot(row)
             if not live_snap.get("positions_verified"):
                 raise RuntimeError(live_snap.get("data_warning") or "cTrader open positions could not be verified; GMMA reversal is paused to prevent duplicate/opposite trades.")
-            auto_positions=[p for p in (live_snap.get("positions") or [])
+            all_live_positions=list(live_snap.get("positions") or [])
+            auto_positions=[p for p in all_live_positions
                             if str(p.get("label") or "").upper()=="KETS_AUTO"
                             or str(p.get("comment") or "").upper().startswith("KETS AUTOMATIC")]
+            # Some cTrader broker/account adapters omit custom labels/comments
+            # from reconcile snapshots. If KETS has a recorded automatic direction
+            # and there is exactly one XAUUSD position on the selected account,
+            # use that uniquely identifiable position as the managed trade.
+            # Never guess when multiple positions exist or their side conflicts.
+            if not auto_positions and str(row.get("auto_direction") or "").upper() in {"BUY","SELL"} and len(all_live_positions)==1:
+                candidate=all_live_positions[0]
+                candidate_side=str(candidate.get("side") or candidate.get("direction") or "").upper()
+                expected=str(row.get("auto_direction") or "").upper()
+                if candidate_side in {expected, "LONG" if expected=="BUY" else "SHORT"}:
+                    auto_positions=[candidate]
             # Close only the individual GMMA automatic position that has reached
             # its configured floating-profit amount. Keep Auto-Trader enabled;
             # the next worker pass can re-enter on the still-confirmed GMMA trend.
@@ -3296,7 +3308,20 @@ def _ctrader_autotrade_once():
                 row["auto_entry_signal_id"]=""
             if direction and (reversal_needs_close or (stale_db_direction and not auto_positions)):
                 if auto_positions:
-                    _ctrader_close_positions(row, auto_only=True)  # raises unless cTrader confirms closure
+                    managed_are_labelled=all(
+                        str(p.get("label") or "").upper()=="KETS_AUTO"
+                        or str(p.get("comment") or "").upper().startswith("KETS AUTOMATIC")
+                        for p in auto_positions
+                    )
+                    managed_ids=[str(p.get("positionId") or p.get("id") or "") for p in auto_positions]
+                    if managed_are_labelled:
+                        _ctrader_close_positions(row, auto_only=True)  # raises unless cTrader confirms closure
+                    elif all(managed_ids):
+                        # Explicitly close only the uniquely matched recorded KETS
+                        # position; do not use account-wide close for a reversal.
+                        _ctrader_close_positions(row, auto_only=False, position_ids=managed_ids)
+                    else:
+                        raise RuntimeError("GMMA reversal paused: the old automatic position could not be uniquely identified for a safe close.")
                     # Re-read the broker after the close acknowledgement. Never
                     # submit the replacement BUY/SELL while an old KETS_AUTO
                     # position is still visible on the selected account.
@@ -3439,8 +3464,16 @@ def _ctrader_close_positions(row, auto_only=False, position_ids=None):
                 if not pid:
                     raise RuntimeError("cTrader returned an open position without an ID; refusing to claim all positions were closed.")
                 if vol in (None, ""):
-                    lots=_num(pos.get("volume"))
-                    volume=int(round(lots*100.0)) if lots is not None else 0
+                    trade_data=pos.get("tradeData") if isinstance(pos.get("tradeData"),dict) else {}
+                    raw_volume=trade_data.get("volume", pos.get("volume"))
+                    # cTrader Open API volume is already expressed in hundredths
+                    # of a unit (e.g. 4,000 = 0.04 lots); normalized snapshots
+                    # expose volume in lots and must be converted exactly once.
+                    if trade_data.get("volume") not in (None, ""):
+                        volume=int(round(float(raw_volume)))
+                    else:
+                        lots=_num(raw_volume)
+                        volume=int(round(lots*100.0)) if lots is not None else 0
                 else:
                     volume=int(round(float(vol or 0)))
                 if volume<=0:
