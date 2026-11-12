@@ -1,0 +1,10 @@
+GMMA SAVE TARGET + ENTRY VERIFICATION HARDENING — 2026-11-12
+
+1. The GMMA individual-position target now has a dedicated authenticated API endpoint. It saves only the per-position target and selected USD/UGX target currency, then reads the value back from the database and returns the persisted value. The page uses this endpoint, so saving this control no longer depends on the broad settings-save payload or risks overwriting unrelated controls.
+2. Automatic GMMA order verification now accepts a cTrader position with omitted optional label/comment metadata only when it is the sole open position on the selected account and matches both the requested BUY/SELL side and exact broker symbol ID returned by the order. Ambiguous positions are not adopted.
+3. Existing individual-profit close, confirmed-flat verification, same-direction replacement entry, opposite-direction close-then-entry, account isolation, and overall realized-profit auto-stop behavior are retained.
+
+Validation:
+- bot.py Python bytecode compilation passed.
+- app.js Node.js syntax check passed.
+- Live broker execution cannot be established from a ZIP/source-only test. Test on a cTrader demo account first and verify the actual Positions tab and saved value after each operation.

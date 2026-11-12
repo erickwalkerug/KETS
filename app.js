@@ -1989,13 +1989,9 @@ async function saveRealizedProfitTarget(){
     if(input)input.disabled=true;
     if(individualInput)individualInput.disabled=true;
     if(saveButton){saveButton.disabled=true;saveButton.dataset.oldText=saveButton.textContent;saveButton.textContent="Saving…";}
-    const saved=await api("/api/managed/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
-      target_profit_total:value,
-      target_profit_currency:selectedTargetCurrency,
+    const saved=await api("/api/managed/gmma-profit-target",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
       gmma_position_profit_target:individualValue,
-      lot_size:Number($("managedLotSize")?.value||0.01),
-      pressure_ratio_threshold:Number($("managedPressureRatio")?.value||2),
-      auto_symbol:"XAUUSD"
+      target_profit_currency:selectedTargetCurrency
     })});
     const persistedIndividual=Number(saved?.gmma_position_profit_target);
     if(!Number.isFinite(persistedIndividual)||Math.abs(persistedIndividual-individualValue)>0.000001){

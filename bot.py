@@ -1780,6 +1780,38 @@ def ctrader_select_account():
             conn.close()
     return jsonify({"ok":True,"selected_account_id":selected})
 
+@app.route("/api/managed/gmma-profit-target", methods=["POST"])
+def managed_gmma_profit_target():
+    """Persist only the GMMA per-position target, without touching other controls."""
+    user=_current_user()
+    if not user:
+        return jsonify({"error":"Sign in required."}),401
+    row=_ctrader_row_for_user(user["id"])
+    if not row:
+        return jsonify({"error":"Connect cTrader first."}),400
+    body=request.get_json(silent=True) or {}
+    raw=body.get("gmma_position_profit_target")
+    try:
+        value=float(raw)
+        if not math.isfinite(value) or value < 0 or value > 1000000000:
+            raise ValueError()
+    except Exception:
+        return jsonify({"error":"Enter a valid GMMA individual-position target (0 disables it)."}),400
+    currency=str(body.get("target_profit_currency",row.get("target_profit_currency") or "USD")).upper()
+    if currency not in {"USD","UGX"}:
+        return jsonify({"error":"Choose USD or UGX for the profit-target currency."}),400
+    with DB_LOCK:
+        conn=db_conn()
+        db_execute(conn,"UPDATE ctrader_connections SET gmma_position_profit_target=?,target_profit_currency=?,updated_at=? WHERE id=?",
+                   (value,currency,_now_iso(),row["id"]))
+        conn.commit()
+        saved=db_execute(conn,"SELECT gmma_position_profit_target,target_profit_currency FROM ctrader_connections WHERE id=?",(row["id"],)).fetchone()
+        conn.close()
+    saved=dict(saved) if saved else {}
+    return jsonify({"ok":True,
+                    "gmma_position_profit_target":_num(saved.get("gmma_position_profit_target")),
+                    "target_profit_currency":str(saved.get("target_profit_currency") or currency).upper()})
+
 @app.route("/api/managed/settings", methods=["GET","POST"])
 def managed_settings():
     user=_current_user()
@@ -2496,15 +2528,26 @@ def _queue_and_execute_ctrader(row, sig, automatic=True):
                 snap=_ctrader_account_snapshot(row)
                 if not snap.get("positions_verified"):
                     raise RuntimeError(snap.get("data_warning") or "cTrader did not verify positions after the entry request.")
-                for pos in (snap.get("positions") or []):
+                broker_positions=list(snap.get("positions") or [])
+                matching=[]
+                for pos in broker_positions:
                     label=str(pos.get("label") or "").upper()
                     comment=str(pos.get("comment") or "").upper()
                     side=str(pos.get("side") or pos.get("direction") or "").upper()
-                    symbol_ok=(not expected_symbol_id or str(pos.get("symbolId") or "")==expected_symbol_id)
+                    symbol_ok=bool(expected_symbol_id) and str(pos.get("symbolId") or "")==expected_symbol_id
                     is_kets_auto=(label=="KETS_AUTO" or comment.startswith("KETS AUTOMATIC"))
-                    if is_kets_auto and side==expected_side and symbol_ok:
+                    if side==expected_side and symbol_ok and is_kets_auto:
                         verified_position=pos
                         break
+                    if side==expected_side and symbol_ok:
+                        matching.append(pos)
+                # Some cTrader accounts omit optional label/comment metadata.
+                # Accept an unlabelled fill only when it is the sole position on
+                # the selected account and matches both the requested side and
+                # the exact broker symbol ID returned for this order. Ambiguous
+                # manual/other-strategy positions are never adopted.
+                if not verified_position and len(broker_positions)==1 and len(matching)==1:
+                    verified_position=matching[0]
                 if verified_position:
                     break
             except Exception as verify_exc:
