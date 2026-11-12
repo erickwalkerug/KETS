@@ -3431,7 +3431,11 @@ def _ctrader_close_positions(row, auto_only=False, position_ids=None):
     async def run():
         import websockets
         async with websockets.connect(_ctrader_host(is_live),open_timeout=15,close_timeout=5,ping_interval=20,ping_timeout=20) as ws:
-            async def send(pt,payload):
+            async def send(pt,payload,expected_response_type):
+                # Each cTrader Open API request has its own response payload type:
+                # application auth -> 2101, account auth -> 2103, close execution -> 2126.
+                # Waiting for 2126 for every request silently discarded both auth
+                # responses and caused close-all/reversal to time out before closing.
                 client_msg_id=str(uuid.uuid4())
                 await ws.send(json.dumps({"clientMsgId":client_msg_id,"payloadType":pt,"payload":payload}))
                 for _ in range(20):
@@ -3441,17 +3445,18 @@ def _ctrader_close_positions(row, auto_only=False, position_ids=None):
                     if d.get("payloadType") in (2132,2142):
                         ep=d.get("payload") or {}
                         raise RuntimeError(ep.get("description") or ep.get("errorCode") or "cTrader request failed")
-                    if d.get("payloadType") != 2126:
+                    if d.get("payloadType") != expected_response_type:
                         continue
                     ep=d.get("payload") or {}
-                    execution_type=int(ep.get("executionType") or 0)
-                    if execution_type in (7,8):
-                        raise RuntimeError(ep.get("description") or "cTrader rejected the close request.")
+                    if expected_response_type==2126:
+                        execution_type=int(ep.get("executionType") or 0)
+                        if execution_type in (7,8):
+                            raise RuntimeError(ep.get("description") or "cTrader rejected the close request.")
                     return d
-                raise RuntimeError("cTrader did not confirm the close request before timeout")
-            r=await send(2100,{"clientId":_ctrader_client_id(),"clientSecret":_ctrader_client_secret()})
+                raise RuntimeError(f"cTrader did not return response {expected_response_type} for request {pt} before timeout")
+            r=await send(2100,{"clientId":_ctrader_client_id(),"clientSecret":_ctrader_client_secret()},2101)
             if r.get("payloadType")!=2101: raise RuntimeError("cTrader application authorization failed")
-            r=await send(2102,{"ctidTraderAccountId":int(selected),"accessToken":access_token})
+            r=await send(2102,{"ctidTraderAccountId":int(selected),"accessToken":access_token},2103)
             if r.get("payloadType")!=2103: raise RuntimeError((r.get("payload") or {}).get("description") or "cTrader account authorization failed")
             results=[]
             for pos in positions:
@@ -3478,7 +3483,7 @@ def _ctrader_close_positions(row, auto_only=False, position_ids=None):
                     volume=int(round(float(vol or 0)))
                 if volume<=0:
                     raise RuntimeError(f"cTrader position {pid} has no valid broker volume (raw={vol!r}, lots={pos.get('volume')!r}); no unsafe close request was sent.")
-                results.append(await send(2111,{"ctidTraderAccountId":int(selected),"positionId":int(pid),"volume":volume}))
+                results.append(await send(2111,{"ctidTraderAccountId":int(selected),"positionId":int(pid),"volume":volume},2126))
             return results
     results = asyncio.run(run())
     # A close acknowledgement is not proof that the broker has flattened the

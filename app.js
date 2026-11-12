@@ -1174,7 +1174,7 @@ async function refreshManagedStatus(){
   const runTarget=Number(d.settings?.target_profit_total??d.settings?.profit_target??25);
   const targetCurrency=String(d.settings?.target_profit_currency||"USD").toUpperCase()==="UGX"?"UGX":"USD";
   const targetCurrencySelect=$("managedProfitTargetCurrency"); if(targetCurrencySelect&&document.activeElement!==targetCurrencySelect)targetCurrencySelect.value=targetCurrency;
-  const visibleTarget=$("managedProfitTargetVisible"); if(visibleTarget&&document.activeElement!==visibleTarget)visibleTarget.value=runTarget.toFixed(2); const perPositionTarget=$("gmmaPositionProfitTarget"); if(perPositionTarget&&document.activeElement!==perPositionTarget)perPositionTarget.value=Number(d.settings?.gmma_position_profit_target||0).toFixed(2);
+  const visibleTarget=$("managedProfitTargetVisible"); if(visibleTarget&&document.activeElement!==visibleTarget)visibleTarget.value=runTarget.toFixed(2); const perPositionTarget=$("gmmaPositionProfitTarget"); if(perPositionTarget&&!gmmaPositionProfitTargetDirty&&document.activeElement!==perPositionTarget)perPositionTarget.value=Number(d.settings?.gmma_position_profit_target||0).toFixed(2);
   const runProfitInTargetCurrency=convertManagedValue(d.settings?.auto_profit_total??0,sourceCurrency,targetCurrency);
   if($("managedRunRealizedProfit"))$("managedRunRealizedProfit").textContent=runProfitInTargetCurrency===null?"Rate unavailable":`${targetCurrency} ${Number(runProfitInTargetCurrency).toLocaleString(undefined,{maximumFractionDigits:2})}`;
   if($("managedProfitTargetStatus"))$("managedProfitTargetStatus").textContent=runProfitInTargetCurrency!==null&&runProfitInTargetCurrency>=runTarget&&runTarget>0?"Target reached — stopping":"Target not yet reached";
@@ -1974,18 +1974,43 @@ setInterval(()=>{if(!$("coPilot2Page")?.classList.contains("hidden"))refreshCoPi
 
 
 
+let gmmaPositionProfitTargetDirty=false;
+if($("gmmaPositionProfitTarget"))$("gmmaPositionProfitTarget").addEventListener("input",()=>{gmmaPositionProfitTargetDirty=true;});
 async function saveRealizedProfitTarget(){
-  const input=$("managedProfitTargetVisible"); const value=Number(input?.value);
+  const input=$("managedProfitTargetVisible");
+  const individualInput=$("gmmaPositionProfitTarget");
+  const value=Number(input?.value);
+  const individualValue=Number(individualInput?.value);
   const selectedTargetCurrency=String($("managedProfitTargetCurrency")?.value||"USD").toUpperCase()==="UGX"?"UGX":"USD";
-  if(!Number.isFinite(value)||value<=0||value>1000000000){setManagedActionMessage("Enter a target greater than zero.","error");return;}
+  if(!Number.isFinite(value)||value<=0||value>1000000000){setManagedActionMessage("Enter a realized-profit target greater than zero.","error");return;}
+  if(!Number.isFinite(individualValue)||individualValue<0||individualValue>1000000000){setManagedActionMessage("Enter a valid GMMA individual-position target (0 disables it).","error");return;}
+  const saveButton=$("saveRealizedProfitTarget");
   try{
     if(input)input.disabled=true;
-    await api("/api/managed/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({target_profit_total:value,target_profit_currency:selectedTargetCurrency,gmma_position_profit_target:Math.max(0,Number($("gmmaPositionProfitTarget")?.value||0)),lot_size:Number($("managedLotSize")?.value||0.01),pressure_ratio_threshold:Number($("managedPressureRatio")?.value||2),auto_symbol:"XAUUSD"})});
+    if(individualInput)individualInput.disabled=true;
+    if(saveButton){saveButton.disabled=true;saveButton.dataset.oldText=saveButton.textContent;saveButton.textContent="Saving…";}
+    const saved=await api("/api/managed/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+      target_profit_total:value,
+      target_profit_currency:selectedTargetCurrency,
+      gmma_position_profit_target:individualValue,
+      lot_size:Number($("managedLotSize")?.value||0.01),
+      pressure_ratio_threshold:Number($("managedPressureRatio")?.value||2),
+      auto_symbol:"XAUUSD"
+    })});
+    const persistedIndividual=Number(saved?.gmma_position_profit_target);
+    if(!Number.isFinite(persistedIndividual)||Math.abs(persistedIndividual-individualValue)>0.000001){
+      throw new Error("The server did not confirm the GMMA individual-position target. Please try again.");
+    }
     if($("managedProfitTarget"))$("managedProfitTarget").value=String(value);
-    setManagedActionMessage(`Saved profit auto-stop target: ${selectedTargetCurrency} ${value.toLocaleString()}.`,"ok");
+    gmmaPositionProfitTargetDirty=false;
+    setManagedActionMessage(`Saved: auto-stop ${selectedTargetCurrency} ${value.toLocaleString()} · GMMA individual close ${selectedTargetCurrency} ${individualValue.toLocaleString()}.`,"ok");
     await refreshManagedStatus();
-  }catch(e){setManagedActionMessage(e.message||"Could not save realized-profit target.","error");}
-  finally{if(input)input.disabled=false;}
+  }catch(e){setManagedActionMessage(e.message||"Could not save profit targets.","error");}
+  finally{
+    if(input)input.disabled=false;
+    if(individualInput)individualInput.disabled=false;
+    if(saveButton){saveButton.disabled=false;saveButton.textContent=saveButton.dataset.oldText||"Save profit targets";}
+  }
 }
 if($("saveRealizedProfitTarget"))$("saveRealizedProfitTarget").onclick=saveRealizedProfitTarget;
 if($("managedProfitTargetVisible"))$("managedProfitTargetVisible").addEventListener("input",()=>{if($("managedProfitTarget"))$("managedProfitTarget").value=$("managedProfitTargetVisible").value;});
