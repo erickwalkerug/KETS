@@ -1730,6 +1730,10 @@ def managed_status():
             "profit_target":_num(row.get("target_profit_total")) if row.get("target_profit_total") is not None else (_num(row.get("profit_target")) if row.get("profit_target") is not None else 25),
             "target_profit_total":_num(row.get("target_profit_total")) if row.get("target_profit_total") is not None else (_num(row.get("profit_target")) if row.get("profit_target") is not None else 25),
             "target_profit_currency":str(row.get("target_profit_currency") or "USD").upper(),
+            # Return the saved GMMA per-position target through the same status
+            # endpoint used by the dashboard refresh. Without this field the
+            # database save succeeds, but the page repopulates the input as 0.
+            "gmma_position_profit_target":_num(row.get("gmma_position_profit_target")),
             "auto_direction":str(row.get("auto_direction") or ""),
             "pending_auto_direction":str(row.get("pending_auto_direction") or ""),
             "pending_auto_signal_id":str(row.get("pending_auto_signal_id") or ""),

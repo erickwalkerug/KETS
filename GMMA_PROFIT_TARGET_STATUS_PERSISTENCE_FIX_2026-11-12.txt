@@ -1,0 +1,19 @@
+KETS GMMA PROFIT TARGET STATUS PERSISTENCE FIX — 2026-11-12
+
+Root cause:
+- The dedicated /api/managed/gmma-profit-target endpoint correctly saved the GMMA individual-position profit target.
+- The dashboard refresh reads /api/managed/status, but that endpoint omitted gmma_position_profit_target from its settings object. After refresh/reload, the page therefore populated the GMMA target input with its fallback value (0), making a successfully saved target appear not to persist.
+
+Change:
+- Added gmma_position_profit_target to the authenticated managed-status settings response, sourced directly from the selected user's cTrader connection row.
+- Existing dedicated save endpoint, USD/UGX currency selection, realized-profit auto-stop target, GMMA individual-position close behavior, trend/reversal execution, cTrader account isolation, and other KETS settings are unchanged.
+
+Target duties:
+- GMMA individual-position target: when one managed GMMA position's floating profit reaches the saved amount, close that position only; keep Auto-Trader enabled so it can enter again if the confirmed GMMA trend remains valid.
+- Realized-profit auto-stop target: when realized profit for the current Auto-Trader run reaches the saved amount, switch Auto-Trader OFF and request closure of positions on the selected cTrader account.
+
+Validation:
+- Python syntax compilation passed for bot.py.
+- Node.js syntax validation passed for app.js (unchanged).
+- Source inspection confirms /api/managed/status now returns the saved GMMA target used by the page refresh.
+- Live cTrader execution is not verifiable from a ZIP-only test. Verify target persistence after refresh and close/re-entry on a cTrader demo account before live use.
