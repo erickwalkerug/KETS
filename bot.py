@@ -3259,9 +3259,14 @@ def _ctrader_autotrade_once():
                     # A direction saved in the database is not proof a position still exists.
                     auto_positions=[p for p in (account_snap.get("positions") or []) if str(p.get("label") or "").upper()=="KETS_AUTO" or str(p.get("comment") or "").upper().startswith("KETS AUTOMATIC")]
                     stored_direction=str(row.get("auto_direction") or "").upper()
-                    # Do not erase the remembered trend when cTrader's optional
-                    # reconcile response failed: [] is not proof the account is flat.
-                    if account_snap.get("positions_verified") and stored_direction and not auto_positions:
+                    # A verified snapshot with no labelled positions is NOT
+                    # proof that the managed trade is gone: some cTrader adapters
+                    # omit optional label/comment metadata. Preserve the saved
+                    # direction while any broker position remains so the unique-
+                    # position fallback below can identify it safely. Clear the
+                    # marker only when the broker explicitly confirms a flat account.
+                    if (account_snap.get("positions_verified") and stored_direction
+                            and not auto_positions and not (account_snap.get("positions") or [])):
                         with DB_LOCK:
                             conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET auto_direction=NULL,auto_entry_signal_id=NULL,last_signal_id=NULL,updated_at=? WHERE id=?",(_now_iso(),row["id"])); conn.commit(); conn.close()
                         row["auto_direction"]=""; row["auto_entry_signal_id"]=""
@@ -3355,8 +3360,14 @@ def _ctrader_autotrade_once():
             # cTrader's side metadata is missing or inconsistent.
             reversal_needs_close=bool(direction and auto_positions and (opposite_live or stale_db_direction))
             if previous and not auto_positions and live_snap.get("positions_verified"):
-                # A remembered direction without a broker position must not block
-                # the next valid GMMA entry.
+                if all_live_positions:
+                    # Positions exist but cTrader omitted the automatic label and
+                    # the unique matching-side fallback did not identify exactly
+                    # one safe GMMA position. Never assume the account is flat or
+                    # open a reversal over an unidentified/manual position.
+                    raise RuntimeError("GMMA Auto-Trader paused: cTrader reports open positions but the previous GMMA trade cannot be uniquely identified. No position was closed and no opposite trade was opened.")
+                # A verified, genuinely flat broker snapshot means the old
+                # automatic position is gone; allow the next valid GMMA entry.
                 with DB_LOCK:
                     conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET auto_direction=NULL,auto_entry_signal_id=NULL,last_signal_id=NULL,updated_at=? WHERE id=?",(_now_iso(),row["id"])); conn.commit(); conn.close()
                 previous=""

@@ -1,0 +1,19 @@
+KETS GMMA UNLABELLED POSITION EXIT SAFETY FIX — 2026-11-12
+
+Root cause found:
+- The GMMA worker cleared auto_direction as soon as a verified cTrader snapshot contained no KETS_AUTO label/comment. Some cTrader adapters omit those optional metadata fields even while the position remains open.
+- That erased the saved GMMA direction before the worker's unique-position fallback could identify the existing position. The individual profit-target and reversal-close logic could therefore fail to manage the position.
+- A second unsafe path could treat an unidentified but still-open position as if the account were flat and proceed with a new entry.
+
+Changes:
+- Preserve the saved GMMA direction when the broker reports open positions but omits optional automatic label/comment metadata.
+- Allow the existing unique-position + matching-side fallback to identify the managed trade.
+- If open positions remain but cannot be uniquely identified, pause GMMA Auto-Trader rather than claiming the account is flat, closing a potentially manual trade, or opening an opposite position over it.
+- Clear the saved direction only after cTrader verifies that the selected account is genuinely flat.
+- Existing individual GMMA profit target, currency conversion, save endpoints, realized-profit auto-stop, GMMA calculations, entry logic, account isolation, and UI are otherwise unchanged.
+
+Validation:
+- bot.py Python bytecode compilation passed.
+- app.js Node.js syntax validation passed.
+- Source inspection confirms unidentified open positions now cause a safe pause instead of a false-flat state.
+- Live cTrader close/reversal execution cannot be proven by ZIP-only tests. Test on a cTrader demo account and verify the Positions tab before enabling live trading.
