@@ -1174,7 +1174,7 @@ async function refreshManagedStatus(){
   const runTarget=Number(d.settings?.target_profit_total??d.settings?.profit_target??25);
   const targetCurrency=String(d.settings?.target_profit_currency||"USD").toUpperCase()==="UGX"?"UGX":"USD";
   const targetCurrencySelect=$("managedProfitTargetCurrency"); if(targetCurrencySelect&&document.activeElement!==targetCurrencySelect)targetCurrencySelect.value=targetCurrency;
-  const visibleTarget=$("managedProfitTargetVisible"); if(visibleTarget&&document.activeElement!==visibleTarget)visibleTarget.value=runTarget.toFixed(2);
+  const visibleTarget=$("managedProfitTargetVisible"); if(visibleTarget&&document.activeElement!==visibleTarget)visibleTarget.value=runTarget.toFixed(2); const perPositionTarget=$("gmmaPositionProfitTarget"); if(perPositionTarget&&document.activeElement!==perPositionTarget)perPositionTarget.value=Number(d.settings?.gmma_position_profit_target||0).toFixed(2);
   const runProfitInTargetCurrency=convertManagedValue(d.settings?.auto_profit_total??0,sourceCurrency,targetCurrency);
   if($("managedRunRealizedProfit"))$("managedRunRealizedProfit").textContent=runProfitInTargetCurrency===null?"Rate unavailable":`${targetCurrency} ${Number(runProfitInTargetCurrency).toLocaleString(undefined,{maximumFractionDigits:2})}`;
   if($("managedProfitTargetStatus"))$("managedProfitTargetStatus").textContent=runProfitInTargetCurrency!==null&&runProfitInTargetCurrency>=runTarget&&runTarget>0?"Target reached — stopping":"Target not yet reached";
@@ -1264,7 +1264,7 @@ async function savePressureRatioThreshold(){
    high_stability_entry:!!$("managedHighStability")?.checked,
    opposite_signal_confirmation:!!$("managedOppositeConfirmation")?.checked,
    max_lot:10, max_open_trades:Number($("managedMaxTrades")?.value||1),
-   allocation_pct:Number($("managedAllocation")?.value||10), auto_symbol:String($("autoTradeSymbol")?.value||"XAUUSD")
+   allocation_pct:Number($("managedAllocation")?.value||10), auto_symbol:"XAUUSD"
   })});
   setManagedActionMessage(`Pressure ratio requirement saved: ${value}×. Auto-Trader checks this threshold before opening new trades.`,"ok");
   await refreshManagedStatus();
@@ -1286,7 +1286,7 @@ async function setStrongOnlyControl(enabled){
    max_lot:10,
    max_open_trades:Number($("managedMaxTrades")?.value||1),
    allocation_pct:Number($("managedAllocation")?.value||10),
-   auto_symbol:String($("autoTradeSymbol")?.value||"XAUUSD")
+   auto_symbol:"XAUUSD"
   })});
   setManagedActionMessage(enabled
    ?"Strong Reversal Only is ON — automatic entries will require a KETS STRONG REVERSAL ENTRY."
@@ -1340,7 +1340,7 @@ async function setStabilityRequirements(){
    max_lot:10,
    max_open_trades:Number($("managedMaxTrades")?.value||1),
    allocation_pct:Number($("managedAllocation")?.value||10),
-   auto_symbol:String($("autoTradeSymbol")?.value||"XAUUSD")
+   auto_symbol:"XAUUSD"
   })});
   const parts=[]; if(low?.checked)parts.push("LOW STABILITY"); if(high?.checked)parts.push("HIGH STABILITY");
   setManagedActionMessage(parts.length?`Auto-Trade stability requirement: ${parts.join(" + ")}.`:`Auto-Trade stability requirement is OFF.`,"ok");
@@ -1372,7 +1372,7 @@ async function setOppositeSignalConfirmation(){
    max_lot:10,
    max_open_trades:Number($("managedMaxTrades")?.value||1),
    allocation_pct:Number($("managedAllocation")?.value||10),
-   auto_symbol:String($("autoTradeSymbol")?.value||"XAUUSD")
+   auto_symbol:"XAUUSD"
   })});
   setManagedActionMessage(el?.checked
    ?"Opposite Signal Confirmation is ON — KETS waits for a second distinct opposite signal before reversing."
@@ -1522,11 +1522,16 @@ function initAutoTraderControls(){
     if(el)el.onchange=saveAutoTraderControlState;
   });
   if($("atCloseAll"))$("atCloseAll").onclick=async()=>{
-    if(!confirm("Close all trades?"))return;
+    const btn=$("atCloseAll");
+    if(!confirm("Close EVERY open position on the selected cTrader account, including manual and other-strategy positions? This cannot be undone."))return;
     try{
-      await api("/api/managed/close-all",{method:"POST"});
-      setManagedActionMessage("Close-all request sent.","ok");
-    }catch(e){setManagedActionMessage(e.message||"Close-all failed.","error");}
+      if(btn){btn.disabled=true;btn.dataset.oldText=btn.textContent;btn.textContent="Closing positions…";}
+      const result=await api("/api/managed/close-all",{method:"POST"});
+      const count=Number(result.closed_requests||0);
+      setManagedActionMessage(count?`cTrader confirmed closure of ${count} position(s).`:"No open positions were found on the selected account.","ok");
+      await refreshManagedStatus();
+    }catch(e){setManagedActionMessage(e.message||"Close-all failed; check the selected cTrader account.","error");}
+    finally{if(btn){btn.disabled=false;btn.textContent=btn.dataset.oldText||"🚨 CLOSE ALL TRADES";}}
   };
   if($("atEmergencyStop"))$("atEmergencyStop").onclick=async()=>{
     if(!confirm("Stop automatic trading?"))return;
@@ -1688,7 +1693,7 @@ if($("saveManagedSettings"))$("saveManagedSettings").onclick=async()=>{
    max_lot:10,
    max_open_trades:Number($("managedMaxTrades")?.value||1),
    allocation_pct:Number($("managedAllocation")?.value||10),
-   auto_symbol:String($("autoTradeSymbol")?.value||"XAUUSD")
+   auto_symbol:"XAUUSD"
   })});
   saveAutoTraderBrowserState();
   setManagedActionMessage("Trading settings and selected strategies saved successfully.","ok");await refreshManagedStatus();
@@ -1921,6 +1926,9 @@ async function refreshGMMAPage(){
   if($("gmmaExecutionStatus"))$("gmmaExecutionStatus").textContent=String(execution.status||d.execution_status||"UNKNOWN").replaceAll("_"," ");
   if($("gmmaExecutionReason"))$("gmmaExecutionReason").textContent=execution.reason||d.execution_reason||"Execution status is not available.";
   if($("gmmaDirection"))$("gmmaDirection").textContent=`TREND: ${detected||"MIXED"}`;
+  if($("gmmaRecentTrend"))$("gmmaRecentTrend").textContent=`RECENT TRADE TREND: ${d.recent_autotrader_trend||"NONE"}`;
+  if($("gmmaNewTrend"))$("gmmaNewTrend").textContent=`NEW GMMA TREND: ${d.new_gmma_trend||"MIXED"}`;
+  if($("gmmaTrendDecision"))$("gmmaTrendDecision").textContent=`DECISION: ${(d.trend_decision||"WAIT").replaceAll("_"," ")}`;
   if($("gmmaWindow"))$("gmmaWindow").textContent=`CANDLES: ${d.candles_used||0}/61`;
   if($("gmmaPrice"))$("gmmaPrice").textContent=`PRICE: ${d.price==null?"--":Number(d.price).toFixed(3)}`;
   const cards=[];
@@ -1970,7 +1978,7 @@ async function saveRealizedProfitTarget(){
   if(!Number.isFinite(value)||value<=0||value>1000000000){setManagedActionMessage("Enter a target greater than zero.","error");return;}
   try{
     if(input)input.disabled=true;
-    await api("/api/managed/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({target_profit_total:value,target_profit_currency:selectedTargetCurrency,lot_size:Number($("managedLotSize")?.value||0.01),pressure_ratio_threshold:Number($("managedPressureRatio")?.value||2),auto_symbol:String($("autoTradeSymbol")?.value||"XAUUSD")})});
+    await api("/api/managed/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({target_profit_total:value,target_profit_currency:selectedTargetCurrency,gmma_position_profit_target:Math.max(0,Number($("gmmaPositionProfitTarget")?.value||0)),lot_size:Number($("managedLotSize")?.value||0.01),pressure_ratio_threshold:Number($("managedPressureRatio")?.value||2),auto_symbol:"XAUUSD"})});
     if($("managedProfitTarget"))$("managedProfitTarget").value=String(value);
     setManagedActionMessage(`Saved profit auto-stop target: ${selectedTargetCurrency} ${value.toLocaleString()}.`,"ok");
     await refreshManagedStatus();

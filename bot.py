@@ -521,6 +521,7 @@ def init_db():
                     ("auto_symbol", "TEXT DEFAULT 'XAUUSD'"),
                     ("target_profit_total", "DOUBLE PRECISION DEFAULT 25"),
                     ("target_profit_currency", "TEXT DEFAULT 'USD'"),
+                    ("gmma_position_profit_target", "DOUBLE PRECISION DEFAULT 0"),
                     ("auto_direction", "TEXT"),
                     ("pending_auto_direction", "TEXT"),
                     ("pending_auto_signal_id", "TEXT"),
@@ -1795,6 +1796,8 @@ def managed_settings():
         except Exception: target=25
         target_currency=str(body.get("target_profit_currency",row.get("target_profit_currency") or "USD")).upper()
         if target_currency not in {"USD","UGX"}: target_currency="USD"
+        try: gmma_position_profit_target=max(0.0,min(float(body.get("gmma_position_profit_target",row.get("gmma_position_profit_target") or 0)),1000000000))
+        except Exception: gmma_position_profit_target=0.0
         try: quality=max(0,min(float(body.get("min_quality",row.get("min_quality") if row.get("min_quality") is not None else 40)),100))
         except Exception: quality=40
         strong=1 if bool(body.get("strong_only",row.get("strong_only") or 0)) else 0
@@ -1819,8 +1822,9 @@ def managed_settings():
         low_stability=1 if bool(body.get("low_stability_entry",row.get("low_stability_entry") or 0)) else 0
         high_stability=1 if bool(body.get("high_stability_entry",row.get("high_stability_entry") or 0)) else 0
         opposite_confirmation=1 if bool(body.get("opposite_signal_confirmation",row.get("opposite_signal_confirmation") or 0)) else 0
-        auto_symbol=str(body.get("auto_symbol",row.get("auto_symbol") or "XAUUSD")).replace("/","").replace("_","").replace("-","").upper()
-        if auto_symbol not in {"XAUUSD","BTCUSD"}: auto_symbol="XAUUSD"
+        # The active automatic execution engine is GMMA on Gold M1 only.
+        # Ignore legacy strategy-page symbol selections for this executor.
+        auto_symbol="XAUUSD"
         try: max_lot=max(lot,min(float(body.get("max_lot",row.get("max_lot") or 10)),10))
         except Exception: max_lot=max(lot,10)
         try: max_open=max(1,min(int(body.get("max_open_trades",row.get("max_open_trades") or 1)),10))
@@ -1830,9 +1834,9 @@ def managed_settings():
         break_even=1 if bool(body.get("break_even_enabled",row.get("break_even_enabled") or 0)) else 0
         trailing=1 if bool(body.get("trailing_stop_enabled",row.get("trailing_stop_enabled") or 0)) else 0
         with DB_LOCK:
-            conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET lot_size=?,profit_target=?,target_profit_total=?,min_quality=?,strong_only=?,smc_only=?,strategy_selection_json=?,kets_strategy_enabled=?,low_stability_entry=?,high_stability_entry=?,opposite_signal_confirmation=?,max_lot=?,max_open_trades=?,allocation_pct=?,break_even_enabled=?,trailing_stop_enabled=?,auto_symbol=?,pressure_ratio_threshold=?,target_profit_currency=?,updated_at=? WHERE id=?",(lot,target,target,quality,strong,smc_only,strategy_selection_json,kets_strategy_enabled,low_stability,high_stability,opposite_confirmation,max_lot,max_open,allocation,break_even,trailing,auto_symbol,pressure_ratio_threshold,target_currency,_now_iso(),row["id"])); conn.commit(); conn.close()
+            conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET lot_size=?,profit_target=?,target_profit_total=?,min_quality=?,strong_only=?,smc_only=?,strategy_selection_json=?,kets_strategy_enabled=?,low_stability_entry=?,high_stability_entry=?,opposite_signal_confirmation=?,max_lot=?,max_open_trades=?,allocation_pct=?,break_even_enabled=?,trailing_stop_enabled=?,auto_symbol=?,pressure_ratio_threshold=?,target_profit_currency=?,gmma_position_profit_target=?,updated_at=? WHERE id=?",(lot,target,target,quality,strong,smc_only,strategy_selection_json,kets_strategy_enabled,low_stability,high_stability,opposite_confirmation,max_lot,max_open,allocation,break_even,trailing,auto_symbol,pressure_ratio_threshold,target_currency,gmma_position_profit_target,_now_iso(),row["id"])); conn.commit(); conn.close()
         row=_ctrader_row_for_user(user["id"])
-    return jsonify({"ok":True,"lot_size":_num(row.get("lot_size")) or .01,"profit_target":_num(row.get("target_profit_total")) if row.get("target_profit_total") is not None else (_num(row.get("profit_target")) if row.get("profit_target") is not None else 25),"target_profit_total":_num(row.get("target_profit_total")) if row.get("target_profit_total") is not None else (_num(row.get("profit_target")) if row.get("profit_target") is not None else 25),"target_profit_currency":str(row.get("target_profit_currency") or "USD").upper(),"min_quality":_num(row.get("min_quality")) if row.get("min_quality") is not None else 40,"strong_only":bool(row.get("strong_only")),"smc_only":False,"kets_strategy_enabled":bool(row.get("kets_strategy_enabled") if row.get("kets_strategy_enabled") is not None else 0),"strategy_selection":json.loads(row.get("strategy_selection_json") or '["smc"]') if str(row.get("strategy_selection_json") or "").strip() else ["smc"],"low_stability_entry":bool(row.get("low_stability_entry")),"high_stability_entry":bool(row.get("high_stability_entry")),"opposite_signal_confirmation":bool(row.get("opposite_signal_confirmation")),"max_lot":_num(row.get("max_lot")) or 10,"max_open_trades":int(row.get("max_open_trades") or 1),"allocation_pct":_num(row.get("allocation_pct")) or 10,"break_even_enabled":bool(row.get("break_even_enabled")),"trailing_stop_enabled":bool(row.get("trailing_stop_enabled")),"auto_symbol":str(row.get("auto_symbol") or "XAUUSD").upper(),"pressure_ratio_threshold":_num(row.get("pressure_ratio_threshold")) or 2.0})
+    return jsonify({"ok":True,"lot_size":_num(row.get("lot_size")) or .01,"profit_target":_num(row.get("target_profit_total")) if row.get("target_profit_total") is not None else (_num(row.get("profit_target")) if row.get("profit_target") is not None else 25),"target_profit_total":_num(row.get("target_profit_total")) if row.get("target_profit_total") is not None else (_num(row.get("profit_target")) if row.get("profit_target") is not None else 25),"target_profit_currency":str(row.get("target_profit_currency") or "USD").upper(),"gmma_position_profit_target":_num(row.get("gmma_position_profit_target")),"min_quality":_num(row.get("min_quality")) if row.get("min_quality") is not None else 40,"strong_only":bool(row.get("strong_only")),"smc_only":False,"kets_strategy_enabled":bool(row.get("kets_strategy_enabled") if row.get("kets_strategy_enabled") is not None else 0),"strategy_selection":json.loads(row.get("strategy_selection_json") or '["smc"]') if str(row.get("strategy_selection_json") or "").strip() else ["smc"],"low_stability_entry":bool(row.get("low_stability_entry")),"high_stability_entry":bool(row.get("high_stability_entry")),"opposite_signal_confirmation":bool(row.get("opposite_signal_confirmation")),"max_lot":_num(row.get("max_lot")) or 10,"max_open_trades":int(row.get("max_open_trades") or 1),"allocation_pct":_num(row.get("allocation_pct")) or 10,"break_even_enabled":bool(row.get("break_even_enabled")),"trailing_stop_enabled":bool(row.get("trailing_stop_enabled")),"auto_symbol":str(row.get("auto_symbol") or "XAUUSD").upper(),"pressure_ratio_threshold":_num(row.get("pressure_ratio_threshold")) or 2.0})
 
 @app.route("/api/managed/move-break-even", methods=["POST"])
 def managed_move_break_even():
@@ -3229,6 +3233,38 @@ def _ctrader_autotrade_once():
             auto_positions=[p for p in (live_snap.get("positions") or [])
                             if str(p.get("label") or "").upper()=="KETS_AUTO"
                             or str(p.get("comment") or "").upper().startswith("KETS AUTOMATIC")]
+            # Close only the individual GMMA automatic position that has reached
+            # its configured floating-profit amount. Keep Auto-Trader enabled;
+            # the next worker pass can re-enter on the still-confirmed GMMA trend.
+            per_position_target=_num(row.get("gmma_position_profit_target"))
+            if per_position_target>0 and auto_positions:
+                target_ccy=str(row.get("target_profit_currency") or "USD").upper()
+                account_ccy=str(live_snap.get("currency") or "USD").upper()
+                broker_target=per_position_target
+                if target_ccy!=account_ccy:
+                    fx=_kets_usd_ugx_rate()
+                    if target_ccy=="USD" and account_ccy=="UGX": broker_target*=fx
+                    elif target_ccy=="UGX" and account_ccy=="USD": broker_target/=fx
+                    else: raise RuntimeError("Unsupported cTrader account currency for GMMA position-profit target conversion.")
+                winners=[str(p.get("positionId") or p.get("id") or "") for p in auto_positions
+                         if _num(p.get("unrealized_pnl"))>=broker_target and str(p.get("positionId") or p.get("id") or "")]
+                if winners:
+                    _ctrader_close_positions(row,auto_only=True,position_ids=winners)
+                    _ctrader_invalidate_snapshot(row)
+                    live_snap=_ctrader_account_snapshot(row)
+                    if not live_snap.get("positions_verified"):
+                        raise RuntimeError(live_snap.get("data_warning") or "Could not verify GMMA profit-target closure.")
+                    still_open=[p for p in (live_snap.get("positions") or [])
+                                if str(p.get("positionId") or p.get("id") or "") in set(winners)]
+                    if still_open:
+                        raise RuntimeError("GMMA profit-target close was not confirmed by cTrader; replacement entry is paused.")
+                    auto_positions=[p for p in (live_snap.get("positions") or [])
+                                    if str(p.get("label") or "").upper()=="KETS_AUTO"
+                                    or str(p.get("comment") or "").upper().startswith("KETS AUTOMATIC")]
+                    with DB_LOCK:
+                        conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET auto_direction=NULL,auto_entry_signal_id=NULL,last_signal_id=NULL,last_error=NULL,updated_at=? WHERE id=?",(_now_iso(),row["id"])); conn.commit(); conn.close()
+                    previous=""
+                    row["auto_direction"]=""; row["auto_entry_signal_id"]=""
             def _position_direction(position):
                 # cTrader adapters/versions may expose the trade side under
                 # different keys and may use LONG/SHORT instead of BUY/SELL.
@@ -3338,7 +3374,7 @@ def _ctrader_autotrade_loop():
             app.logger.exception("cTrader auto-trade loop error")
             time.sleep(5)
 
-def _ctrader_close_positions(row, auto_only=False):
+def _ctrader_close_positions(row, auto_only=False, position_ids=None):
     accounts=json.loads(row.get("account_ids_json") or "[]")
     selected=str(row.get("selected_account_id") or "")
     account=next((a for a in accounts if str(a.get("id"))==selected), None)
@@ -3359,6 +3395,9 @@ def _ctrader_close_positions(row, auto_only=False):
         raise RuntimeError(f"Could not refresh open cTrader positions; no close request was sent: {exc}")
     if auto_only:
         positions=[p for p in positions if str(p.get("label") or "").upper()=="KETS_AUTO" or str(p.get("comment") or "").upper().startswith("KETS AUTOMATIC") ]
+    if position_ids is not None:
+        wanted={str(x) for x in position_ids}
+        positions=[p for p in positions if str(p.get("positionId") or p.get("id") or "") in wanted]
     target_ids={str(p.get("positionId") or p.get("id") or "") for p in positions}
     target_ids.discard("")
     # A verified empty broker snapshot is already a successful close-all state.
@@ -3392,12 +3431,20 @@ def _ctrader_close_positions(row, auto_only=False):
             results=[]
             for pos in positions:
                 pid=pos.get("positionId") or pos.get("id")
+                # Reconcile snapshots normally expose volume_cents (raw cTrader
+                # hundredths of a lot). Accept the normalized lot field as a
+                # fallback for broker/API variants so the close button does not
+                # fail merely because the adapter omitted the convenience field.
                 vol=pos.get("volume_cents")
                 if not pid:
                     raise RuntimeError("cTrader returned an open position without an ID; refusing to claim all positions were closed.")
-                volume=int(round(float(vol or 0)))
+                if vol in (None, ""):
+                    lots=_num(pos.get("volume"))
+                    volume=int(round(lots*100.0)) if lots is not None else 0
+                else:
+                    volume=int(round(float(vol or 0)))
                 if volume<=0:
-                    raise RuntimeError(f"cTrader position {pid} has no valid broker volume; refusing an unsafe close request.")
+                    raise RuntimeError(f"cTrader position {pid} has no valid broker volume (raw={vol!r}, lots={pos.get('volume')!r}); no unsafe close request was sent.")
                 results.append(await send(2111,{"ctidTraderAccountId":int(selected),"positionId":int(pid),"volume":volume}))
             return results
     results = asyncio.run(run())
@@ -4170,6 +4217,25 @@ def api_gmma():
             execution.update({"status":"BLOCKED","reason":trading_session().get("reason") or f"New entries are blocked during {trading_session().get('mode') or 'the current session'}."})
         else:
             execution.update({"status":"ENTRY_ELIGIBLE","reason":f"Confirmed GMMA {state['direction']} trend. Auto-Trader is enabled and entry gates are currently clear; waiting for broker execution/verification."})
+    # Compare the live GMMA trend with the last direction KETS actually
+    # recorded for this user's Auto-Trader, not only the immediately prior
+    # candle. This makes the recent-vs-new trend transition explicit.
+    recorded_direction = (str(ctrader_row.get("auto_direction") or "").upper()
+                          if ctrader_row else "")
+    state["recent_autotrader_trend"] = recorded_direction or None
+    state["new_gmma_trend"] = state.get("detected_direction")
+    state["trend_changed_since_last_trade"] = bool(
+        recorded_direction in {"BUY", "SELL"}
+        and state.get("fresh")
+        and state.get("detected_direction") in {"BUY", "SELL"}
+        and recorded_direction != state.get("detected_direction")
+    )
+    state["trend_decision"] = (
+        "CLOSE_OLD_THEN_OPEN_NEW" if state["trend_changed_since_last_trade"]
+        else "MAINTAIN_CURRENT_TRADE" if recorded_direction and recorded_direction == state.get("detected_direction")
+        else "OPEN_IF_ENABLED_AND_GATES_PASS" if state.get("fresh") and state.get("detected_direction")
+        else "WAIT_FOR_FRESH_CONFIRMED_TREND"
+    )
     state["execution"] = execution
     state["execution_status"] = execution["status"]
     state["execution_reason"] = execution["reason"]

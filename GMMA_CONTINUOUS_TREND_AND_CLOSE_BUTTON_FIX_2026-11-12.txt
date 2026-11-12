@@ -1,0 +1,8 @@
+GMMA CONTINUOUS TREND COMPARISON + CLOSE BUTTON HARDENING — 2026-11-12
+
+- GMMA API now exposes the last direction recorded by this user's Auto-Trader, the newly detected GMMA direction, whether it changed, and the resulting decision label.
+- GMMA page visibly distinguishes RECENT TRADE TREND, NEW GMMA TREND, and the expected action: maintain current trade, close old then open new, open if enabled and gates pass, or wait for a fresh confirmed trend.
+- Existing worker continues to check fresh completed Gold M1 GMMA data on its normal loop. Same-direction live KETS_AUTO positions are maintained without duplicate entries. Opposite confirmed direction closes KETS_AUTO positions and verifies broker flatness before a replacement entry. New entries remain subject to Auto-Trader enablement and session rules; reversal exits remain allowed outside entry hours.
+- Close-all volume parsing now accepts the normalized lot-size field as a fallback when the raw cTrader volume field is absent, while still refusing zero/invalid volume. The API continues to verify broker-side closure and report errors instead of falsely claiming success.
+- No other strategy, page, account selection, or trading configuration was intentionally changed.
+- Validation: Python syntax and JavaScript syntax checks passed. Live cTrader behavior was not tested; verify on a demo account first.

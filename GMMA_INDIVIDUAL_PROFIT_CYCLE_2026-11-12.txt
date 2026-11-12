@@ -1,0 +1,9 @@
+GMMA INDIVIDUAL PROFIT CYCLE UPDATE — 2026-11-12
+
+- Added a per-position GMMA floating-profit target beneath the existing overall realized-profit target.
+- The per-position target is saved through /api/managed/settings and persisted in ctrader_connections.gmma_position_profit_target.
+- The GMMA worker checks only KETS_AUTO positions, closes only positions whose verified unrealized P/L reaches the configured amount, verifies broker flatness for those position IDs, clears the prior entry marker, and leaves Auto-Trader enabled so the current confirmed GMMA direction can re-enter.
+- The existing overall realized-profit target remains separate and retains its stop/close-all behavior.
+- Automatic symbol selection is now locked to XAUUSD for the GMMA executor.
+- Repaired the Auto-Trader Close All button feedback, busy state, and post-close account refresh. The GMMA page account-wide emergency close remains separate.
+- Validation: Python syntax compilation and Node.js syntax check passed. Live cTrader execution was not exercised; test on a demo account before enabling live trading.
