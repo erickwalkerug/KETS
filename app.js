@@ -1990,12 +1990,17 @@ async function saveRealizedProfitTarget(){
     if(individualInput)individualInput.disabled=true;
     if(saveButton){saveButton.disabled=true;saveButton.dataset.oldText=saveButton.textContent;saveButton.textContent="Saving…";}
     const saved=await api("/api/managed/gmma-profit-target",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
+      target_profit_total:value,
       gmma_position_profit_target:individualValue,
       target_profit_currency:selectedTargetCurrency
     })});
     const persistedIndividual=Number(saved?.gmma_position_profit_target);
+    const persistedRunTarget=Number(saved?.target_profit_total);
     if(!Number.isFinite(persistedIndividual)||Math.abs(persistedIndividual-individualValue)>0.000001){
       throw new Error("The server did not confirm the GMMA individual-position target. Please try again.");
+    }
+    if(!Number.isFinite(persistedRunTarget)||Math.abs(persistedRunTarget-value)>0.000001){
+      throw new Error("The server did not confirm the realized-profit auto-stop target. Please try again.");
     }
     if($("managedProfitTarget"))$("managedProfitTarget").value=String(value);
     gmmaPositionProfitTargetDirty=false;

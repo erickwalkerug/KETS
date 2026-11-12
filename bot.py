@@ -1797,19 +1797,26 @@ def managed_gmma_profit_target():
             raise ValueError()
     except Exception:
         return jsonify({"error":"Enter a valid GMMA individual-position target (0 disables it)."}),400
+    try:
+        run_target=float(body.get("target_profit_total",row.get("target_profit_total") or row.get("profit_target") or 25))
+        if not math.isfinite(run_target) or run_target <= 0 or run_target > 1000000000:
+            raise ValueError()
+    except Exception:
+        return jsonify({"error":"Enter a realized-profit auto-stop target greater than zero."}),400
     currency=str(body.get("target_profit_currency",row.get("target_profit_currency") or "USD")).upper()
     if currency not in {"USD","UGX"}:
         return jsonify({"error":"Choose USD or UGX for the profit-target currency."}),400
     with DB_LOCK:
         conn=db_conn()
-        db_execute(conn,"UPDATE ctrader_connections SET gmma_position_profit_target=?,target_profit_currency=?,updated_at=? WHERE id=?",
-                   (value,currency,_now_iso(),row["id"]))
+        db_execute(conn,"UPDATE ctrader_connections SET gmma_position_profit_target=?,target_profit_total=?,profit_target=?,target_profit_currency=?,updated_at=? WHERE id=?",
+                   (value,run_target,run_target,currency,_now_iso(),row["id"]))
         conn.commit()
-        saved=db_execute(conn,"SELECT gmma_position_profit_target,target_profit_currency FROM ctrader_connections WHERE id=?",(row["id"],)).fetchone()
+        saved=db_execute(conn,"SELECT gmma_position_profit_target,target_profit_total,profit_target,target_profit_currency FROM ctrader_connections WHERE id=?",(row["id"],)).fetchone()
         conn.close()
     saved=dict(saved) if saved else {}
     return jsonify({"ok":True,
                     "gmma_position_profit_target":_num(saved.get("gmma_position_profit_target")),
+                    "target_profit_total":_num(saved.get("target_profit_total") if saved.get("target_profit_total") is not None else saved.get("profit_target")),
                     "target_profit_currency":str(saved.get("target_profit_currency") or currency).upper()})
 
 @app.route("/api/managed/settings", methods=["GET","POST"])
@@ -3374,11 +3381,16 @@ def _ctrader_autotrade_once():
                     verify_snap=_ctrader_account_snapshot(row)
                     if not verify_snap.get("positions_verified"):
                         raise RuntimeError(verify_snap.get("data_warning") or "GMMA reversal paused: cTrader could not verify the selected account after closing the old position; replacement entry was not sent.")
-                    remaining_auto=[p for p in (verify_snap.get("positions") or [])
+                    verified_positions=list(verify_snap.get("positions") or [])
+                    managed_id_set={pid for pid in managed_ids if pid}
+                    remaining_managed_ids=[str(p.get("positionId") or p.get("id") or "")
+                                           for p in verified_positions
+                                           if str(p.get("positionId") or p.get("id") or "") in managed_id_set]
+                    remaining_auto=[p for p in verified_positions
                                     if str(p.get("label") or "").upper()=="KETS_AUTO"
                                     or str(p.get("comment") or "").upper().startswith("KETS AUTOMATIC")]
-                    if remaining_auto:
-                        raise RuntimeError("GMMA reversal paused: cTrader still reports an old KETS_AUTO position open; replacement entry was not sent.")
+                    if remaining_managed_ids or remaining_auto:
+                        raise RuntimeError("GMMA reversal paused: cTrader still reports the old automatic position open; replacement entry was not sent.")
                 with DB_LOCK:
                     conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET auto_direction=NULL,auto_entry_signal_id=NULL,pending_auto_direction=NULL,pending_auto_signal_id=NULL,last_signal_id=NULL,last_error=NULL,updated_at=? WHERE id=?",(_now_iso(),row["id"])); conn.commit(); conn.close()
                 previous=""

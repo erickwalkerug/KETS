@@ -1,0 +1,8 @@
+KETS GMMA PROFIT TARGET + REVERSAL VERIFICATION FIX — 2026-11-12
+
+Changes made while preserving existing KETS features and strategy settings:
+1. The Save profit targets action now submits BOTH the realized-profit Auto-Stop amount and the GMMA individual-position profit amount.
+2. The dedicated authenticated API persists target_profit_total and profit_target together with the individual-position target and selected USD/UGX currency, then reads all saved values back. The browser checks both returned values before reporting success. This fixes the prior omission where the UI displayed a realized target but the dedicated save endpoint only stored the individual GMMA target.
+3. During a GMMA reversal, after requesting closure KETS now verifies the exact broker position IDs it identified are absent from the fresh cTrader positions snapshot, including positions whose optional label/comment metadata is missing. It will not submit the opposite entry while any identified old position remains open.
+
+Validation: Python syntax compilation and JavaScript syntax checks passed. Live broker execution cannot be proven by ZIP/source tests. Test on a cTrader demo account and verify the saved target after refresh plus actual cTrader close/re-entry behavior before live trading.
