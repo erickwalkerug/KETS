@@ -1,0 +1,33 @@
+KETS GMMA EVENT-DRIVEN AUTOTRADER + INVEST SHARES PROFIT MONITOR
+Date: 2026-11-12
+
+Implemented in bot.py:
+
+1. GMMA trend publisher
+- Publishes a completed-candle, fresh BUY/SELL event when GMMA first confirms a direction or confirms a change to the opposite direction.
+- Same-direction candles do not create repeated trend instructions.
+- Event carries a stable candle-based event ID, direction, price, and timestamp.
+- The authenticated incoming Gold candle feed publishes events immediately; /api/gmma also refreshes publication metadata for the GMMA page.
+
+2. Auto-Trader event consumer
+- Auto-Trader consumes the published GMMA event rather than recalculating GMMA on every worker pass.
+- Duplicate event IDs are suppressed using existing per-account execution state.
+- New opposite-direction events still use the existing broker position identification, close confirmation, and replacement-entry safety checks.
+- New entries and reversals still require fresh GMMA data and existing session/account/strategy gates.
+
+3. Independent Invest Shares profit monitor
+- Added a dedicated server-side worker, independent of the GMMA event and Auto-Trader entry/reversal decision path.
+- Checks each managed KETS_AUTO position against the saved GMMA individual-position profit target and selected target currency.
+- Closes only position IDs that meet or exceed the converted target.
+- Verifies closure with a fresh cTrader position snapshot before clearing the stored direction marker.
+- Leaves Auto-Trader enabled; the current confirmed GMMA direction can authorize a replacement entry.
+- Continues working when GMMA candle data is temporarily stale and does not require the Invest Shares browser page to remain open.
+
+4. Preserved
+- Existing total realized-profit auto-stop target and its close-all behavior.
+- Existing Save profit targets UI/API/settings fields.
+- Existing cTrader order execution, reversal close verification, selected account, symbol restrictions, session gates, and other strategies.
+
+Validation performed:
+- Python syntax compilation of bot.py and compileall across the project passed.
+- No live cTrader account was connected in this build environment; broker execution must be verified on a cTrader demo account before live use.
