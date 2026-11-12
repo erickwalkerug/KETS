@@ -3240,11 +3240,22 @@ def _ctrader_autotrade_once():
             # and there is exactly one XAUUSD position on the selected account,
             # use that uniquely identifiable position as the managed trade.
             # Never guess when multiple positions exist or their side conflicts.
+            def _position_direction(position):
+                # cTrader adapters do not all expose the side under the same key.
+                # Normalize every documented/observed representation before
+                # deciding whether the one broker position is the saved GMMA trade.
+                for key in ("side", "direction", "tradeSide", "trade_side", "tradeType", "trade_type", "positionType", "position_type"):
+                    raw=str(position.get(key) or "").upper()
+                    if raw in {"BUY", "LONG", "BUY_SIDE", "TRADETYPE_BUY", "1"} or raw.endswith(".BUY"):
+                        return "BUY"
+                    if raw in {"SELL", "SHORT", "SELL_SIDE", "TRADETYPE_SELL", "2"} or raw.endswith(".SELL"):
+                        return "SELL"
+                return None
             if not auto_positions and str(row.get("auto_direction") or "").upper() in {"BUY","SELL"} and len(all_live_positions)==1:
                 candidate=all_live_positions[0]
-                candidate_side=str(candidate.get("side") or candidate.get("direction") or "").upper()
+                candidate_side=_position_direction(candidate)
                 expected=str(row.get("auto_direction") or "").upper()
-                if candidate_side in {expected, "LONG" if expected=="BUY" else "SHORT"}:
+                if candidate_side==expected:
                     auto_positions=[candidate]
             # Close only the individual GMMA automatic position that has reached
             # its configured floating-profit amount. Keep Auto-Trader enabled;
@@ -3278,16 +3289,6 @@ def _ctrader_autotrade_once():
                         conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET auto_direction=NULL,auto_entry_signal_id=NULL,last_signal_id=NULL,last_error=NULL,updated_at=? WHERE id=?",(_now_iso(),row["id"])); conn.commit(); conn.close()
                     previous=""
                     row["auto_direction"]=""; row["auto_entry_signal_id"]=""
-            def _position_direction(position):
-                # cTrader adapters/versions may expose the trade side under
-                # different keys and may use LONG/SHORT instead of BUY/SELL.
-                for key in ("side", "direction", "tradeSide", "trade_side", "tradeType", "trade_type", "positionType", "position_type"):
-                    raw=str(position.get(key) or "").upper()
-                    if raw in {"BUY", "LONG", "BUY_SIDE", "TRADETYPE_BUY"} or raw.endswith(".BUY"):
-                        return "BUY"
-                    if raw in {"SELL", "SHORT", "SELL_SIDE", "TRADETYPE_SELL"} or raw.endswith(".SELL"):
-                        return "SELL"
-                return None
             live_directions={side for p in auto_positions if (side:=_position_direction(p))}
             # If any live automatic position opposes the current confirmed GMMA
             # direction, close ALL KETS_AUTO positions and verify broker flatness

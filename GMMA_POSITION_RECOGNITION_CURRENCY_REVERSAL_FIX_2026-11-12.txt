@@ -1,0 +1,29 @@
+GMMA POSITION RECOGNITION + PROFIT TARGET CURRENCY FIX — 2026-11-12
+
+Root cause found:
+- The GMMA worker's fallback recognition of a single broker position used only the
+  "side" or "direction" fields. Other cTrader adapters expose tradeSide,
+  trade_side, tradeType, trade_type, positionType, or position_type. In that
+  case the dashboard could show the live position and its positive floating P/L,
+  while the GMMA worker failed to recognize it as its managed position. The
+  individual profit-target and reversal logic would therefore skip it.
+
+Change:
+- Use one shared direction normalizer across all supported cTrader side fields
+  before the unique-position fallback. The fallback still requires exactly one
+  open position and a saved BUY/SELL Auto-Trader direction that matches it.
+- This does not broaden closure to multiple positions, manual positions, or
+  positions on another account. Explicit-ID closes remain restricted to the
+  selected, freshly verified broker position IDs.
+- The individual GMMA profit target continues to use the selected USD/UGX
+  currency and converts it to the cTrader account currency before comparing
+  floating P/L. The same currency selector applies to both profit targets.
+
+Validation:
+- Python compilation passed.
+- JavaScript syntax validation passed.
+- Source-only validation cannot prove broker execution. Verify on a cTrader demo
+  account: save UGX 20,000, confirm the setting persists as UGX, allow the
+  managed position's floating P/L to reach/exceed UGX 20,000, then confirm cTrader
+  reports that position closed and a replacement opens only if the current GMMA
+  direction remains confirmed. Also test BUY-to-SELL and SELL-to-BUY reversals.
