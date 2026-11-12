@@ -1,0 +1,16 @@
+GMMA POSITION PROFIT CLOSE + REVERSAL RELIABILITY FIX — 2026-11-12
+
+Root causes addressed:
+1. Individual GMMA profit-target logic could identify a managed position by its saved direction and unique-position fallback when cTrader omitted optional label/comment metadata. The close helper then filtered the explicitly supplied position ID a second time by KETS_AUTO label/comment, silently dropping that position and sending no close request.
+2. Post-entry verification accepted only the KETS_AUTO label, even though cTrader exposes label and comment as optional position metadata. It now accepts the KETS automatic comment as an alternative, consistent with the rest of the worker.
+
+Changes:
+- When an explicit position_ids list is supplied, close only those exact IDs from a fresh, verified snapshot. Do not require optional label/comment metadata again. This preserves selected-account isolation and does not broaden the close to manual/other-strategy trades.
+- For automatic entry verification, accept either label=KETS_AUTO or a comment beginning KETS AUTOMATIC, plus the expected BUY/SELL side and broker symbol ID.
+- Existing GMMA reversal sequence remains: identify old KETS_AUTO position(s), close them, verify broker-side flatness, then submit the new confirmed direction. If cTrader cannot identify the old automatic position safely or closure is not verified, pause rather than opening the opposite trade on top of it.
+- Existing target currency conversion, target setting persistence, overall realized-profit auto-stop, UI, strategies, account selection, and other controls are unchanged.
+
+Validation:
+- bot.py passed Python bytecode compilation.
+- app.js passed Node.js syntax validation.
+- Live cTrader close/reversal execution cannot be proven by source-only tests. Verify on a cTrader demo account first and confirm the Positions tab after each close and replacement entry.

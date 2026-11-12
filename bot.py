@@ -2501,7 +2501,8 @@ def _queue_and_execute_ctrader(row, sig, automatic=True):
                     comment=str(pos.get("comment") or "").upper()
                     side=str(pos.get("side") or pos.get("direction") or "").upper()
                     symbol_ok=(not expected_symbol_id or str(pos.get("symbolId") or "")==expected_symbol_id)
-                    if label=="KETS_AUTO" and side==expected_side and symbol_ok:
+                    is_kets_auto=(label=="KETS_AUTO" or comment.startswith("KETS AUTOMATIC"))
+                    if is_kets_auto and side==expected_side and symbol_ok:
                         verified_position=pos
                         break
                 if verified_position:
@@ -3418,11 +3419,15 @@ def _ctrader_close_positions(row, auto_only=False, position_ids=None):
         positions=fresh.get("positions",[])
     except Exception as exc:
         raise RuntimeError(f"Could not refresh open cTrader positions; no close request was sent: {exc}")
-    if auto_only:
-        positions=[p for p in positions if str(p.get("label") or "").upper()=="KETS_AUTO" or str(p.get("comment") or "").upper().startswith("KETS AUTOMATIC") ]
     if position_ids is not None:
+        # Explicit IDs are supplied only after the GMMA worker has identified
+        # the managed position from its saved direction/unique-position fallback.
+        # Do not discard that verified position merely because this broker omits
+        # optional label/comment metadata from its reconcile response.
         wanted={str(x) for x in position_ids}
         positions=[p for p in positions if str(p.get("positionId") or p.get("id") or "") in wanted]
+    elif auto_only:
+        positions=[p for p in positions if str(p.get("label") or "").upper()=="KETS_AUTO" or str(p.get("comment") or "").upper().startswith("KETS AUTOMATIC") ]
     target_ids={str(p.get("positionId") or p.get("id") or "") for p in positions}
     target_ids.discard("")
     # A verified empty broker snapshot is already a successful close-all state.
