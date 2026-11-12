@@ -1171,13 +1171,6 @@ async function refreshManagedStatus(){
   renderManagedMoney("managedTodayPnl",convertManagedValue(d.today_pnl,sourceCurrency,currency),currency);
   renderManagedMoney("managedUnrealizedPnl",convertManagedValue(d.unrealized_pnl,sourceCurrency,currency),currency);
   renderManagedMoney("managedRealizedPnl",convertManagedValue(d.realized_pnl,sourceCurrency,currency),currency);
-  const runTarget=Number(d.settings?.target_profit_total??d.settings?.profit_target??25);
-  const targetCurrency=String(d.settings?.target_profit_currency||"USD").toUpperCase()==="UGX"?"UGX":"USD";
-  const targetCurrencySelect=$("managedProfitTargetCurrency"); if(targetCurrencySelect&&document.activeElement!==targetCurrencySelect)targetCurrencySelect.value=targetCurrency;
-  const visibleTarget=$("managedProfitTargetVisible"); if(visibleTarget&&document.activeElement!==visibleTarget)visibleTarget.value=runTarget.toFixed(2); const perPositionTarget=$("gmmaPositionProfitTarget"); if(perPositionTarget&&!gmmaPositionProfitTargetDirty&&document.activeElement!==perPositionTarget)perPositionTarget.value=Number(d.settings?.gmma_position_profit_target||0).toFixed(2);
-  const runProfitInTargetCurrency=convertManagedValue(d.settings?.auto_profit_total??0,sourceCurrency,targetCurrency);
-  if($("managedRunRealizedProfit"))$("managedRunRealizedProfit").textContent=runProfitInTargetCurrency===null?"Rate unavailable":`${targetCurrency} ${Number(runProfitInTargetCurrency).toLocaleString(undefined,{maximumFractionDigits:2})}`;
-  if($("managedProfitTargetStatus"))$("managedProfitTargetStatus").textContent=runProfitInTargetCurrency!==null&&runProfitInTargetCurrency>=runTarget&&runTarget>0?"Target reached — stopping":"Target not yet reached";
   renderManagedMoney("managedFreeMargin",convertManagedValue(d.free_margin,sourceCurrency,currency),currency);
   if($("managedOpenTrades"))$("managedOpenTrades").textContent=String((d.positions||[]).length);
   if($("managedConnectionNote")){
@@ -1264,7 +1257,7 @@ async function savePressureRatioThreshold(){
    high_stability_entry:!!$("managedHighStability")?.checked,
    opposite_signal_confirmation:!!$("managedOppositeConfirmation")?.checked,
    max_lot:10, max_open_trades:Number($("managedMaxTrades")?.value||1),
-   allocation_pct:Number($("managedAllocation")?.value||10), auto_symbol:"XAUUSD"
+   allocation_pct:Number($("managedAllocation")?.value||10), auto_symbol:String($("autoTradeSymbol")?.value||"XAUUSD")
   })});
   setManagedActionMessage(`Pressure ratio requirement saved: ${value}×. Auto-Trader checks this threshold before opening new trades.`,"ok");
   await refreshManagedStatus();
@@ -1286,7 +1279,7 @@ async function setStrongOnlyControl(enabled){
    max_lot:10,
    max_open_trades:Number($("managedMaxTrades")?.value||1),
    allocation_pct:Number($("managedAllocation")?.value||10),
-   auto_symbol:"XAUUSD"
+   auto_symbol:String($("autoTradeSymbol")?.value||"XAUUSD")
   })});
   setManagedActionMessage(enabled
    ?"Strong Reversal Only is ON — automatic entries will require a KETS STRONG REVERSAL ENTRY."
@@ -1340,7 +1333,7 @@ async function setStabilityRequirements(){
    max_lot:10,
    max_open_trades:Number($("managedMaxTrades")?.value||1),
    allocation_pct:Number($("managedAllocation")?.value||10),
-   auto_symbol:"XAUUSD"
+   auto_symbol:String($("autoTradeSymbol")?.value||"XAUUSD")
   })});
   const parts=[]; if(low?.checked)parts.push("LOW STABILITY"); if(high?.checked)parts.push("HIGH STABILITY");
   setManagedActionMessage(parts.length?`Auto-Trade stability requirement: ${parts.join(" + ")}.`:`Auto-Trade stability requirement is OFF.`,"ok");
@@ -1372,7 +1365,7 @@ async function setOppositeSignalConfirmation(){
    max_lot:10,
    max_open_trades:Number($("managedMaxTrades")?.value||1),
    allocation_pct:Number($("managedAllocation")?.value||10),
-   auto_symbol:"XAUUSD"
+   auto_symbol:String($("autoTradeSymbol")?.value||"XAUUSD")
   })});
   setManagedActionMessage(el?.checked
    ?"Opposite Signal Confirmation is ON — KETS waits for a second distinct opposite signal before reversing."
@@ -1522,16 +1515,11 @@ function initAutoTraderControls(){
     if(el)el.onchange=saveAutoTraderControlState;
   });
   if($("atCloseAll"))$("atCloseAll").onclick=async()=>{
-    const btn=$("atCloseAll");
-    if(!confirm("Close EVERY open position on the selected cTrader account, including manual and other-strategy positions? This cannot be undone."))return;
+    if(!confirm("Close all trades?"))return;
     try{
-      if(btn){btn.disabled=true;btn.dataset.oldText=btn.textContent;btn.textContent="Closing positions…";}
-      const result=await api("/api/managed/close-all",{method:"POST"});
-      const count=Number(result.closed_requests||0);
-      setManagedActionMessage(count?`cTrader confirmed closure of ${count} position(s).`:"No open positions were found on the selected account.","ok");
-      await refreshManagedStatus();
-    }catch(e){setManagedActionMessage(e.message||"Close-all failed; check the selected cTrader account.","error");}
-    finally{if(btn){btn.disabled=false;btn.textContent=btn.dataset.oldText||"🚨 CLOSE ALL TRADES";}}
+      await api("/api/managed/close-all",{method:"POST"});
+      setManagedActionMessage("Close-all request sent.","ok");
+    }catch(e){setManagedActionMessage(e.message||"Close-all failed.","error");}
   };
   if($("atEmergencyStop"))$("atEmergencyStop").onclick=async()=>{
     if(!confirm("Stop automatic trading?"))return;
@@ -1683,8 +1671,6 @@ if($("saveManagedSettings"))$("saveManagedSettings").onclick=async()=>{
   await api("/api/managed/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
    lot_size:Number($("managedLotSize")?.value||0.01),
    target_profit_total:Number($("managedProfitTarget")?.value||25),
-   gmma_position_profit_target:Math.max(0,Number($("gmmaPositionProfitTarget")?.value||0)),
-   target_profit_currency:String($("managedProfitTargetCurrency")?.value||"USD").toUpperCase()==="UGX"?"UGX":"USD",
    min_quality:Number($("managedMinQuality")?.value||85),
    strong_only:!!$("managedStrongOnly")?.checked,
    low_stability_entry:!!$("managedLowStability")?.checked,
@@ -1695,7 +1681,7 @@ if($("saveManagedSettings"))$("saveManagedSettings").onclick=async()=>{
    max_lot:10,
    max_open_trades:Number($("managedMaxTrades")?.value||1),
    allocation_pct:Number($("managedAllocation")?.value||10),
-   auto_symbol:"XAUUSD"
+   auto_symbol:String($("autoTradeSymbol")?.value||"XAUUSD")
   })});
   saveAutoTraderBrowserState();
   setManagedActionMessage("Trading settings and selected strategies saved successfully.","ok");await refreshManagedStatus();
@@ -1920,18 +1906,11 @@ async function refreshGMMAPage(){
   const d=await api("/api/gmma");
   if(status)status.textContent=d.fresh?"LIVE GMMA FEED":"STALE / WAITING";
   if(updated)updated.textContent=`${d.timeframe||"M1"} · ${d.candles_used||0} completed candles · feed age ${d.age_seconds==null?"--":Math.round(d.age_seconds)+"s"} · ${d.bar_timestamp||"—"}`;
-  const detected=d.detected_direction||d.direction;
-  const decision=detected?`${detected} TREND — ${d.fresh&&d.confirmed?"CONFIRMED":"STALE / NOT EXECUTABLE"}`:"WAITING / NO CONFIRMED TREND";
+  const decision=d.entry_authorized?`${d.direction} REVERSAL — ENTRY SIGNAL`:d.confirmed?`${d.direction} TREND — NO NEW ENTRY`:"WAITING / NO TRADE";
   if($("gmmaDecision"))$("gmmaDecision").textContent=decision;
   if($("gmmaReason"))$("gmmaReason").textContent=d.reason||"Waiting for GMMA data.";
-  const execution=d.execution||{};
-  if($("gmmaExecutionStatus"))$("gmmaExecutionStatus").textContent=String(execution.status||d.execution_status||"UNKNOWN").replaceAll("_"," ");
-  if($("gmmaExecutionReason"))$("gmmaExecutionReason").textContent=execution.reason||d.execution_reason||"Execution status is not available.";
-  if($("gmmaDirection"))$("gmmaDirection").textContent=`TREND: ${detected||"MIXED"}`;
-  if($("gmmaRecentTrend"))$("gmmaRecentTrend").textContent=`RECENT TRADE TREND: ${d.recent_autotrader_trend||"NONE"}`;
-  if($("gmmaNewTrend"))$("gmmaNewTrend").textContent=`NEW GMMA TREND: ${d.new_gmma_trend||"MIXED"}`;
-  if($("gmmaTrendDecision"))$("gmmaTrendDecision").textContent=`DECISION: ${(d.trend_decision||"WAIT").replaceAll("_"," ")}`;
-  if($("gmmaWindow"))$("gmmaWindow").textContent=`CANDLES: ${d.candles_used||0}/61`;
+  if($("gmmaDirection"))$("gmmaDirection").textContent=`TREND: ${d.direction||"MIXED"}`;
+  if($("gmmaWindow"))$("gmmaWindow").textContent=`CANDLES: ${d.candles_used||0}/120`;
   if($("gmmaPrice"))$("gmmaPrice").textContent=`PRICE: ${d.price==null?"--":Number(d.price).toFixed(3)}`;
   const cards=[];
   for(const [key,label] of [["short_group","SHORT-TERM GROUP"],["long_group","LONG-TERM GROUP"]]){
@@ -1939,7 +1918,7 @@ async function refreshGMMAPage(){
    cards.push(`<article class="history-card"><h3>${label}</h3><div class="v16-metrics">${Object.entries(vals).map(([p,v])=>`<span>EMA ${esc(p)}: <b>${Number(v).toFixed(5)}</b></span>`).join(" · ")||"Calculating…"}</div></article>`);
   }
   if($("gmmaGroups"))$("gmmaGroups").innerHTML=cards.join("");
-  if($("gmmaRecords"))$("gmmaRecords").innerHTML=(d.records||[]).map(r=>`<tr><td>${esc(r.time||"—")}</td><td>${Number(r.close).toFixed(5)}</td><td>${Number(r.short_mean).toFixed(5)}</td><td>${Number(r.long_mean).toFixed(5)}</td><td>${esc(r.direction)}</td></tr>`).join("")||'<tr><td colspan="5">Waiting for at least 61 completed candles…</td></tr>';
+  if($("gmmaRecords"))$("gmmaRecords").innerHTML=(d.records||[]).map(r=>`<tr><td>${esc(r.time||"—")}</td><td>${Number(r.close).toFixed(5)}</td><td>${Number(r.short_mean).toFixed(5)}</td><td>${Number(r.long_mean).toFixed(5)}</td><td>${esc(r.direction)}</td></tr>`).join("")||'<tr><td colspan="5">Waiting for at least 120 completed candles…</td></tr>';
  }catch(e){if(status)status.textContent="FEED ERROR";if(updated)updated.textContent=e.message||"Could not load GMMA readings.";if($("gmmaDecision"))$("gmmaDecision").textContent="WAIT — FEED ERROR";}
 }
 setInterval(()=>{if(!$("gmmaPage")?.classList.contains("hidden"))refreshGMMAPage();},3000);
@@ -1973,45 +1952,3 @@ async function refreshCoPilot2Page(){
 setInterval(()=>{if(!$("coPilot2Page")?.classList.contains("hidden"))refreshCoPilot2Page();},3000);
 
 
-
-let gmmaPositionProfitTargetDirty=false;
-if($("gmmaPositionProfitTarget"))$("gmmaPositionProfitTarget").addEventListener("input",()=>{gmmaPositionProfitTargetDirty=true;});
-async function saveRealizedProfitTarget(){
-  const input=$("managedProfitTargetVisible");
-  const individualInput=$("gmmaPositionProfitTarget");
-  const value=Number(input?.value);
-  const individualValue=Number(individualInput?.value);
-  const selectedTargetCurrency=String($("managedProfitTargetCurrency")?.value||"USD").toUpperCase()==="UGX"?"UGX":"USD";
-  if(!Number.isFinite(value)||value<=0||value>1000000000){setManagedActionMessage("Enter a realized-profit target greater than zero.","error");return;}
-  if(!Number.isFinite(individualValue)||individualValue<0||individualValue>1000000000){setManagedActionMessage("Enter a valid GMMA individual-position target (0 disables it).","error");return;}
-  const saveButton=$("saveRealizedProfitTarget");
-  try{
-    if(input)input.disabled=true;
-    if(individualInput)individualInput.disabled=true;
-    if(saveButton){saveButton.disabled=true;saveButton.dataset.oldText=saveButton.textContent;saveButton.textContent="Saving…";}
-    const saved=await api("/api/managed/gmma-profit-target",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({
-      target_profit_total:value,
-      gmma_position_profit_target:individualValue,
-      target_profit_currency:selectedTargetCurrency
-    })});
-    const persistedIndividual=Number(saved?.gmma_position_profit_target);
-    const persistedRunTarget=Number(saved?.target_profit_total);
-    if(!Number.isFinite(persistedIndividual)||Math.abs(persistedIndividual-individualValue)>0.000001){
-      throw new Error("The server did not confirm the GMMA individual-position target. Please try again.");
-    }
-    if(!Number.isFinite(persistedRunTarget)||Math.abs(persistedRunTarget-value)>0.000001){
-      throw new Error("The server did not confirm the realized-profit auto-stop target. Please try again.");
-    }
-    if($("managedProfitTarget"))$("managedProfitTarget").value=String(value);
-    gmmaPositionProfitTargetDirty=false;
-    setManagedActionMessage(`Saved: auto-stop ${selectedTargetCurrency} ${value.toLocaleString()} · GMMA individual close ${selectedTargetCurrency} ${individualValue.toLocaleString()}.`,"ok");
-    await refreshManagedStatus();
-  }catch(e){setManagedActionMessage(e.message||"Could not save profit targets.","error");}
-  finally{
-    if(input)input.disabled=false;
-    if(individualInput)individualInput.disabled=false;
-    if(saveButton){saveButton.disabled=false;saveButton.textContent=saveButton.dataset.oldText||"Save profit targets";}
-  }
-}
-if($("saveRealizedProfitTarget"))$("saveRealizedProfitTarget").onclick=saveRealizedProfitTarget;
-if($("managedProfitTargetVisible"))$("managedProfitTargetVisible").addEventListener("input",()=>{if($("managedProfitTarget"))$("managedProfitTarget").value=$("managedProfitTargetVisible").value;});

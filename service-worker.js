@@ -1,10 +1,10 @@
 /* New cache version forces clients off the old three-photo slideshow assets. */
-const CACHE = "kets-display-v21-copilot2-20261112";
+const CACHE = "kets-display-v21-copilot2-20261110";
 const APP_SHELL = [
   "/",
   "/index.html",
-  "/styles.css?v=20261112gmmaclose-savefix",
-  "/app.js?v=20261112gmmaclose-savefix",
+  "/styles.css?v=20261110copilot2",
+  "/app.js?v=20261110copilot2",
   "/manifest.json",
   "/icon-192.png",
   "/icon-512.png",

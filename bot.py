@@ -520,8 +520,6 @@ def init_db():
                     ("trailing_stop_enabled", "INTEGER DEFAULT 0"),
                     ("auto_symbol", "TEXT DEFAULT 'XAUUSD'"),
                     ("target_profit_total", "DOUBLE PRECISION DEFAULT 25"),
-                    ("target_profit_currency", "TEXT DEFAULT 'USD'"),
-                    ("gmma_position_profit_target", "DOUBLE PRECISION DEFAULT 0"),
                     ("auto_direction", "TEXT"),
                     ("pending_auto_direction", "TEXT"),
                     ("pending_auto_signal_id", "TEXT"),
@@ -1144,9 +1142,6 @@ def _ctrader_account_snapshot(row, retry=True):
         "unrealized_pnl":unrealized,
         "used_margin":used_margin,
         "positions":positions,
-        # An empty list is meaningful only when ProtoOAReconcileRes succeeded.
-        # Never let a failed/omitted positions response masquerade as a flat account.
-        "positions_verified":isinstance(recon_res,dict) and recon_res.get("payload") is not None,
         "server_time":_now_iso(),
         "data_warning":warning,
     }
@@ -1593,18 +1588,7 @@ def managed_toggle():
         return jsonify({"error":"cTrader is not connected."}),400
     if enabled and not row.get("selected_account_id"):
         return jsonify({"error":"Select a cTrader trading account before turning Auto-Trade ON."}),400
-    baseline=_num(row.get("balance")) or _num(row.get("equity")) or 0.0
-    if enabled:
-        # Start the profit-target cycle from a fresh broker balance, never a
-        # possibly stale dashboard/database snapshot. Refuse to arm Auto-Trade
-        # when the baseline cannot be verified.
-        try:
-            live_start=_ctrader_account_snapshot(row)
-            baseline=_num(live_start.get("balance"))
-            if baseline <= 0:
-                raise RuntimeError("cTrader returned an invalid starting balance.")
-        except Exception as start_exc:
-            return jsonify({"error":"Cannot safely start Auto-Trade: could not verify the current cTrader balance. "+str(start_exc)}),400
+    baseline=_num(row.get("equity")) or _num(row.get("balance")) or 0.0
     with DB_LOCK:
         conn=db_conn()
         if enabled:
@@ -1729,11 +1713,6 @@ def managed_status():
             "lot_size":_num(row.get("lot_size")) or .01,
             "profit_target":_num(row.get("target_profit_total")) if row.get("target_profit_total") is not None else (_num(row.get("profit_target")) if row.get("profit_target") is not None else 25),
             "target_profit_total":_num(row.get("target_profit_total")) if row.get("target_profit_total") is not None else (_num(row.get("profit_target")) if row.get("profit_target") is not None else 25),
-            "target_profit_currency":str(row.get("target_profit_currency") or "USD").upper(),
-            # Return the saved GMMA per-position target through the same status
-            # endpoint used by the dashboard refresh. Without this field the
-            # database save succeeds, but the page repopulates the input as 0.
-            "gmma_position_profit_target":_num(row.get("gmma_position_profit_target")),
             "auto_direction":str(row.get("auto_direction") or ""),
             "pending_auto_direction":str(row.get("pending_auto_direction") or ""),
             "pending_auto_signal_id":str(row.get("pending_auto_signal_id") or ""),
@@ -1784,45 +1763,6 @@ def ctrader_select_account():
             conn.close()
     return jsonify({"ok":True,"selected_account_id":selected})
 
-@app.route("/api/managed/gmma-profit-target", methods=["POST"])
-def managed_gmma_profit_target():
-    """Persist only the GMMA per-position target, without touching other controls."""
-    user=_current_user()
-    if not user:
-        return jsonify({"error":"Sign in required."}),401
-    row=_ctrader_row_for_user(user["id"])
-    if not row:
-        return jsonify({"error":"Connect cTrader first."}),400
-    body=request.get_json(silent=True) or {}
-    raw=body.get("gmma_position_profit_target")
-    try:
-        value=float(raw)
-        if not math.isfinite(value) or value < 0 or value > 1000000000:
-            raise ValueError()
-    except Exception:
-        return jsonify({"error":"Enter a valid GMMA individual-position target (0 disables it)."}),400
-    try:
-        run_target=float(body.get("target_profit_total",row.get("target_profit_total") or row.get("profit_target") or 25))
-        if not math.isfinite(run_target) or run_target <= 0 or run_target > 1000000000:
-            raise ValueError()
-    except Exception:
-        return jsonify({"error":"Enter a realized-profit auto-stop target greater than zero."}),400
-    currency=str(body.get("target_profit_currency",row.get("target_profit_currency") or "USD")).upper()
-    if currency not in {"USD","UGX"}:
-        return jsonify({"error":"Choose USD or UGX for the profit-target currency."}),400
-    with DB_LOCK:
-        conn=db_conn()
-        db_execute(conn,"UPDATE ctrader_connections SET gmma_position_profit_target=?,target_profit_total=?,profit_target=?,target_profit_currency=?,updated_at=? WHERE id=?",
-                   (value,run_target,run_target,currency,_now_iso(),row["id"]))
-        conn.commit()
-        saved=db_execute(conn,"SELECT gmma_position_profit_target,target_profit_total,profit_target,target_profit_currency FROM ctrader_connections WHERE id=?",(row["id"],)).fetchone()
-        conn.close()
-    saved=dict(saved) if saved else {}
-    return jsonify({"ok":True,
-                    "gmma_position_profit_target":_num(saved.get("gmma_position_profit_target")),
-                    "target_profit_total":_num(saved.get("target_profit_total") if saved.get("target_profit_total") is not None else saved.get("profit_target")),
-                    "target_profit_currency":str(saved.get("target_profit_currency") or currency).upper()})
-
 @app.route("/api/managed/settings", methods=["GET","POST"])
 def managed_settings():
     user=_current_user()
@@ -1835,12 +1775,8 @@ def managed_settings():
         except Exception: lot=.01
         try: pressure_ratio_threshold=max(1.0,min(float(body.get("pressure_ratio_threshold",row.get("pressure_ratio_threshold") or 2.0)),100.0))
         except Exception: pressure_ratio_threshold=2.0
-        try: target=max(0.01,min(float(body.get("target_profit_total",body.get("profit_target",row.get("target_profit_total") or row.get("profit_target") or 25))),1000000000))
+        try: target=max(0,min(float(body.get("target_profit_total",body.get("profit_target",row.get("target_profit_total") or row.get("profit_target") or 25))),100000))
         except Exception: target=25
-        target_currency=str(body.get("target_profit_currency",row.get("target_profit_currency") or "USD")).upper()
-        if target_currency not in {"USD","UGX"}: target_currency="USD"
-        try: gmma_position_profit_target=max(0.0,min(float(body.get("gmma_position_profit_target",row.get("gmma_position_profit_target") or 0)),1000000000))
-        except Exception: gmma_position_profit_target=0.0
         try: quality=max(0,min(float(body.get("min_quality",row.get("min_quality") if row.get("min_quality") is not None else 40)),100))
         except Exception: quality=40
         strong=1 if bool(body.get("strong_only",row.get("strong_only") or 0)) else 0
@@ -1865,9 +1801,8 @@ def managed_settings():
         low_stability=1 if bool(body.get("low_stability_entry",row.get("low_stability_entry") or 0)) else 0
         high_stability=1 if bool(body.get("high_stability_entry",row.get("high_stability_entry") or 0)) else 0
         opposite_confirmation=1 if bool(body.get("opposite_signal_confirmation",row.get("opposite_signal_confirmation") or 0)) else 0
-        # The active automatic execution engine is GMMA on Gold M1 only.
-        # Ignore legacy strategy-page symbol selections for this executor.
-        auto_symbol="XAUUSD"
+        auto_symbol=str(body.get("auto_symbol",row.get("auto_symbol") or "XAUUSD")).replace("/","").replace("_","").replace("-","").upper()
+        if auto_symbol not in {"XAUUSD","BTCUSD"}: auto_symbol="XAUUSD"
         try: max_lot=max(lot,min(float(body.get("max_lot",row.get("max_lot") or 10)),10))
         except Exception: max_lot=max(lot,10)
         try: max_open=max(1,min(int(body.get("max_open_trades",row.get("max_open_trades") or 1)),10))
@@ -1877,9 +1812,9 @@ def managed_settings():
         break_even=1 if bool(body.get("break_even_enabled",row.get("break_even_enabled") or 0)) else 0
         trailing=1 if bool(body.get("trailing_stop_enabled",row.get("trailing_stop_enabled") or 0)) else 0
         with DB_LOCK:
-            conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET lot_size=?,profit_target=?,target_profit_total=?,min_quality=?,strong_only=?,smc_only=?,strategy_selection_json=?,kets_strategy_enabled=?,low_stability_entry=?,high_stability_entry=?,opposite_signal_confirmation=?,max_lot=?,max_open_trades=?,allocation_pct=?,break_even_enabled=?,trailing_stop_enabled=?,auto_symbol=?,pressure_ratio_threshold=?,target_profit_currency=?,gmma_position_profit_target=?,updated_at=? WHERE id=?",(lot,target,target,quality,strong,smc_only,strategy_selection_json,kets_strategy_enabled,low_stability,high_stability,opposite_confirmation,max_lot,max_open,allocation,break_even,trailing,auto_symbol,pressure_ratio_threshold,target_currency,gmma_position_profit_target,_now_iso(),row["id"])); conn.commit(); conn.close()
+            conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET lot_size=?,profit_target=?,target_profit_total=?,min_quality=?,strong_only=?,smc_only=?,strategy_selection_json=?,kets_strategy_enabled=?,low_stability_entry=?,high_stability_entry=?,opposite_signal_confirmation=?,max_lot=?,max_open_trades=?,allocation_pct=?,break_even_enabled=?,trailing_stop_enabled=?,auto_symbol=?,pressure_ratio_threshold=?,updated_at=? WHERE id=?",(lot,target,target,quality,strong,smc_only,strategy_selection_json,kets_strategy_enabled,low_stability,high_stability,opposite_confirmation,max_lot,max_open,allocation,break_even,trailing,auto_symbol,pressure_ratio_threshold,_now_iso(),row["id"])); conn.commit(); conn.close()
         row=_ctrader_row_for_user(user["id"])
-    return jsonify({"ok":True,"lot_size":_num(row.get("lot_size")) or .01,"profit_target":_num(row.get("target_profit_total")) if row.get("target_profit_total") is not None else (_num(row.get("profit_target")) if row.get("profit_target") is not None else 25),"target_profit_total":_num(row.get("target_profit_total")) if row.get("target_profit_total") is not None else (_num(row.get("profit_target")) if row.get("profit_target") is not None else 25),"target_profit_currency":str(row.get("target_profit_currency") or "USD").upper(),"gmma_position_profit_target":_num(row.get("gmma_position_profit_target")),"min_quality":_num(row.get("min_quality")) if row.get("min_quality") is not None else 40,"strong_only":bool(row.get("strong_only")),"smc_only":False,"kets_strategy_enabled":bool(row.get("kets_strategy_enabled") if row.get("kets_strategy_enabled") is not None else 0),"strategy_selection":json.loads(row.get("strategy_selection_json") or '["smc"]') if str(row.get("strategy_selection_json") or "").strip() else ["smc"],"low_stability_entry":bool(row.get("low_stability_entry")),"high_stability_entry":bool(row.get("high_stability_entry")),"opposite_signal_confirmation":bool(row.get("opposite_signal_confirmation")),"max_lot":_num(row.get("max_lot")) or 10,"max_open_trades":int(row.get("max_open_trades") or 1),"allocation_pct":_num(row.get("allocation_pct")) or 10,"break_even_enabled":bool(row.get("break_even_enabled")),"trailing_stop_enabled":bool(row.get("trailing_stop_enabled")),"auto_symbol":str(row.get("auto_symbol") or "XAUUSD").upper(),"pressure_ratio_threshold":_num(row.get("pressure_ratio_threshold")) or 2.0})
+    return jsonify({"ok":True,"lot_size":_num(row.get("lot_size")) or .01,"profit_target":_num(row.get("target_profit_total")) if row.get("target_profit_total") is not None else (_num(row.get("profit_target")) if row.get("profit_target") is not None else 25),"target_profit_total":_num(row.get("target_profit_total")) if row.get("target_profit_total") is not None else (_num(row.get("profit_target")) if row.get("profit_target") is not None else 25),"min_quality":_num(row.get("min_quality")) if row.get("min_quality") is not None else 40,"strong_only":bool(row.get("strong_only")),"smc_only":False,"kets_strategy_enabled":bool(row.get("kets_strategy_enabled") if row.get("kets_strategy_enabled") is not None else 0),"strategy_selection":json.loads(row.get("strategy_selection_json") or '["smc"]') if str(row.get("strategy_selection_json") or "").strip() else ["smc"],"low_stability_entry":bool(row.get("low_stability_entry")),"high_stability_entry":bool(row.get("high_stability_entry")),"opposite_signal_confirmation":bool(row.get("opposite_signal_confirmation")),"max_lot":_num(row.get("max_lot")) or 10,"max_open_trades":int(row.get("max_open_trades") or 1),"allocation_pct":_num(row.get("allocation_pct")) or 10,"break_even_enabled":bool(row.get("break_even_enabled")),"trailing_stop_enabled":bool(row.get("trailing_stop_enabled")),"auto_symbol":str(row.get("auto_symbol") or "XAUUSD").upper(),"pressure_ratio_threshold":_num(row.get("pressure_ratio_threshold")) or 2.0})
 
 @app.route("/api/managed/move-break-even", methods=["POST"])
 def managed_move_break_even():
@@ -2300,27 +2235,6 @@ def _signal_id(sig):
     return str(sig.get("id") or (str(sig.get("asset"))+"-"+str(sig.get("timestamp"))))
 
 
-def _kets_usd_ugx_rate():
-    """Return cached live USD/UGX rate for profit-target currency conversion."""
-    try:
-        now=time.time()
-        with _USD_UGX_RATE_LOCK:
-            cached=_USD_UGX_RATE_CACHE.get("rate")
-            updated=_USD_UGX_RATE_CACHE.get("updated_at") or 0
-        if cached and now-updated < 3600: return float(cached)
-        response=requests.get("https://open.er-api.com/v6/latest/USD",timeout=5)
-        response.raise_for_status()
-        rate=float((response.json().get("rates") or {}).get("UGX") or 0)
-        if not math.isfinite(rate) or rate<=0: raise ValueError("Invalid USD/UGX rate")
-        with _USD_UGX_RATE_LOCK:
-            _USD_UGX_RATE_CACHE.update({"rate":rate,"updated_at":now,"source":"open.er-api.com"})
-        return rate
-    except Exception:
-        with _USD_UGX_RATE_LOCK:
-            cached=_USD_UGX_RATE_CACHE.get("rate")
-        if cached: return float(cached)
-        raise RuntimeError("Live USD/UGX rate unavailable; profit target check paused safely.")
-
 def _auto_profit_progress(row):
     """Profit progress for the current Auto-Trade run.
 
@@ -2524,52 +2438,6 @@ def _queue_and_execute_ctrader(row, sig, automatic=True):
         if not tp or not sl: raise RuntimeError("The current signal has no complete entry, target and stop-loss plan.")
         order["take_profit"]=tp; order["stop_loss"]=sl
     result,selected=_ctrader_execute_order(row,order,auto_label=automatic)
-    # A cTrader execution acknowledgement is not sufficient evidence that the
-    # position is visible on the selected account. Verify automatic fills before
-    # persisting the GMMA direction/entry marker, so a rejected or unfilled order
-    # cannot make the dashboard look as though an entry is active.
-    if automatic:
-        expected_side=direction
-        expected_symbol_id=str((result or {}).get("symbol_id") or "")
-        verified_position=None
-        last_verify_error=None
-        for attempt in range(7):
-            try:
-                _ctrader_invalidate_snapshot(row)
-                snap=_ctrader_account_snapshot(row)
-                if not snap.get("positions_verified"):
-                    raise RuntimeError(snap.get("data_warning") or "cTrader did not verify positions after the entry request.")
-                broker_positions=list(snap.get("positions") or [])
-                matching=[]
-                for pos in broker_positions:
-                    label=str(pos.get("label") or "").upper()
-                    comment=str(pos.get("comment") or "").upper()
-                    side=str(pos.get("side") or pos.get("direction") or "").upper()
-                    symbol_ok=bool(expected_symbol_id) and str(pos.get("symbolId") or "")==expected_symbol_id
-                    is_kets_auto=(label=="KETS_AUTO" or comment.startswith("KETS AUTOMATIC"))
-                    if side==expected_side and symbol_ok and is_kets_auto:
-                        verified_position=pos
-                        break
-                    if side==expected_side and symbol_ok:
-                        matching.append(pos)
-                # Some cTrader accounts omit optional label/comment metadata.
-                # Accept an unlabelled fill only when it is the sole position on
-                # the selected account and matches both the requested side and
-                # the exact broker symbol ID returned for this order. Ambiguous
-                # manual/other-strategy positions are never adopted.
-                if not verified_position and len(broker_positions)==1 and len(matching)==1:
-                    verified_position=matching[0]
-                if verified_position:
-                    break
-            except Exception as verify_exc:
-                last_verify_error=verify_exc
-            if attempt < 6:
-                time.sleep(1.0)
-        if not verified_position:
-            detail=(f" Last broker check: {last_verify_error}" if last_verify_error else "")
-            raise RuntimeError("cTrader acknowledged the GMMA market order but KETS could not verify the matching KETS_AUTO position. The entry state was not recorded; check cTrader Positions before retrying."+detail)
-        result["broker_position_verified"]=True
-        result["verified_position_id"]=verified_position.get("positionId")
     # No broker-side SL/TP amendment or verification for automatic trades.
     # Manual orders keep the original broker-protection verification behaviour.
     if not automatic:
@@ -3110,12 +2978,12 @@ def _gmma_indicator_state(snapshot=None):
         "ok": True, "timeframe": "M1", "settings": {"short_emas": list(short_periods), "long_emas": list(long_periods)},
         "candles_used": len(candles), "direction": None, "previous_direction": None,
         "reversal": False, "entry_trigger": False, "confirmed": False,
-        "indicators": {}, "records": [], "reason": "Waiting for at least 61 completed Gold M1 candles.",
+        "indicators": {}, "records": [], "reason": "Waiting for at least 120 completed Gold M1 candles.",
         "timestamp_utc": snapshot.get("source_data_timestamp_utc") or snapshot.get("timestamp_utc"),
         "bar_timestamp": candles[-1].get("datetime") if candles else None,
     }
-    if len(candles) < 61:
-        result["reason"] = f"Need 61 completed Gold M1 candles to calculate the 60-period EMA on the latest two completed bars; received {len(candles)}."
+    if len(candles) < 120:
+        result["reason"] = f"Need 120 completed Gold M1 candles for stable GMMA readings; received {len(candles)}."
         return result
     closes = [float(c["close"]) for c in candles]
     series = {}
@@ -3163,79 +3031,21 @@ def _gmma_indicator_state(snapshot=None):
                      "direction": "BUY" if group_mean(i, short_periods) > group_mean(i, long_periods) else "SELL"}
                     for i in range(max(0, last - 19), last + 1)],
         "reason": (f"Confirmed {direction} GMMA reversal: the short-group average crossed {'above' if direction == 'BUY' else 'below'} the long-group average.")
-                  if reversal else (f"Confirmed GMMA {direction} trend; entry is authorized without waiting for another crossover." if direction else "GMMA groups are overlapping or mixed; no trade."),
+                  if reversal else (f"GMMA trend is {direction}; waiting for a fresh group reversal." if direction else "GMMA groups are overlapping or mixed; no trade."),
     })
     return result
 
 
-def _gmma_feed_age_seconds(snapshot=None):
-    """Use one timestamp/freshness calculation for the GMMA UI and executor."""
-    snapshot = snapshot if isinstance(snapshot, dict) else {}
-    raw_stamp = snapshot.get("source_data_timestamp_utc") or snapshot.get("timestamp_utc")
-    try:
-        stamp = datetime.datetime.fromisoformat(str(raw_stamp).replace("Z", "+00:00"))
-        if stamp.tzinfo is None:
-            stamp = stamp.replace(tzinfo=datetime.timezone.utc)
-        return (datetime.datetime.now(datetime.timezone.utc) - stamp.astimezone(datetime.timezone.utc)).total_seconds()
-    except Exception:
-        return None
-
-
-def _gmma_is_fresh(snapshot=None):
-    age = _gmma_feed_age_seconds(snapshot)
-    return age is not None and 0 <= age <= 240
-
-
-# GMMA is the trend producer. It publishes one immutable, candle-keyed event;
-# the cTrader executor consumes that event instead of recalculating GMMA on
-# every execution-worker pass. The latest event is retained for all connected
-# accounts until their own persisted signal claim prevents duplicate execution.
-GMMA_TREND_EVENT_LOCK = Lock()
-GMMA_TREND_EVENT = None
-
-
-def _publish_gmma_trend_event(snapshot=None):
-    global GMMA_TREND_EVENT
-    snapshot = snapshot if isinstance(snapshot, dict) else {}
-    age = _gmma_feed_age_seconds(snapshot)
-    if age is None or age < 0 or age > 240:
-        return None
-    state = _gmma_indicator_state(snapshot)
-    if not state.get("confirmed") or state.get("direction") not in {"BUY", "SELL"}:
-        return None
-    event = {
-        "event_id": str(state.get("signal_id") or ""),
-        "direction": state["direction"],
-        "price": state.get("price") or snapshot.get("gold_price"),
-        "bar_timestamp": state.get("bar_timestamp"),
-        "published_at": _now_iso(),
-        "fresh": True,
-        "source": "GMMA_PAGE_TREND_PUBLISHER",
-    }
-    if not event["event_id"]:
-        return None
-    with GMMA_TREND_EVENT_LOCK:
-        # Never replace a newer candle event with an older or duplicate event.
-        current = GMMA_TREND_EVENT or {}
-        if not current or str(current.get("direction") or "").upper() != event["direction"]:
-            GMMA_TREND_EVENT = event
-        else:
-            # Same-side candles are not new trend instructions. Keep the last
-            # published event ID stable until GMMA confirms the opposite side.
-            event = current
-    return event
-
-
 def _latest_autotrader_signal(requested_symbol, kets_strategy_enabled=True, selected_strategies=None):
-    """Return the currently confirmed GMMA direction for Gold, including an established trend."""
+    """Return only a fresh GMMA group-crossover reversal for Gold."""
     with V16_MARKET_LOCK:
         market = dict(COPILOT_SIGNAL_SNAPSHOT)
     state = _gmma_indicator_state(market)
-    if not state.get("confirmed") or not state.get("direction") or str(requested_symbol or "XAUUSD").upper().replace("/", "") not in {"XAUUSD", "XAU", "GOLD"}:
+    if not state.get("reversal") or str(requested_symbol or "XAUUSD").upper().replace("/", "") not in {"XAUUSD", "XAU", "GOLD"}:
         return None
     return {"id":state.get("signal_id"),"asset":"GOLD","symbol":"XAUUSD","direction":state["direction"],
             "signal":state["direction"],"entry":state.get("price"),"price":state.get("price"),"market_price":state.get("price"),
-            "timestamp_utc":state.get("bar_timestamp"),"signal_source":"GMMA_CONFIRMED_TREND","_signal_source":"GMMA_CONFIRMED_TREND"}
+            "timestamp_utc":state.get("bar_timestamp"),"signal_source":"GMMA_REVERSAL","_signal_source":"GMMA_REVERSAL"}
 
 
 def _ctrader_autotrade_once():
@@ -3243,20 +3053,13 @@ def _ctrader_autotrade_once():
     session=trading_session()
     with V16_MARKET_LOCK:
         market=dict(COPILOT_SIGNAL_SNAPSHOT)
-    age=_gmma_feed_age_seconds(market)
-    fresh=bool(market) and age is not None and 0 <= age <= 240
-    # Consume the trend event published by GMMA when its completed-candle
-    # state changes. The executor does not run the indicator calculation.
-    with GMMA_TREND_EVENT_LOCK:
-        trend_event=dict(GMMA_TREND_EVENT) if isinstance(GMMA_TREND_EVENT, dict) else None
-    if trend_event and trend_event.get("fresh") and fresh:
-        gmma={"confirmed":True,"direction":trend_event.get("direction"),
-              "signal_id":trend_event.get("event_id"),"price":trend_event.get("price"),
-              "bar_timestamp":trend_event.get("bar_timestamp"),"reversal":True,
-              "reason":"New confirmed GMMA trend event received."}
-    else:
-        gmma={"confirmed":False,"reversal":False,"reason":"Waiting for GMMA to publish a fresh confirmed trend event."}
-    direction=gmma.get("direction") if gmma.get("confirmed") else None
+    try:
+        stamp=datetime.datetime.fromisoformat(str(market.get("source_data_timestamp_utc") or market.get("timestamp_utc")).replace("Z","+00:00"))
+        age=(datetime.datetime.now(datetime.timezone.utc)-stamp).total_seconds()
+    except Exception: age=999999
+    fresh=bool(market) and 0 <= age <= 240
+    gmma=_gmma_indicator_state(market) if fresh else {"confirmed":False,"reversal":False,"reason":"Gold candle feed is stale or unavailable."}
+    direction=gmma.get("direction") if gmma.get("confirmed") and gmma.get("reversal") else None
     signal_id=str(gmma.get("signal_id") or "")
     with DB_LOCK:
         conn=db_conn(); rows=db_execute(conn,"SELECT * FROM ctrader_connections WHERE (auto_enabled=1 OR auto_direction IS NOT NULL OR auto_entry_signal_id IS NOT NULL) AND status IN ('AUTHORIZED','CONNECTED')").fetchall(); conn.close()
@@ -3264,192 +3067,22 @@ def _ctrader_autotrade_once():
     for rr in rows:
         row=dict(rr)
         try:
-            # The configured target is based on REALIZED profit only: current broker
-            # balance minus the balance captured when this Auto-Trade run started.
-            # Open/unrealized P/L is deliberately excluded from the target calculation.
-            if bool(row.get("auto_enabled")):
-                try:
-                    account_snap=_ctrader_account_snapshot(row)
-                    live_balance=_num(account_snap.get("balance"))
-                    start_balance=_num(row.get("auto_cycle_start_equity"))
-                    realized_run=(live_balance-start_balance) if start_balance>0 and live_balance>0 else 0.0
-                    target=_num(row.get("target_profit_total") or row.get("profit_target"))
-                    target_currency=str(row.get("target_profit_currency") or "USD").upper()
-                    account_currency=str(account_snap.get("currency") or "USD").upper()
-                    if target_currency != account_currency:
-                        fx=_kets_usd_ugx_rate()
-                        if target_currency=="USD" and account_currency=="UGX": target*=fx
-                        elif target_currency=="UGX" and account_currency=="USD": target/=fx
-                        else: raise RuntimeError("Unsupported cTrader account currency for profit target conversion: "+account_currency)
-                    with DB_LOCK:
-                        conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET balance=?,equity=?,free_margin=?,positions_json=?,auto_profit_total=?,updated_at=? WHERE id=?",(live_balance,account_snap.get("equity",0),account_snap.get("free_margin",0),json.dumps(account_snap.get("positions",[])),realized_run,_now_iso(),row["id"])); conn.commit(); conn.close()
-                    if target>0 and realized_run>=target:
-                        # Disable first so a broker-close error can never allow another entry.
-                        with DB_LOCK:
-                            conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET auto_enabled=0,auto_direction=NULL,auto_entry_signal_id=NULL,pending_auto_direction=NULL,pending_auto_signal_id=NULL,last_signal_id=NULL,last_error=NULL,updated_at=? WHERE id=?",(_now_iso(),row["id"])); conn.commit(); conn.close()
-                        row["auto_enabled"]=0
-                        close_exc=None
-                        for close_attempt in range(3):
-                            try:
-                                _ctrader_close_all_positions(row)
-                                close_exc=None
-                                break
-                            except Exception as attempt_exc:
-                                close_exc=attempt_exc
-                                app.logger.warning("Profit-target close-all attempt %s/3 failed: %s",close_attempt+1,attempt_exc)
-                                if close_attempt < 2:
-                                    time.sleep(1.0 + close_attempt)
-                        if close_exc is None:
-                            app.logger.info("GMMA Auto-Trader stopped and all selected-account positions closed: realized profit target %.2f reached (%.2f).",target,realized_run)
-                        else:
-                            with DB_LOCK:
-                                conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET last_error=?,updated_at=? WHERE id=?",("Profit target reached; Auto-Trader is OFF, but cTrader close-all failed after 3 attempts and needs attention: "+str(close_exc)[:300],_now_iso(),row["id"])); conn.commit(); conn.close()
-                            app.logger.exception("GMMA profit target reached but account-wide close failed after retries")
-                        continue
-                    # A direction saved in the database is not proof a position still exists.
-                    auto_positions=[p for p in (account_snap.get("positions") or []) if str(p.get("label") or "").upper()=="KETS_AUTO" or str(p.get("comment") or "").upper().startswith("KETS AUTOMATIC")]
-                    stored_direction=str(row.get("auto_direction") or "").upper()
-                    # A verified snapshot with no labelled positions is NOT
-                    # proof that the managed trade is gone: some cTrader adapters
-                    # omit optional label/comment metadata. Preserve the saved
-                    # direction while any broker position remains so the unique-
-                    # position fallback below can identify it safely. Clear the
-                    # marker only when the broker explicitly confirms a flat account.
-                    if (account_snap.get("positions_verified") and stored_direction
-                            and not auto_positions and not (account_snap.get("positions") or [])):
-                        with DB_LOCK:
-                            conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET auto_direction=NULL,auto_entry_signal_id=NULL,last_signal_id=NULL,updated_at=? WHERE id=?",(_now_iso(),row["id"])); conn.commit(); conn.close()
-                        row["auto_direction"]=""; row["auto_entry_signal_id"]=""
-                except Exception as target_exc:
-                    # Fail closed: if the broker balance/FX/position check cannot
-                    # be verified, do not allow another automatic entry. The user
-                    # can inspect last_error and explicitly restart after recovery.
-                    with DB_LOCK:
-                        conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET auto_enabled=0,auto_direction=NULL,auto_entry_signal_id=NULL,pending_auto_direction=NULL,pending_auto_signal_id=NULL,last_signal_id=NULL,last_error=?,updated_at=? WHERE id=?",("Auto-Trader safely stopped because its profit-target check could not be verified: "+str(target_exc)[:350],_now_iso(),row["id"])); conn.commit(); conn.close()
-                    row["auto_enabled"]=0
-                    app.logger.exception("GMMA profit-target check failed; Auto-Trader disabled to prevent unchecked entries")
-                    continue
-            # Auto-Trader is an event consumer, not a continuous GMMA scanner.
-            # The separate Invest Shares worker owns individual floating-profit checks.
-            if not fresh or not direction or not signal_id:
-                continue
-            if (str(row.get("auto_direction") or "").upper()==direction
-                    and str(row.get("auto_entry_signal_id") or "")==signal_id):
-                continue
+            if not fresh or not session["active"]: continue
             # GMMA is a Gold-only indicator strategy. Never route its
             # confirmed signal into BTC or another selected instrument.
             if str(row.get("auto_symbol") or "XAUUSD").upper().replace("/", "") not in {"XAUUSD", "GOLD", "XAU"}: continue
             previous=str(row.get("auto_direction") or "").upper()
-            # Broker positions are the source of truth, not the cached DB direction.
-            # This also repairs the case where a position exists but auto_direction
-            # was cleared/stale after a restart or a previous execution error.
-            live_snap=_ctrader_account_snapshot(row)
-            if not live_snap.get("positions_verified"):
-                raise RuntimeError(live_snap.get("data_warning") or "cTrader open positions could not be verified; GMMA reversal is paused to prevent duplicate/opposite trades.")
-            all_live_positions=list(live_snap.get("positions") or [])
-            auto_positions=[p for p in all_live_positions
-                            if str(p.get("label") or "").upper()=="KETS_AUTO"
-                            or str(p.get("comment") or "").upper().startswith("KETS AUTOMATIC")]
-            # Some cTrader broker/account adapters omit custom labels/comments
-            # from reconcile snapshots. If KETS has a recorded automatic direction
-            # and there is exactly one XAUUSD position on the selected account,
-            # use that uniquely identifiable position as the managed trade.
-            # Never guess when multiple positions exist or their side conflicts.
-            def _position_direction(position):
-                # cTrader adapters do not all expose the side under the same key.
-                # Normalize every documented/observed representation before
-                # deciding whether the one broker position is the saved GMMA trade.
-                for key in ("side", "direction", "tradeSide", "trade_side", "tradeType", "trade_type", "positionType", "position_type"):
-                    raw=str(position.get(key) or "").upper()
-                    if raw in {"BUY", "LONG", "BUY_SIDE", "TRADETYPE_BUY", "1"} or raw.endswith(".BUY"):
-                        return "BUY"
-                    if raw in {"SELL", "SHORT", "SELL_SIDE", "TRADETYPE_SELL", "2"} or raw.endswith(".SELL"):
-                        return "SELL"
-                return None
-            if not auto_positions and str(row.get("auto_direction") or "").upper() in {"BUY","SELL"} and len(all_live_positions)==1:
-                candidate=all_live_positions[0]
-                candidate_side=_position_direction(candidate)
-                expected=str(row.get("auto_direction") or "").upper()
-                if candidate_side==expected:
-                    auto_positions=[candidate]
-            live_directions={side for p in auto_positions if (side:=_position_direction(p))}
-            # If any live automatic position opposes the current confirmed GMMA
-            # direction, close ALL KETS_AUTO positions and verify broker flatness
-            # before allowing the replacement order. If cTrader omits its side,
-            # the persisted previous direction is the fallback reversal evidence.
-            opposite_live=bool(direction and any(side != direction for side in live_directions))
-            stale_db_direction=bool(previous and direction and previous != direction)
-            # A confirmed change from the previously executed GMMA direction
-            # always requires closing the old KETS_AUTO position(s), even when
-            # cTrader's side metadata is missing or inconsistent.
-            reversal_needs_close=bool(direction and auto_positions and (opposite_live or stale_db_direction))
-            if previous and not auto_positions and live_snap.get("positions_verified"):
-                if all_live_positions:
-                    # Positions exist but cTrader omitted the automatic label and
-                    # the unique matching-side fallback did not identify exactly
-                    # one safe GMMA position. Never assume the account is flat or
-                    # open a reversal over an unidentified/manual position.
-                    raise RuntimeError("GMMA Auto-Trader paused: cTrader reports open positions but the previous GMMA trade cannot be uniquely identified. No position was closed and no opposite trade was opened.")
-                # A verified, genuinely flat broker snapshot means the old
-                # automatic position is gone; allow the next valid GMMA entry.
-                with DB_LOCK:
-                    conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET auto_direction=NULL,auto_entry_signal_id=NULL,last_signal_id=NULL,updated_at=? WHERE id=?",(_now_iso(),row["id"])); conn.commit(); conn.close()
-                previous=""
-                row["auto_direction"]=""
-                row["auto_entry_signal_id"]=""
-            if direction and (reversal_needs_close or (stale_db_direction and not auto_positions)):
-                if auto_positions:
-                    managed_are_labelled=all(
-                        str(p.get("label") or "").upper()=="KETS_AUTO"
-                        or str(p.get("comment") or "").upper().startswith("KETS AUTOMATIC")
-                        for p in auto_positions
-                    )
-                    managed_ids=[str(p.get("positionId") or p.get("id") or "") for p in auto_positions]
-                    if managed_are_labelled:
-                        _ctrader_close_positions(row, auto_only=True)  # raises unless cTrader confirms closure
-                    elif all(managed_ids):
-                        # Explicitly close only the uniquely matched recorded KETS
-                        # position; do not use account-wide close for a reversal.
-                        _ctrader_close_positions(row, auto_only=False, position_ids=managed_ids)
-                    else:
-                        raise RuntimeError("GMMA reversal paused: the old automatic position could not be uniquely identified for a safe close.")
-                    # Re-read the broker after the close acknowledgement. Never
-                    # submit the replacement BUY/SELL while an old KETS_AUTO
-                    # position is still visible on the selected account.
-                    _ctrader_invalidate_snapshot(row)
-                    verify_snap=_ctrader_account_snapshot(row)
-                    if not verify_snap.get("positions_verified"):
-                        raise RuntimeError(verify_snap.get("data_warning") or "GMMA reversal paused: cTrader could not verify the selected account after closing the old position; replacement entry was not sent.")
-                    verified_positions=list(verify_snap.get("positions") or [])
-                    managed_id_set={pid for pid in managed_ids if pid}
-                    remaining_managed_ids=[str(p.get("positionId") or p.get("id") or "")
-                                           for p in verified_positions
-                                           if str(p.get("positionId") or p.get("id") or "") in managed_id_set]
-                    remaining_auto=[p for p in verified_positions
-                                    if str(p.get("label") or "").upper()=="KETS_AUTO"
-                                    or str(p.get("comment") or "").upper().startswith("KETS AUTOMATIC")]
-                    if remaining_managed_ids or remaining_auto:
-                        raise RuntimeError("GMMA reversal paused: cTrader still reports the old automatic position open; replacement entry was not sent.")
+            # Close the current KETS automatic position on a confirmed opposite GMMA crossover.
+            trend_direction=gmma.get("trend_direction")
+            flipped=bool(gmma.get("reversal"))
+            if previous and flipped and trend_direction and trend_direction != previous:
+                _ctrader_close_positions(row, auto_only=True)
                 with DB_LOCK:
                     conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET auto_direction=NULL,auto_entry_signal_id=NULL,pending_auto_direction=NULL,pending_auto_signal_id=NULL,last_signal_id=NULL,last_error=NULL,updated_at=? WHERE id=?",(_now_iso(),row["id"])); conn.commit(); conn.close()
                 previous=""
                 row["auto_direction"]=""
-                row["auto_entry_signal_id"]=""
-                auto_positions=[]
-                live_directions=set()
-            # A live position already in the GMMA direction is the active trade;
-            # sync the DB marker and never stack a duplicate entry.
-            if direction and auto_positions and live_directions == {direction}:
-                if previous != direction:
-                    with DB_LOCK:
-                        conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET auto_direction=?,updated_at=? WHERE id=?",(direction,_now_iso(),row["id"])); conn.commit(); conn.close()
-                continue
-            # Auto-Trader OFF never authorizes a fresh entry. Existing automatic
-            # positions can still be closed on an opposite confirmed trend above.
-            if not bool(row.get("auto_enabled")) or not direction: continue
-            if not session.get("active"):
-                raise RuntimeError(session.get("reason") or f"New GMMA entries are blocked during {session.get('mode') or 'the current session'}; existing opposite positions have already been handled.")
-            if previous==direction and not opposite_live: continue
+            # Auto-Trader OFF never authorizes a fresh entry.
+            if not bool(row.get("auto_enabled")) or not direction or previous==direction: continue
             if not signal_id or str(row.get("auto_entry_signal_id") or "")==signal_id: continue
             price=_num(market.get("gold_price")) or _num(gmma.get("price"))
             if not price or price <= 0: continue
@@ -3457,7 +3090,7 @@ def _ctrader_autotrade_once():
             row["auto_symbol"]="XAUUSD"
             if _num(row.get("auto_cycle_start_equity")) <= 0:
                 try:
-                    snap=_ctrader_account_snapshot(row); baseline=_num(snap.get("balance")) or _num(snap.get("equity"))
+                    snap=_ctrader_account_snapshot(row); baseline=_num(snap.get("equity")) or _num(snap.get("balance"))
                     with DB_LOCK:
                         conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET auto_cycle_start_equity=?,equity=?,balance=?,free_margin=?,positions_json=?,auto_profit_total=?,updated_at=? WHERE id=?",(baseline,snap.get("equity",0),snap.get("balance",0),snap.get("free_margin",0),json.dumps(snap.get("positions",[])),0,_now_iso(),row["id"])); conn.commit(); conn.close()
                     row["auto_cycle_start_equity"]=baseline
@@ -3470,92 +3103,12 @@ def _ctrader_autotrade_once():
                 _queue_and_execute_ctrader(row,sig,automatic=True)
             except Exception as exec_exc:
                 with DB_LOCK:
-                    conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET last_signal_id=NULL,last_error=?,updated_at=? WHERE id=? AND last_signal_id=?",("GMMA Auto-Trader execution failed: "+str(exec_exc)[:420],_now_iso(),row["id"],claim)); conn.commit(); conn.close()
+                    conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET last_signal_id=NULL,last_error=?,updated_at=? WHERE id=? AND last_signal_id=?",("Co-pilot execution failed: "+str(exec_exc)[:420],_now_iso(),row["id"],claim)); conn.commit(); conn.close()
                 raise
         except Exception as exc:
             app.logger.warning("GMMA Auto-Trader skipped: %s",exc)
             with DB_LOCK:
                 conn=db_conn(); db_execute(conn,"UPDATE ctrader_connections SET last_error=?,updated_at=? WHERE id=?",(str(exc)[:500],_now_iso(),row["id"])); conn.commit(); conn.close()
-
-
-def _ctrader_monitor_gmma_position_profit_targets_once():
-    """Invest Shares profit monitor: close only GMMA positions at their saved target.
-
-    This protection runs independently of GMMA trend publication and of the
-    Auto-Trader entry/reversal decision path. The browser does not need to stay open.
-    """
-    with DB_LOCK:
-        conn=db_conn()
-        rows=db_execute(conn,"SELECT * FROM ctrader_connections WHERE (auto_enabled=1 OR auto_direction IS NOT NULL OR auto_entry_signal_id IS NOT NULL) AND status IN ('AUTHORIZED','CONNECTED')").fetchall()
-        conn.close()
-    for rr in rows:
-        row=dict(rr)
-        try:
-            target=_num(row.get("gmma_position_profit_target"))
-            if target <= 0:
-                continue
-            snap=_ctrader_account_snapshot(row)
-            if not snap.get("positions_verified"):
-                raise RuntimeError(snap.get("data_warning") or "cTrader positions could not be verified for the GMMA profit monitor.")
-            positions=list(snap.get("positions") or [])
-            managed=[p for p in positions if str(p.get("label") or "").upper()=="KETS_AUTO"
-                     or str(p.get("comment") or "").upper().startswith("KETS AUTOMATIC")]
-            # Some adapters omit labels. Only use the recorded GMMA direction as
-            # a fallback when exactly one broker position exists and its side agrees.
-            def _side(p):
-                for key in ("side","direction","tradeSide","trade_side","tradeType","trade_type","positionType","position_type"):
-                    raw=str(p.get(key) or "").upper()
-                    if raw in {"BUY","LONG","BUY_SIDE","TRADETYPE_BUY","1"} or raw.endswith(".BUY"):
-                        return "BUY"
-                    if raw in {"SELL","SHORT","SELL_SIDE","TRADETYPE_SELL","2"} or raw.endswith(".SELL"):
-                        return "SELL"
-                return None
-            expected=str(row.get("auto_direction") or "").upper()
-            if not managed and expected in {"BUY","SELL"} and len(positions)==1 and _side(positions[0])==expected:
-                managed=[positions[0]]
-            target_ccy=str(row.get("target_profit_currency") or "USD").upper()
-            account_ccy=str(snap.get("currency") or "USD").upper()
-            broker_target=target
-            if target_ccy!=account_ccy:
-                fx=_kets_usd_ugx_rate()
-                if target_ccy=="USD" and account_ccy=="UGX": broker_target*=fx
-                elif target_ccy=="UGX" and account_ccy=="USD": broker_target/=fx
-                else: raise RuntimeError("Unsupported cTrader account currency for GMMA position-profit target conversion.")
-            winners=[str(p.get("positionId") or p.get("id") or "") for p in managed
-                     if _num(p.get("unrealized_pnl"))>=broker_target and str(p.get("positionId") or p.get("id") or "")]
-            if not winners:
-                continue
-            _ctrader_close_positions(row,auto_only=False,position_ids=winners)
-            _ctrader_invalidate_snapshot(row)
-            verify=_ctrader_account_snapshot(row)
-            if not verify.get("positions_verified"):
-                raise RuntimeError(verify.get("data_warning") or "Could not verify GMMA profit-target closure.")
-            remaining=[p for p in (verify.get("positions") or [])
-                       if str(p.get("positionId") or p.get("id") or "") in set(winners)]
-            if remaining:
-                raise RuntimeError("GMMA profit-target close was not confirmed by cTrader; the position remains open.")
-            with DB_LOCK:
-                conn=db_conn()
-                db_execute(conn,"UPDATE ctrader_connections SET auto_direction=NULL,auto_entry_signal_id=NULL,last_signal_id=NULL,last_error=NULL,updated_at=? WHERE id=?",(_now_iso(),row["id"]))
-                conn.commit(); conn.close()
-            app.logger.info("Invest Shares GMMA profit monitor closed position(s) %s at target %.2f %s; Auto-Trader remains enabled.",",".join(winners),target,target_ccy)
-        except Exception as exc:
-            app.logger.warning("Invest Shares GMMA position-profit monitor skipped account %s: %s",row.get("id"),exc)
-            with DB_LOCK:
-                conn=db_conn()
-                db_execute(conn,"UPDATE ctrader_connections SET last_error=?,updated_at=? WHERE id=?",("GMMA individual profit monitor: "+str(exc)[:420],_now_iso(),row["id"]))
-                conn.commit(); conn.close()
-
-
-def _ctrader_position_profit_monitor_loop():
-    """Dedicated server-side Invest Shares position-profit monitor."""
-    while True:
-        try:
-            _ctrader_monitor_gmma_position_profit_targets_once()
-            time.sleep(1)
-        except Exception:
-            app.logger.exception("Invest Shares GMMA profit-monitor loop error")
-            time.sleep(3)
 
 
 def _ctrader_autotrade_loop():
@@ -3575,7 +3128,7 @@ def _ctrader_autotrade_loop():
             app.logger.exception("cTrader auto-trade loop error")
             time.sleep(5)
 
-def _ctrader_close_positions(row, auto_only=False, position_ids=None):
+def _ctrader_close_positions(row, auto_only=False):
     accounts=json.loads(row.get("account_ids_json") or "[]")
     selected=str(row.get("selected_account_id") or "")
     account=next((a for a in accounts if str(a.get("id"))==selected), None)
@@ -3589,112 +3142,50 @@ def _ctrader_close_positions(row, auto_only=False, position_ids=None):
     try:
         _ctrader_invalidate_snapshot(row)
         fresh=_ctrader_account_snapshot(row)
-        if not fresh.get("positions_verified"):
-            raise RuntimeError(fresh.get("data_warning") or "cTrader did not verify the open-position list.")
         positions=fresh.get("positions",[])
     except Exception as exc:
         raise RuntimeError(f"Could not refresh open cTrader positions; no close request was sent: {exc}")
-    if position_ids is not None:
-        # Explicit IDs are supplied only after the GMMA worker has identified
-        # the managed position from its saved direction/unique-position fallback.
-        # Do not discard that verified position merely because this broker omits
-        # optional label/comment metadata from its reconcile response.
-        wanted={str(x) for x in position_ids}
-        positions=[p for p in positions if str(p.get("positionId") or p.get("id") or "") in wanted]
-    elif auto_only:
+    if auto_only:
         positions=[p for p in positions if str(p.get("label") or "").upper()=="KETS_AUTO" or str(p.get("comment") or "").upper().startswith("KETS AUTOMATIC") ]
     target_ids={str(p.get("positionId") or p.get("id") or "") for p in positions}
     target_ids.discard("")
-    # A verified empty broker snapshot is already a successful close-all state.
-    if not positions:
-        return []
     async def run():
         import websockets
         async with websockets.connect(_ctrader_host(is_live),open_timeout=15,close_timeout=5,ping_interval=20,ping_timeout=20) as ws:
-            async def send(pt,payload,expected_response_type):
-                # Each cTrader Open API request has its own response payload type:
-                # application auth -> 2101, account auth -> 2103, close execution -> 2126.
-                # Waiting for 2126 for every request silently discarded both auth
-                # responses and caused close-all/reversal to time out before closing.
-                client_msg_id=str(uuid.uuid4())
-                await ws.send(json.dumps({"clientMsgId":client_msg_id,"payloadType":pt,"payload":payload}))
-                for _ in range(20):
+            async def send(pt,payload):
+                await ws.send(json.dumps({"clientMsgId":str(uuid.uuid4()),"payloadType":pt,"payload":payload}))
+                for _ in range(12):
                     d=json.loads(await asyncio.wait_for(ws.recv(),timeout=2.5))
                     if d.get("payloadType")==51: continue
-                    if d.get("clientMsgId") not in (None,client_msg_id): continue
                     if d.get("payloadType") in (2132,2142):
                         ep=d.get("payload") or {}
                         raise RuntimeError(ep.get("description") or ep.get("errorCode") or "cTrader request failed")
-                    if d.get("payloadType") != expected_response_type:
-                        continue
-                    ep=d.get("payload") or {}
-                    if expected_response_type==2126:
+                    if d.get("payloadType")==2126:
+                        ep=d.get("payload") or {}
                         execution_type=int(ep.get("executionType") or 0)
                         if execution_type in (7,8):
-                            raise RuntimeError(ep.get("description") or "cTrader rejected the close request.")
+                            raise RuntimeError(ep.get("description") or "cTrader rejected the request.")
                     return d
-                raise RuntimeError(f"cTrader did not return response {expected_response_type} for request {pt} before timeout")
-            r=await send(2100,{"clientId":_ctrader_client_id(),"clientSecret":_ctrader_client_secret()},2101)
+                raise RuntimeError("cTrader response timeout")
+            r=await send(2100,{"clientId":_ctrader_client_id(),"clientSecret":_ctrader_client_secret()})
             if r.get("payloadType")!=2101: raise RuntimeError("cTrader application authorization failed")
-            r=await send(2102,{"ctidTraderAccountId":int(selected),"accessToken":access_token},2103)
+            r=await send(2102,{"ctidTraderAccountId":int(selected),"accessToken":access_token})
             if r.get("payloadType")!=2103: raise RuntimeError((r.get("payload") or {}).get("description") or "cTrader account authorization failed")
             results=[]
             for pos in positions:
                 pid=pos.get("positionId") or pos.get("id")
-                # Reconcile snapshots normally expose volume_cents (raw cTrader
-                # hundredths of a lot). Accept the normalized lot field as a
-                # fallback for broker/API variants so the close button does not
-                # fail merely because the adapter omitted the convenience field.
                 vol=pos.get("volume_cents")
-                if not pid:
-                    raise RuntimeError("cTrader returned an open position without an ID; refusing to claim all positions were closed.")
-                if vol in (None, ""):
-                    trade_data=pos.get("tradeData") if isinstance(pos.get("tradeData"),dict) else {}
-                    raw_volume=trade_data.get("volume", pos.get("volume"))
-                    # cTrader Open API volume is already expressed in hundredths
-                    # of a unit (e.g. 4,000 = 0.04 lots); normalized snapshots
-                    # expose volume in lots and must be converted exactly once.
-                    if trade_data.get("volume") not in (None, ""):
-                        volume=int(round(float(raw_volume)))
-                    else:
-                        lots=_num(raw_volume)
-                        volume=int(round(lots*100.0)) if lots is not None else 0
-                else:
-                    volume=int(round(float(vol or 0)))
-                if volume<=0:
-                    raise RuntimeError(f"cTrader position {pid} has no valid broker volume (raw={vol!r}, lots={pos.get('volume')!r}); no unsafe close request was sent.")
-                results.append(await send(2111,{"ctidTraderAccountId":int(selected),"positionId":int(pid),"volume":volume},2126))
+                if not pid: continue
+                volume=int(round(float(vol or 0)))
+                if volume<=0: volume=int(round(float(pos.get("volume",0))*100))
+                results.append(await send(2111,{"ctidTraderAccountId":int(selected),"positionId":int(pid),"volume":volume}))
             return results
     results = asyncio.run(run())
     # A close acknowledgement is not proof that the broker has flattened the
     # account. Verify targeted positions against a fresh broker snapshot.
-    fresh = None
-    remaining = []
-    # Broker position snapshots can lag the execution acknowledgement. Poll
-    # briefly for actual flatness instead of treating the acknowledgement alone
-    # as proof that the position is closed.
-    for attempt in range(6):
-        _ctrader_invalidate_snapshot(row)
-        if attempt:
-            time.sleep(1.0)
-        fresh = _ctrader_account_snapshot(row)
-        if not fresh.get("positions_verified"):
-            raise RuntimeError(fresh.get("data_warning") or "cTrader did not verify the open-position list after the close request.")
-        if auto_only:
-            if target_ids:
-                remaining = [p for p in (fresh.get("positions") or [])
-                             if str(p.get("positionId") or p.get("id") or "") in target_ids]
-            else:
-                remaining = [p for p in (fresh.get("positions") or [])
-                             if str(p.get("label") or "").upper() == "KETS_AUTO"
-                             or str(p.get("comment") or "").upper().startswith("KETS AUTOMATIC")]
-        elif target_ids:
-            remaining = [p for p in (fresh.get("positions") or [])
-                          if str(p.get("positionId") or p.get("id") or "") in target_ids]
-        else:
-            remaining = []
-        if not remaining:
-            break
+    _ctrader_invalidate_snapshot(row)
+    time.sleep(0.5)
+    fresh = _ctrader_account_snapshot(row)
     if auto_only:
         if target_ids:
             remaining = [p for p in (fresh.get("positions") or [])
@@ -3756,8 +3247,7 @@ def managed_close_all():
         result=_ctrader_close_all_positions(row)
         return jsonify({"ok":True,"broker":"cTrader","closed_requests":len(result)})
     except Exception as exc:
-        app.logger.exception("cTrader close-all failed for user %s", user.get("id"))
-        return jsonify({"error":str(exc)[:700],"stage":"ctrader_close_all","ok":False}),400
+        return jsonify({"error":str(exc)}),400
 
 @app.route("/api/managed/queue-current", methods=["POST"])
 def managed_queue_current():
@@ -4196,9 +3686,6 @@ def api_signals():
                     "bar_timestamp": latest_candle.get("datetime") or latest_candle.get("timestamp"),
                     "gold_symbol": item.get("symbol") or "XAU/USD",
                 })
-            # GMMA publishes the completed-candle trend event at the point the
-            # authoritative candle feed arrives; Auto-Trader only consumes it.
-            _publish_gmma_trend_event(dict(COPILOT_SIGNAL_SNAPSHOT))
         return jsonify({"ok": True, "accepted": True, "signal": item}), 200
 
     # The private website bridge must be able to read the bot feed without
@@ -4393,78 +3880,23 @@ def api_gmma():
     if error: return error
     with V16_MARKET_LOCK:
         market = dict(COPILOT_SIGNAL_SNAPSHOT)
-    age=_gmma_feed_age_seconds(market)
+    try:
+        stamp=datetime.datetime.fromisoformat(str(market.get("source_data_timestamp_utc") or market.get("timestamp_utc")).replace("Z","+00:00"))
+        age=max(0.0,(datetime.datetime.now(datetime.timezone.utc)-stamp).total_seconds())
+    except Exception: age=None
     state=_gmma_indicator_state(market)
-    state["fresh"] = age is not None and 0 <= age <= 240
+    state["fresh"] = age is not None and age <= 240
     state["age_seconds"] = age
     state["price"] = state.get("price") or market.get("gold_price")
-    # Preserve the last calculated side for transparent display even when the
-    # feed is stale; stale data never authorizes an order or reversal.
-    state["detected_direction"] = state.get("direction")
     if not state["fresh"]:
         state["confirmed"] = False
         state["entry_trigger"] = False
         state["reversal"] = False
         state["direction"] = None
         state["reason"] = "Latest KETS Gold candle feed is stale or unavailable; entries and reversal exits are blocked."
-    state["entry_authorized"] = bool(state.get("fresh") and state.get("confirmed") and state.get("direction"))
-    published_event = _publish_gmma_trend_event(market) if state.get("fresh") else None
-    state["published_trend_event"] = published_event
-    state["trend_event_source"] = "GMMA_PAGE_TREND_PUBLISHER"
-    # Execution status is account-specific and deliberately separate from the
-    # indicator result: the trend remains visible even when execution is blocked.
-    execution={"status":"NOT_CONNECTED","reason":"No cTrader account is connected for this user.","enabled":False,"position_direction":None}
-    ctrader_row=_ctrader_row_for_user(user["id"]) if isinstance(user,dict) and user.get("id") else None
-    if ctrader_row:
-        cr=dict(ctrader_row)
-        enabled=bool(cr.get("auto_enabled"))
-        execution.update({"enabled":enabled,"position_direction":str(cr.get("auto_direction") or "").upper() or None})
-        if cr.get("last_error"):
-            execution.update({"status":"BLOCKED","reason":str(cr.get("last_error"))})
-        elif cr.get("status") not in ("AUTHORIZED","CONNECTED"):
-            execution.update({"status":"BLOCKED","reason":"cTrader is not authorized. Reconnect the selected cTrader account."})
-        elif not cr.get("selected_account_id"):
-            execution.update({"status":"BLOCKED","reason":"No cTrader account is selected for KETS execution."})
-        elif not enabled:
-            execution.update({"status":"OFF","reason":"GMMA Auto-Trader is switched OFF. The detected trend is monitor-only."})
-        elif not state.get("fresh"):
-            execution.update({"status":"BLOCKED","reason":state.get("reason") or "Gold candle feed is stale or unavailable."})
-        elif not state.get("direction"):
-            execution.update({"status":"WAITING_FOR_TREND","reason":state.get("reason") or "GMMA has not confirmed a BUY or SELL trend."})
-        elif str(cr.get("auto_symbol") or "XAUUSD").upper().replace("/","") not in {"XAUUSD","XAU","GOLD"}:
-            execution.update({"status":"BLOCKED","reason":"GMMA execution is restricted to Gold (XAUUSD). Select Gold in Auto-Trader."})
-        elif cr.get("auto_direction") and str(cr.get("auto_direction")).upper()==state.get("direction"):
-            execution.update({"status":"POSITION_OPEN","reason":f"A KETS automatic {state['direction']} position is already recorded; duplicate entry is suppressed."})
-        elif cr.get("auto_direction") and str(cr.get("auto_direction")).upper() in {"BUY","SELL"} and str(cr.get("auto_direction")).upper()!=state.get("direction"):
-            execution.update({"status":"REVERSAL_PENDING","reason":f"GMMA now confirms {state['direction']} against the recorded automatic {str(cr.get('auto_direction')).upper()}; KETS must verify the old position is closed before opening the reversal."})
-        elif not trading_session().get("active"):
-            execution.update({"status":"BLOCKED","reason":trading_session().get("reason") or f"New entries are blocked during {trading_session().get('mode') or 'the current session'}."})
-        else:
-            execution.update({"status":"ENTRY_ELIGIBLE","reason":f"Confirmed GMMA {state['direction']} trend. Auto-Trader is enabled and entry gates are currently clear; waiting for broker execution/verification."})
-    # Compare the live GMMA trend with the last direction KETS actually
-    # recorded for this user's Auto-Trader, not only the immediately prior
-    # candle. This makes the recent-vs-new trend transition explicit.
-    recorded_direction = (str(ctrader_row.get("auto_direction") or "").upper()
-                          if ctrader_row else "")
-    state["recent_autotrader_trend"] = recorded_direction or None
-    state["new_gmma_trend"] = state.get("detected_direction")
-    state["trend_changed_since_last_trade"] = bool(
-        recorded_direction in {"BUY", "SELL"}
-        and state.get("fresh")
-        and state.get("detected_direction") in {"BUY", "SELL"}
-        and recorded_direction != state.get("detected_direction")
-    )
-    state["trend_decision"] = (
-        "CLOSE_OLD_THEN_OPEN_NEW" if state["trend_changed_since_last_trade"]
-        else "MAINTAIN_CURRENT_TRADE" if recorded_direction and recorded_direction == state.get("detected_direction")
-        else "OPEN_IF_ENABLED_AND_GATES_PASS" if state.get("fresh") and state.get("detected_direction")
-        else "WAIT_FOR_FRESH_CONFIRMED_TREND"
-    )
-    state["execution"] = execution
-    state["execution_status"] = execution["status"]
-    state["execution_reason"] = execution["reason"]
-    state["autotrader_entry_rule"] = "CONFIRMED_GMMA_GROUP_DIRECTION"
-    state["autotrader_exit_rule"] = "EXIT_ON_OPPOSITE_CONFIRMED_GMMA_GROUP_DIRECTION"
+    state["entry_authorized"] = bool(state.get("fresh") and state.get("entry_trigger"))
+    state["autotrader_entry_rule"] = "CONFIRMED_GMMA_GROUP_REVERSAL"
+    state["autotrader_exit_rule"] = "EXIT_ON_OPPOSITE_GMMA_GROUP_REVERSAL"
     return jsonify(state)
 
 
@@ -6352,7 +5784,6 @@ autotrade_worker_started = False
 if os.environ.get("KETS_DISABLE_AUTOTRADE", "0") != "1":
     autotrade_worker_started = True
     Thread(target=_ctrader_autotrade_loop, daemon=True, name="kets-ctrader-autotrade").start()
-    Thread(target=_ctrader_position_profit_monitor_loop, daemon=True, name="kets-invest-shares-profit-monitor").start()
 
 if __name__ == "__main__":
     run_strategy()
